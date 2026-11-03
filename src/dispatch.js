@@ -1,4 +1,4 @@
-// dispatch.js — Carlos 工作流：四段合同 prompt / 文件快照 / opencode 子进程（Node ESM）
+// dispatch.js — Carlos 工作流：四段合同 prompt / 文件快照 / opencode 子进程 / 验证执行 / scope 校验（Node ESM）
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -78,7 +78,7 @@ export function snapshotFiles(sid, paths, cwd) {
   }
   try {
     const lines = entries.map((x) => JSON.stringify(x)).join("\n") + "\n";
-    fs.appendFileSync(path.join(bdir, "manifest.jsonl"), lines, "utf8");
+    fs.appendFileSync(path.join(RUNS_DIR, sanitizeId(sid), "backup", "manifest.jsonl"), lines, "utf8");
   } catch (e) {
     try {
       process.stderr.write(`[flow-snapshot] manifest 追加失败: ${e && e.message ? e.message : e}\n`);
@@ -114,6 +114,25 @@ export function readManifest(sid) {
   }
 }
 
+// 读取 manifest 所有条目（不去重），用于回滚计划
+export function readManifestAll(sid) {
+  const file = path.join(RUNS_DIR, sanitizeId(sid), "backup", "manifest.jsonl");
+  try {
+    const raw = fs.readFileSync(file, "utf8");
+    const all = [];
+    for (const line of raw.split("\n")) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        all.push(JSON.parse(line));
+      } catch {}
+    }
+    return all;
+  } catch {
+    return [];
+  }
+}
+
 // 写入派发 prompt 到文件，供主 Agent（Cindy）读取后通过 subagent 工具派发。
 // 返回 prompt 文件路径，主 Agent 读取后自行调用 subagent 工具。
 export function writeDispatchPrompt(sid, role, message, cwd) {
@@ -142,3 +161,65 @@ export function saveAgentResult(sid, role, stdout, stderr, code) {
     return null;
   }
 }
+
+// Phase 1-1: 执行验证命令并返回结果
+export async function runVerifyCommand(cmd, cwd) {
+  if (!cmd || !cmd.trim()) {
+    return { ok: false, exitCode: -1, stdout: "", stderr: "验证命令为空" };
+  }
+  return new Promise((resolve) => {
+    const child = spawn("cmd", ["/c", cmd], {
+      cwd: cwd || process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: true,
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ ok: false, exitCode: -1, stdout, stderr: stderr + "\n验证命令超时 (120s)" });
+    }, 120000);
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      resolve({ ok: code === 0, exitCode: code ?? -1, stdout, stderr });
+    });
+    child.on("error", (err) => {
+      clearTimeout(timeout);
+      resolve({ ok: false, exitCode: -1, stdout, stderr: String(err) });
+    });
+  });
+}
+
+// Phase 1-1: scope 机器校验 - 对比 diff 与 card.scope
+export function enforceScope(scope, diffFiles) {
+  if (!Array.isArray(scope) || scope.length === 0) return { ok: true };
+  if (!Array.isArray(diffFiles)) return { ok: true };
+  
+  const scopeSet = new Set(scope.map(p => path.normalize(p)));
+  const violations = [];
+  
+  for (const file of diffFiles) {
+    const normalized = path.normalize(file);
+    // 检查文件是否在 scope 内（精确匹配或父目录匹配）
+    let allowed = false;
+    for (const scopePath of scopeSet) {
+      const normalizedScope = path.normalize(scopePath);
+      if (normalized === normalizedScope || normalized.startsWith(normalizedScope + path.sep)) {
+        allowed = true;
+        break;
+      }
+    }
+    if (!allowed) {
+      violations.push(file);
+    }
+  }
+  
+  if (violations.length > 0) {
+    return { ok: false, violations, message: `越界改动（超出 scope）：${violations.join(", ")}` };
+  }
+  return { ok: true };
+}
+

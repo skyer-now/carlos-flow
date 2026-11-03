@@ -8,8 +8,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { PROTOCOL } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
-import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale } from "./state.js";
-import { buildContractPrompt, snapshotFiles, readManifest, writeDispatchPrompt, saveAgentResult, MAX_DISPATCH } from "./dispatch.js";
+import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain } from "./state.js";
+import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, enforceScope, MAX_DISPATCH } from "./dispatch.js";
 
 const log = (msg) => {
   try {
@@ -183,6 +183,10 @@ const TOOLS = [
     },
     handler: async (args) => {
       try {
+        // Phase 1-1: role 白名单校验
+        const a = args || {};
+        const role = a.role === "auditor" ? "auditor" : "executor";
+        if (role !== "executor" && role !== "auditor") return fail("非法 role：" + role + "，必须是 executor 或 auditor");
         const a = args || {};
         const sessionId = a.sessionId || "unknown";
         const role = a.role === "auditor" ? "auditor" : "executor";
@@ -198,7 +202,7 @@ const TOOLS = [
           return fail("派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。");
         }
 
-        state.dispatch_count = (Number(state.dispatch_count) || 0) + 1;
+        // Phase 1-1: 不在 claim 时增加 dispatch_count，改在 dispatch 时增加
         state.last_user_ts = Date.now();
         saveState(sessionId, state);
 
@@ -241,14 +245,29 @@ const TOOLS = [
     handler: async (args) => {
       try {
         const a = args || {};
+        // Phase 1-1: role 白名单校验
+        const role = a.role === "auditor" ? "auditor" : "executor";
+        if (role !== "executor" && role !== "auditor") return fail("非法 role：" + role + "，必须是 executor 或 auditor");
+
+        // Phase 1-1: dispatch 前强制校验 stale / dispatch_count / claim
         const sessionId = a.sessionId || "unknown";
+        const state = loadState(sessionId);
+        if (!state.card) return fail("没有留痕，不允许派发。");
+        if (isStale(state)) return fail("留痕已过期（stale），请重新提交任务卡。");
+        if (state.dispatch_count >= MAX_DISPATCH) return fail("派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。");
+        // 简单检查是否有过 claim（dispatch_count > 0 视为已 claim）
+        if ((Number(state.dispatch_count) || 0) === 0) return fail("未 claim，请先 flow_claim 领取派发名额。");
+
         const role = a.role === "auditor" ? "auditor" : "executor";
         const cwd = a.cwd || process.cwd();
         const state = loadState(sessionId);
 
         if (!state.card) return fail("没有留痕，不允许派发。");
 
-        const prompt = buildContractPrompt(role, state.card, a.message);
+        
+            // Phase 1-1: dispatch 时才增加 dispatch_count
+            state.dispatch_count = (Number(state.dispatch_count) || 0) + 1;
+const prompt = buildContractPrompt(role, state.card, a.message);
 
         const scope = Array.isArray(state.card.scope) ? state.card.scope : [];
         const entries = snapshotFiles(sessionId, scope, cwd);
@@ -369,7 +388,8 @@ const TOOLS = [
     name: "flow_audit",
     description:
       "读取审计流水（gate-audit/*.jsonl），返回事件列表与按 type / kind 的统计。可按 sessionId、type（run/finding/decision/resolution）、日期过滤。" +
-      "不给 sessionId 则聚合全部会话。用于复核“到底派发了什么、改了什么、谁批的”，也用于事后追溯。",
+      "不给 sessionId 则聚合全部会话。用于复核“到底派发了什么、改了什么、谁批的”，也用于事后追溯。" +
+      "同时可验证审计链完整性。",
     inputSchema: {
       type: "object",
       properties: {
@@ -377,6 +397,7 @@ const TOOLS = [
         type: { type: "string", description: "事件类型过滤：run / finding / decision / resolution" },
         limit: { type: "number", description: "最多返回最近 N 条" },
         date: { type: "string", description: "YYYY-MM-DD，默认今天" },
+        verifyChain: { type: "boolean", description: "是否验证审计链完整性" },
       },
     },
     handler: async (args) => {
@@ -397,7 +418,13 @@ const TOOLS = [
           const k = row.kind || "none";
           by_kind[k] = (by_kind[k] || 0) + 1;
         }
-        return ok({ total: rows.length, by_type, by_kind, events: rows });
+
+        let chainResult = null;
+        if (a.verifyChain) {
+          chainResult = verifyAuditChain(opts);
+        }
+
+        return ok({ total: rows.length, by_type, by_kind, events: rows, chain: chainResult });
       } catch (e) {
         return fail(e && e.message ? e.message : String(e));
       }
@@ -572,7 +599,78 @@ const TOOLS = [
       properties: {
         sessionId: { type: "string", description: "会话 ID，默认 unknown" },
         cwd: { type: "string", description: "工作目录，默认 process.cwd()" },
+      
+  },
+
+  // 13 -----------------------------------------------------------------------
+  {
+    name: "flow_run_verify",
+    description:
+      "执行卡片中指定的验证命令，返回执行结果（退出码、stdout、stderr）。" +
+      "用于在派发 executor 后验证其工作成果，或手动触发验证。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "会话 ID，默认 unknown" },
+        cwd: { type: "string", description: "工作目录，默认 process.cwd()" },
       },
+    },
+    handler: async (args) => {
+      try {
+        const a = args || {};
+        const sessionId = a.sessionId || "unknown";
+        const state = loadState(sessionId);
+        if (!state.card) return fail("没有留痕，无法执行验证。");
+        if (!state.card.verify || !state.card.verify.cmd) return fail("卡片未指定验证命令。");
+        
+        const result = await runVerifyCommand(state.card.verify.cmd, a.cwd);
+        const state2 = loadState(sessionId);
+        state2.last_verify = {
+          ts: new Date().toISOString(),
+          cmd: state.card.verify.cmd,
+          exitCode: result.exitCode,
+          ok: result.ok,
+        };
+        saveState(sessionId, state2);
+        
+        return ok({ ok: result.ok, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr });
+      } catch (e) {
+        return fail(e && e.message ? e.message : String(e));
+      }
+    },
+  },
+
+  // 14 -----------------------------------------------------------------------
+  {
+    name: "flow_check_scope",
+    description:
+      "检查指定文件列表是否在卡片 scope 范围内。用于在提交裁定前自查越界改动。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "会话 ID，默认 unknown" },
+        paths: { type: "array", items: { type: "string" }, description: "要检查的文件路径列表" },
+        cwd: { type: "string", description: "仓库工作目录，默认 process.cwd()" },
+      },
+    },
+    handler: async (args) => {
+      try {
+        const a = args || {};
+        const sessionId = a.sessionId || "unknown";
+        const state = loadState(sessionId);
+        if (!state.card) return fail("没有留痕，无法检查 scope。");
+        
+        const scope = Array.isArray(state.card.scope) ? state.card.scope : [];
+        const paths = Array.isArray(a.paths) ? a.paths : [];
+        const result = enforceScope(scope, a.paths, a.cwd);
+        
+        return ok({ ok: result.ok, scope, checked: a.paths, ...result });
+      } catch (e) {
+        return fail(e && e.message ? e.message : String(e));
+      }
+    },
+  },
+},
     },
     handler: async (args) => {
       try {
@@ -628,6 +726,62 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 // ---- 传输模式：stdio（单次调用，兼容旧用法） ----
+const transport = new StdioServerTransport();
+await server.connect(transport);
+process.stderr.write("carlos-flow MCP server connected via stdio\n");
+
+// Phase 1-1: 工具参数校验器
+function validateToolArgs(toolName, args) {
+  const tool = TOOLS.find(t => t.name === toolName);
+  if (!tool || !tool.inputSchema) return { ok: true };
+  
+  // 简单的 schema 校验：required 字段、类型、enum
+  const schema = tool.inputSchema;
+  if (schema.required) {
+    for (const field of schema.required) {
+      if (args[field] === undefined || args[field] === null || args[field] === "") {
+        return { ok: false, error: "缺少必填字段：" + field };
+      }
+    }
+    if (schema.properties) {
+      for (const [key, prop] of Object.entries(schema.properties)) {
+        if (args[key] !== undefined && prop.type) {
+          const expected = prop.type === "integer" ? "number" : prop.type;
+          const actual = Array.isArray(args[key]) ? "array" : typeof args[key];
+          if (expected === "number" && typeof args[key] !== "number") {
+            return { ok: false, error: "字段 " + key + " 类型错误，期望 number" };
+          }
+          if (expected === "array" && !Array.isArray(args[key])) {
+            return { ok: false, error: "字段 " + key + " 类型错误，期望 array" };
+          }
+          if (prop.enum && args[key] !== undefined && !prop.enum.includes(args[key])) {
+            return { ok: false, error: "字段 " + key + " 值非法，可选：" + prop.enum.join(", ") };
+          }
+        }
+      }
+    }
+    return { ok: true };
+  }
+
+// Phase 1-1: CallTool handler 增加参数校验
+const originalHandler = server._requestHandlers.get("tools/call");
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const toolName = request.params.name;
+  const args = request.params.arguments || {};
+  
+  // 先校验参数
+  const validation = validateToolArgs(toolName, args);
+  if (!validation.ok) {
+    return { content: [{ type: "text", text: "ERROR: " + validation.error }], isError: true };
+  }
+  
+  // 调用原处理器
+  if (originalHandler) {
+    return await originalHandler(request);
+  }
+  return { content: [{ type: "text", text: "Unknown tool: " + toolName }], isError: true;
+ });
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 process.stderr.write("carlos-flow MCP server connected via stdio\n");

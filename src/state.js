@@ -144,7 +144,7 @@ export function audit(type, sid, fields = {}) {
 // 校验审计链完整性（可选：需完整文件，不能只看尾部）
 export function verifyAuditChain(opts = {}) {
   const rawDate = typeof opts.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : localDate();
-  const file = path.join(AUDIT_DIR, `${rawDate}.jsonl`);
+  const file = path.join(AUDIT_DIR, `${localDate()}.jsonl`);
   let raw = "";
   try {
     raw = fs.readFileSync(file, "utf8");
@@ -187,7 +187,7 @@ export function readAudit(opts = {}) {
   const { sessionId, type, limit } = opts;
   const rawDate = typeof opts.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : localDate();
   try {
-    const file = path.join(AUDIT_DIR, `${rawDate}.jsonl`);
+    const file = path.join(AUDIT_DIR, `${localDate()}.jsonl`);
     const raw = fs.readFileSync(file, "utf8");
     const out = [];
     for (const line of raw.split("\n")) {
@@ -340,4 +340,9 @@ export function isStale(state, ttlSec = 14400) {
   const ts = state ? Number(state.card_ts) : 0;
   if (!ts) return false;
   return Date.now() - ts > ttlSec * 1000;
+}
+
+// Phase 1-1: 检查 bypass 是否启用
+export function isBypassed(state) {
+  return state && state.bypass === true;
 }
