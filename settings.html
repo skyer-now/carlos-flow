@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<body style="margin:0;padding:12px;font-size:13px;line-height:1.6">
+  <div style="margin-bottom:10px">
+    <div style="font-weight:600;margin-bottom:2px">Carlos 工作流配置</div>
+    <div style="opacity:.7;font-size:12px">
+      环境变量优先，留空则使用默认值。修改后重启 Cindy 生效。
+    </div>
+  </div>
+
+  <div style="margin-bottom:8px">
+    <label style="display:block;margin-bottom:4px;font-weight:500">CARLOS_FLOW_MCP_ROOT (MCP 源码根目录)</label>
+    <input id="mcpRoot" type="text" autocomplete="off" spellcheck="false"
+      placeholder="D:/cindy/carlos-flow-mcp"
+      style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--surface,#fff);color:inherit;border:1px solid var(--border-default,#e4e4e0);border-radius:6px">
+  </div>
+
+  <div style="margin-bottom:8px">
+    <label style="display:block;margin-bottom:4px;font-weight:500">CARLOS_FLOW_HOME (状态/审计根目录)</label>
+    <input id="flowHome" type="text" autocomplete="off" spellcheck="false"
+      placeholder="~/carlos-flow"
+      style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--surface,#fff);color:inherit;border:1px solid var(--border-default,#e4e4e0);border-radius:6px">
+  </div>
+
+  <div style="margin-bottom:8px">
+    <label style="display:block;margin-bottom:4px;font-weight:500">BRIDGE_PORT (Bridge 监听端口)</label>
+    <input id="bridgePort" type="number" autocomplete="off" spellcheck="false"
+      placeholder="19099"
+      style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--surface,#fff);color:inherit;border:1px solid var(--border-default,#e4e4e0);border-radius:6px">
+  </div>
+
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button id="save" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border-default,#e4e4e0);background:var(--surface,#fff);color:inherit;cursor:pointer">保存</button>
+    <button id="reset" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border-default,#e4e4e0);background:transparent;color:inherit;cursor:pointer">恢复默认</button>
+    <span id="status" style="font-size:12px;opacity:.8"></span>
+  </div>
+
+  <script src="/settings.js"></script>
+</body>

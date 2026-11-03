@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 3,
+  "minCindyVersion": "1.0.2",
+  "id": "carlos-flow",
+  "name": "Carlos 工作流",
+  "description": "机械门禁 MCP：留痕/派发/裁定/审计/快照/免检/还原。自动管理 Bridge 后台常驻，首次调用 ~3-5s，后续 ~1s。",
+  "whenToUse": "需要走 Carlos 工作流门禁时使用：留痕/派发/裁定/审计/快照/免检/还原",
+  "version": "2.5.1",
+  "kind": "mcp",
+  "entry": "client/carlos.js",
+  "command": "门禁",
+  "node": {
+    "entry": "bridge/mcp-bridge.js",
+    "protocol": "json-rpc-stdio",
+    "lifecycle": "on-demand",
+    "idleTimeoutSeconds": 300
+  },
+  "settingsHtml": "settings.html",
+  "tools": [
+    {
+      "name": "flow_protocol",
+      "description": "读取 Carlos 工作流协议全文（路由档位 T0/T1/T2、四段合同、报告规格、错误分层、状态字段、审计事件类型、免检触发词、任务卡模板）。",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "flow_submit_requirement",
+      "description": "提交（留痕）一张任务卡，作为后续派发的唯一依据。任何 T2 改动前必须先调用本工具。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "goal": { "type": "string", "description": "一句话目标（任务卡 objective）" },
+          "quote": { "type": "string", "description": "用户原话摘录，用于锚点校验，必须能在用户消息中定位" },
+          "scope": { "type": "array", "items": { "type": "string" }, "description": "只准改动的文件清单（相对 cwd 的路径）" },
+          "acceptance": { "type": "array", "items": { "type": "string" }, "description": "可判定的验收标准" },
+          "unknowns": { "type": "array", "items": { "type": "string" }, "description": "未知/待澄清事项" },
+          "assumptions": { "type": "array", "items": { "type": "string" }, "description": "已做的假设" },
+          "files": { "type": "array", "items": { "type": "object", "properties": { "path": { "type": "string" }, "line": { "type": "number" } }, "required": ["path", "line"] }, "description": "关键定位点" },
+          "verify": { "type": "object", "properties": { "cmd": { "type": "string" } }, "description": "主 Agent 指定的验证命令" },
+          "confirmed": { "type": "boolean", "description": "敏感路径是否已获用户确认（sensitive 档必须为 true）" },
+          "parallel_plan": { "type": "string", "description": "并行派发计划说明（可选）" },
+          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
+          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" },
+          "userMessages": { "type": "array", "items": { "type": "string" }, "description": "用户原话列表（可选）" },
+          "cardText": { "type": "string", "description": "完整任务卡文本，含 FLOW_CARD: 前缀" }
+        },
+        "required": ["goal", "quote", "scope"]
+      }
+    },
+    {
+      "name": "flow_claim",
+      "description": "领取一次派发名额（executor 或 auditor）。返回四段合同 prompt，可直接作为子 Agent 的任务描述。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
+          "role": { "type": "string", "enum": ["executor", "auditor"], "description": "领取角色" },
+          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" }
+        },
+        "required": ["sessionId", "role"]
+      }
+    },
+    {
+      "name": "flow_dispatch",
+      "description": "按四段合同派发子 Agent。派发前会自动对 scope 内文件做快照。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
+          "role": { "type": "string", "enum": ["executor", "auditor"], "description": "派发角色" },
+          "message": { "type": "string", "description": "附加说明，原样附在合同末尾" },
+          "run": { "type": "boolean", "description": "true = 由本工具直接运行 opencode；false/absent = 只返回 prompt" },
+          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" }
+        },
+        "required": ["sessionId", "role"]
+      }
+    },
+    {
+      "name": "flow_verdict",
+      "description": "记录 auditor 的裁定结果（PASS / DIRECTION / LOCAL）。只有 PASS 会把 completed_ok 置为 true。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
+          "verdict": { "type": "string", "enum": ["PASS", "DIRECTION", "LOCAL"], "description": "裁定结果" },
+          "notes": { "type": "string", "description": "裁定说明/证据摘要" },
+          "role": { "type": "string", "description": "记录裁定者角色（通常 auditor）" },
+          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" }
+        },
+        "required": ["sessionId", "verdict"]
+      }
+    },
+    {
+      "name": "flow_status",
+      "description": "查询当前会话的门禁状态：是否有任务卡、风险档、已派发次数/上限、裁定结果、是否过期、是否处于免检模式。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" }
+        },
+        "required": ["sessionId"]
+      }
+    },
+    {
+      "name": "flow_audit",
+      "description": "读取审计流水，返回事件列表与按 type/kind 的统计。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string", "description": "会话 ID；不传则聚合全部" },
+          "type": { "type": "string", "description": "事件类型过滤：run / finding / decision / resolution" },
+          "limit": { "type": "number", "description": "最多返回最近 N 条" },
+          "date": { "type": "string", "description": "YYYY-MM-DD，默认今天" }
+        }
+      }
+    },
+    {
+      "name": "flow_diff_hunks",
+      "description": "对指定文件跑 git diff -U0 并解析出每个文件的 hunk 范围。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "cwd": { "type": "string", "description": "仓库工作目录，默认 process.cwd()" },
+          "paths": { "type": "array", "items": { "type": "string" }, "description": "要检查的文件路径列表" }
+        },
+        "required": ["cwd"]
+      }
+    },
+    {
+      "name": "flow_bypass",
+      "description": "开关免检模式。仅在用户明确授权时使用。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
+          "on": { "type": "boolean", "description": "true 开启免检，false 关闭" },
+          "reason": { "type": "string", "description": "开启/关闭理由（建议写用户原话）" }
+        },
+        "required": ["sessionId", "on"]
+      }
+    },
+    {
+      "name": "flow_add_user_msg",
+      "description": "写入一条用户原话到会话消息文件，供 quote 锚点校验使用。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
+          "text": { "type": "string", "description": "用户原话原文" }
+        },
+        "required": ["sessionId", "text"]
+      }
+    },
+    {
+      "name": "flow_save_result",
+      "description": "保存子 Agent 执行结果到会话目录。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
+          "role": { "type": "string", "enum": ["executor", "auditor"], "description": "执行角色" },
+          "stdout": { "type": "string", "description": "子 Agent 的 stdout" },
+          "stderr": { "type": "string", "description": "子 Agent 的 stderr" },
+          "code": { "type": "number", "description": "退出码" }
+        },
+        "required": ["sessionId", "role"]
+      }
+    },
+    {
+      "name": "flow_revert_plan",
+      "description": "根据本次会话的快照 manifest 生成还原计划。只返回计划，不自动执行。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
+          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" }
+        },
+        "required": ["sessionId"]
+      }
+    }
+  ]
+}
