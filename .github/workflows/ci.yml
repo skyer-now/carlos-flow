@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check Node.js version
         run: node --version && npm --version
-      - run: npm ci
+      - run: npm install
       - run: npm test
       - name: Security audit
         run: npm audit --audit-level=high || true
