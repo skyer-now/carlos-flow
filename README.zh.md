@@ -3,8 +3,8 @@
 > **面向 AI 编码 Agent 的机械门禁**：留痕 → 派发 → 验证 → 裁定 → 审计 → 还原
 > 把"相信 Agent"变成"验证 Agent"——机器级 scope 限制、真实命令执行、防篡改审计链。
 
-[![English](https://img.shields.io/badge/%F0%9F%87%AC%F0%9F%87%A7-English-README-blue)](README.en.md)
 [![中文](https://img.shields.io/badge/%F0%9F%87%E4%B8%AD%F0%9F%87%B5-%E4%B8%AD%E6%96%87-red)](README.zh.md)
+[![English](https://img.shields.io/badge/%F0%9F%87%AC%F0%9F%87%A7-English-README-blue)](README.en.md)
 [![npm version](https://img.shields.io/npm/v/carlos-flow-cindy.svg)](https://www.npmjs.com/package/carlos-flow-cindy)
 [![npm downloads](https://img.shields.io/npm/dm/carlos-flow-cindy.svg)](https://www.npmjs.com/package/carlos-flow-cindy)
 [![license](https://img.shields.io/npm/l/carlos-flow-cindy.svg)](LICENSE)

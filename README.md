@@ -1,10 +1,10 @@
-# Carlos Flow — Cindy Edition
+# Carlos Flow — Cindy 适配版
 
-> **Mechanical gatekeeping for AI coding agents**: Record → Dispatch → Verify → Verdict → Audit → Restore
-> Turns "trust the agent" into "verify the agent" — with machine-enforced scope limits, real command execution, and a tamper-proof audit chain.
+> **面向 AI 编码 Agent 的机械门禁**：留痕 → 派发 → 验证 → 裁定 → 审计 → 还原
+> 把"相信 Agent"变成"验证 Agent"——机器级 scope 限制、真实命令执行、防篡改审计链。
 
-[![English](https://img.shields.io/badge/%F0%9F%87%AC%F0%9F%87%A7-English-README-blue)](README.en.md)
 [![中文](https://img.shields.io/badge/%F0%9F%87%E4%B8%AD%F0%9F%87%B5-%E4%B8%AD%E6%96%87-red)](README.zh.md)
+[![English](https://img.shields.io/badge/%F0%9F%87%AC%F0%9F%87%A7-English-README-blue)](README.en.md)
 [![npm version](https://img.shields.io/npm/v/carlos-flow-cindy.svg)](https://www.npmjs.com/package/carlos-flow-cindy)
 [![npm downloads](https://img.shields.io/npm/dm/carlos-flow-cindy.svg)](https://www.npmjs.com/package/carlos-flow-cindy)
 [![license](https://img.shields.io/npm/l/carlos-flow-cindy.svg)](LICENSE)
@@ -14,296 +14,297 @@
 
 ---
 
-## 🎯 Why Carlos Flow?
+## 🎯 为什么选择 Carlos Flow？
 
-Most AI coding workflows are **advisory**. The prompt says "only touch these files" — and the agent politely agrees, then rewrites half the repository. The prompt says "run the tests" — and the agent reports "tests pass" without ever running them.
+绝大多数 AI 编码流程是**建议性的**。提示词写"只改这些文件"——Agent 客气地点头，然后把半个仓库重写了。提示词写"跑一下测试"——Agent 汇报"测试通过"，其实根本没跑。
 
-Carlos Flow is **mechanical**. The constraints live in code, not in prose.
+Carlos Flow 是**机械性的**。约束写在代码里，不写在散文里。
 
-### Pain points it removes
+### 消除的痛点
 
-| Pain | Typical state today | Carlos Flow's answer |
-|------|--------------------|---------------------|
-| **Scope creep** | "Only edit `src/auth.py`" — a suggestion, not a rule | `enforceScope()` compares real `git diff` output against the card's whitelist; out-of-scope files **block the dispatch** |
-| **Verification theatre** | Agent claims "tests pass"; nobody can prove it | `runVerifyCommand()` actually spawns `verify.cmd`, captures `stdout` / `stderr` / `exitCode` |
-| **Laundered audit logs** | Logs in a plain file — deletable, editable | SHA-256 **chained** audit log (`prevHash` → `hash`); altering one record breaks the chain |
-| **Runaway bypass mode** | One sentence ("skip the gate, it's urgent") disables everything | Bypass requires an explicit `confirmed=true` on the card and **auto-resets on every dispatch** |
-| **Infinite dispatch budget** | Claiming a slot resets the counter — unlimited retries | `dispatch_count` increments **only on dispatch**; quota exhaustion blocks both claim and dispatch |
-| **Forgotten daemons** | "Did you start the server?" / port already in use | Bridge is auto-launched on first call, health-checked, token-authenticated, rate-limited |
-| **Self-attested reviews** | Same agent implements *and* approves | Built-in `auditor` role with a separate contract; verdict is one of `PASS` / `DIRECTION` / `LOCAL` |
+| 痛点 | 今天的典型状态 | Carlos Flow 的答案 |
+|------|----------------|-------------------|
+| **越界改动** | "只改 `src/auth.py`"——是建议，不是规则 | `enforceScope()` 用真实 `git diff` 对比卡片白名单，越界文件**直接阻断派发** |
+| **验证表演** | Agent 声称"测试通过"，无人能证明 | `runVerifyCommand()` 真实 spawn `verify.cmd`，捕获 `stdout`/`stderr`/`exitCode` |
+| **可洗白的审计日志** | 普通文件里的日志——可删可改 | SHA-256 **链式**审计日志（`prevHash`→`hash`），改一条全链断裂 |
+| **失控的免检模式** | 一句话（"这很急，跳过门禁"）关闭所有防护 | 免检需卡片显式 `confirmed=true`，且**每次派发自动清零** |
+| **无限派发额度** | 领卡即重置计数——可无限重试 | `dispatch_count` **只在派发时** +1；配额耗尽同时拦截 claim 和 dispatch |
+| **忘记拉起守护进程** | "你启动服务了吗？" / 端口已被占用 | Bridge 首次调用自动拉起、健康检查、Token 认证、限流 |
+| **自证式复核** | 同一个 Agent 既实现又审批 | 内置 `auditor` 角色，独立合同；裁定严格三档 `PASS`/`DIRECTION`/`LOCAL` |
+| **改坏了无法回退** | 只能手动 `git revert` | 派发前自动快照 → `flow_revert_plan` 生成原子还原计划 |
 
-### How it differs
+### 差异对比
 
-| Capability | **Carlos Flow** | Raw MCP server | Prompt-only / scripts |
-|------------|-----------------|-----------------|----------------------|
-| **Scope enforcement** | ✅ runtime `git diff` level | ❌ none | ❌ relies on goodwill |
-| **Real verification** | ✅ spawns the command, captures output | ❌ none | ❌ agent self-reports |
-| **Tamper-proof audit** | ✅ SHA-256 chained | ❌ none | ❌ none |
-| **Controlled bypass** | ✅ explicit + auto-reset | ❌ none | ❌ one-liner disables all |
-| **Honest dispatch quota** | ✅ counts dispatch only | ❌ none | ❌ none |
-| **Independent review** | ✅ built-in `auditor` role | ❌ none | ❌ optional |
-| **Snapshot + restore** | ✅ automatic, atomic plan | ❌ none | ❌ manual `git revert` |
-| **Daemon lifecycle** | ✅ automatic (Cindy edition) | ❌ manual | ❌ manual |
+| 能力 | **Carlos Flow** | 原生 MCP Server | 提示词 / 手写脚本 |
+|------|-----------------|-----------------|------------------|
+| **越界拦截** | ✅ 运行时 `git diff` 级 | ❌ 无 | ❌ 靠自觉 |
+| **真实验证** | ✅ spawn 执行并捕获输出 | ❌ 无 | ❌ Agent 自述 |
+| **防篡改审计** | ✅ SHA-256 链式哈希 | ❌ 无 | ❌ 无 |
+| **可控免检** | ✅ 显式开启 + 自动清零 | ❌ 无 | ❌ 一句话全关 |
+| **诚实派发配额** | ✅ 只计派发 | ❌ 无 | ❌ 无 |
+| **独立复核** | ✅ 内置 `auditor` 角色 | ❌ 无 | ❌ 可选 |
+| **快照 + 还原** | ✅ 自动、原子计划 | ❌ 无 | ❌ 手动 `git revert` |
+| **守护进程生命周期** | ✅ 全自动（Cindy 版） | ❌ 手动 | ❌ 手动 |
 
 ---
 
-## 🚀 Quick start (30 seconds)
+## 🚀 30 秒快速开始
 
-### Option 1 — Cindy plugin marketplace (recommended)
+### 方式一：Cindy 插件市场（推荐）
 
-1. Cindy → Settings → Plugins → Browse marketplace
-2. Search `carlos-flow`, click install
-3. Fill in the environment variables on the plugin settings page
-4. **Fully quit and restart Cindy**, then say *"走门禁"* / *"run the gate"*
+1. Cindy → 设置 → 插件 → 浏览市场
+2. 搜索 `carlos-flow` 点击安装
+3. 在插件设置页填写环境变量
+4. **完全退出 Cindy 重启**，然后说"走门禁"
 
-### Option 2 — from source
+### 方式二：从源码安装
 
 ```bash
 git clone https://github.com/skyer-now/carlos-flow-cindy.git
 cd carlos-flow-cindy
 npm install
-cp .env.example .env      # edit: CARLOS_FLOW_MCP_ROOT, CARLOS_FLOW_HOME
-npm test                  # smoke test (fully isolated)
-npm run test:e2e          # 16-case end-to-end suite
+cp .env.example .env      # 编辑：CARLOS_FLOW_MCP_ROOT、CARLOS_FLOW_HOME
+npm test                  # 冒烟测试（完全隔离）
+npm run test:e2e          # 16 项端到端用例
 ```
 
 ---
 
-## 🌟 Core capabilities
+## 🌟 核心能力
 
-### 1️⃣ Real verification — `flow_run_verify`
+### 1️⃣ 真实验证 — `flow_run_verify`
 
 ```typescript
 const result = await runVerifyCommand(card.verify.cmd, cwd);
 // { ok: boolean, exitCode: number, stdout: string, stderr: string, durationMs: number }
 ```
 
-Actually spawns the command. Captures full output. 60-second circuit breaker. No "trust me, it passed."
+真实 spawn 子进程，捕获完整输出，60 秒熔断。不再是"相信我，跑过了"。
 
-### 2️⃣ Scope enforcement — `flow_check_scope`
+### 2️⃣ 越界拦截 — `flow_check_scope`
 
 ```typescript
 const result = enforceScope(scopeWhitelist, changedFiles);
 // { ok: boolean, violations: string[] }
 ```
 
-Machine-level comparison of the working tree against the card's whitelist. File-level precision, zero false positives on unchanged files.
+机器级对比工作区变更与卡片白名单，文件级精度，未改动文件零误报。
 
-### 3️⃣ Tamper-proof audit chain — `verifyAuditChain`
+### 3️⃣ 防篡改审计链 — `verifyAuditChain`
 
 ```typescript
 const result = verifyAuditChain({ sinceIndex: 0 });
 // { ok: boolean, brokenAt?: number, detail?: string }
 ```
 
-Every record carries `prevHash`, `hash` and `seq`. A single edited byte invalidates everything downstream — mathematically, not administratively.
+每条记录携带 `prevHash`、`hash`、`seq`。改动一个字节，下游全部失效——是数学保证，不是管理保证。
 
-### 4️⃣ Controlled bypass — `flow_bypass` + `isBypassed()`
+### 4️⃣ 可控免检 — `flow_bypass` + `isBypassed()`
 
-- Must be explicitly enabled (`bypass=true` **and** `confirmed=true`)
-- Auto-resets on every dispatch — you cannot "forget to turn it off"
-- Every toggle is written to the audit chain
+- 必须显式开启（`bypass=true` **且** `confirmed=true`）
+- 每次派发自动清零——不可能"忘记关掉"
+- 每次开关都写入审计链
 
-### 5️⃣ Honest dispatch budget — `dispatch_count`
+### 5️⃣ 诚实派发配额 — `dispatch_count`
 
-- Increments **only** in `flow_dispatch`; `flow_claim` / `flow_verdict` never count
-- Quota exhaustion blocks **both** claim and dispatch
-- No infinite-retry path
+- **只在** `flow_dispatch` 递增；`flow_claim` / `flow_verdict` 永不计数
+- 配额耗尽同时阻断 claim 与 dispatch
+- 无无限重试路径
 
-### 6️⃣ Snapshot & restore — `flow_dispatch` → `flow_revert_plan`
+### 6️⃣ 快照与还原 — `flow_dispatch` → `flow_revert_plan`
 
-- Files in `scope` are snapshotted automatically before each dispatch
-- `flow_revert_plan` emits an atomic, ordered restore plan (newest first)
-- Partial rollback supported
+- `scope` 内文件在每次派发前自动快照
+- `flow_revert_plan` 输出原子化、有序（由新到旧）的还原计划
+- 支持部分回滚
 
-### 7️⃣ Independent review — `auditor` role
+### 7️⃣ 独立复核 — `auditor` 角色
 
-- Separate four-part contract with an evidence-gathering mandate
-- Auditor must run `git status --porcelain` / `git diff` itself
-- Verdict enum is strict: `PASS` / `DIRECTION` / `LOCAL`
+- 独立的四段合同，强制自行取证
+- Auditor 必须自己跑 `git status --porcelain` / `git diff`
+- 裁定枚举严格：`PASS` / `DIRECTION` / `LOCAL`
 
 ---
 
-## 📖 Use cases
+## 📖 典型场景
 
-### Scenario 1 — New feature development
+### 场景 1 — 新功能开发
 ```mermaid
 flowchart LR
-    A[Requirement] --> B[Submit card]
-    B --> C[Dispatch Executor]
-    C --> D[Implement]
-    D --> E[Save result]
-    E --> F[Real verify]
-    F --> G[Scope check]
-    G --> H[Dispatch Auditor]
-    H --> I[Independent review]
-    I --> J[Verdict PASS]
+    A[需求] --> B[提交卡片]
+    B --> C[派发 Executor]
+    C --> D[实现]
+    D --> E[保存结果]
+    E --> F[真实验证]
+    F --> G[越界检查]
+    G --> H[派发 Auditor]
+    H --> I[独立复核]
+    I --> J[裁定 PASS]
 ```
 
-### Scenario 2 — Bug fix
-- Card `quote` is anchored to the user's original words — the agent cannot silently redefine the request
-- `scope` narrowed to the single file
-- `verify.cmd` runs the regression test, not a hand-written summary
+### 场景 2 — Bug 修复
+- 卡片 `quote` 锚定用户原话——Agent 不能悄悄改写需求
+- `scope` 收窄到单文件
+- `verify.cmd` 跑的是回归测试，不是手写总结
 
-### Scenario 3 — Large refactor
-- Multi-file `scope` managed as one whitelist
-- Snapshots protect against a half-finished refactor
-- Restore plan is the safety net
+### 场景 3 — 大规模重构
+- 多文件 `scope` 统一白名单管理
+- 快照兜底半途而废的重构
+- 还原计划是最后的安全网
 
-### Scenario 4 — Security audit / sensitive paths
-- T2 risk tier requires explicit `confirmed=true`
-- Sensitive paths (`config/`, `secrets/`, `infra/`, …) are flagged and gated
-- Audit chain provides tamper-evident evidence trail
+### 场景 4 — 安全审计 / 敏感路径
+- T2 风险档强制要求 `confirmed=true`
+- 敏感路径（`config/`、`secrets/`、`infra/` 等）自动标记并拦截
+- 审计链提供防篡改证据链
 
-### Scenario 5 — CI / PR gating
-- Same flow, driven from CI
-- Verdict can block a merge
-- Audit log archived for compliance
+### 场景 5 — CI / PR 门禁
+- 同一套流程，由 CI 驱动
+- 裁定结果可阻断合并
+- 审计日志归档以备合规
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ 架构
 
 ```mermaid
 flowchart TB
     subgraph Cindy["Cindy App"]
-        UI[Plugin settings] --> ENV[Encrypted env vault]
-        ENV --> BR[Bridge daemon]
+        UI[插件设置页] --> ENV[加密保险库]
+        ENV --> BR[Bridge 守护进程]
     end
     subgraph Server["MCP Server (src/)"]
-        T[14 tools] --> C[Card parse & validate]
-        C --> S[State & audit chain]
-        S --> D[Dispatch / snapshot / verify]
+        T[14 个工具] --> C[卡片解析与校验]
+        C --> S[状态与审计链]
+        S --> D[派发 / 快照 / 验证]
     end
-    BR <-- "TCP 127.0.0.1:19099 · token · rate-limited" --> Server
-    CLI[CLI client] --> BR
-    REA[rea MCP] -. optional .-> BR
+    BR <-- "TCP 127.0.0.1:19099 · Token · 限流" --> Server
+    CLI[CLI 客户端] --> BR
+    REA[rea MCP] -. 可选 .-> BR
 ```
 
-### Why a Bridge in the Cindy edition?
+### Cindy 版为什么要用 Bridge？
 
-|  | Cindy edition (this repo) | OpenCode edition |
-|---|---|---|
-| Transport | TCP Bridge on `127.0.0.1:19099` | Pure stdio |
-| Daemon lifecycle | **Automatic** — launched on first call, health-checked | Managed by OpenCode |
-| Configuration | Plugin settings page + env vars | `.mcprc` / `opencode.json` |
-| Secret storage | **Cindy encrypted vault** — no plaintext in code | Plaintext config (user-managed) |
-| rea integration | Built-in `client/rea.js` | Register a second MCP server |
-| Best for | Cindy App users | OpenCode 2.2.2+ users |
-
----
-
-## 🛠️ The 14 tools
-
-### 📝 Card & record
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_protocol` | Read the full protocol (tiers T0/T1/T2, contracts, error layers, state schema) | — |
-| `flow_add_user_msg` | Record the user's original words (anchor source) | `sessionId`, `text` |
-| `flow_submit_requirement` | Submit the task card (validate + record) | `goal`, `quote`, `scope`, `acceptance`, `confirmed` |
-
-### 🚀 Dispatch & execution
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_claim` | Claim a dispatch slot, get the four-part contract | `sessionId`, `role` (`executor`\|`auditor`) |
-| `flow_dispatch` | Generate the contract prompt + automatic file snapshot | `sessionId`, `role`, `message`, `run?` |
-| `flow_run_verify` | **Really execute `verify.cmd`** | `sessionId` |
-| `flow_check_scope` | **Machine-level scope enforcement** | `sessionId`, `paths[]` |
-
-### ⚖️ Verdict & status
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_verdict` | Record the verdict (`PASS`/`DIRECTION`/`LOCAL`) | `sessionId`, `verdict`, `notes` |
-| `flow_status` | Query the full gate state | `sessionId` |
-
-### 🔍 Audit & forensics
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_audit` | Read the audit trail (filter by type/time/session) | `sessionId`, `type?`, `since?` |
-| `flow_diff_hunks` | git diff hunk-level analysis | `sessionId`, `scope?` |
-| `flow_revert_plan` | Generate the atomic restore plan | `sessionId` |
-
-### 🛡️ Bypass & restore
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_bypass` | Bypass switch (requires `confirmed`) | `sessionId`, `bypass`, `confirmed` |
-
-> Full tool reference: call `flow_protocol` at runtime — it is the authoritative, machine-readable spec.
+| 维度 | Cindy 版（本仓库） | OpenCode 版 |
+|------|------------------|-------------|
+| 传输协议 | TCP Bridge `127.0.0.1:19099` | 纯 stdio |
+| 守护进程 | **全自动**——首次调用拉起、健康检查 | 由 OpenCode 托管 |
+| 配置方式 | 插件设置页 + 环境变量 | `.mcprc` / `opencode.json` |
+| 密钥存储 | **Cindy 加密保险库**，代码零明文 | 明文配置（用户自行管理） |
+| rea 集成 | 内置 `client/rea.js` | 需另注册 MCP server |
+| 适用场景 | Cindy App 用户 | OpenCode 2.2.2+ 用户 |
 
 ---
 
-## ⚙️ Environment variables
+## 🛠️ 14 个工具
 
-| Variable | Required | Description | Example |
-|----------|----------|-------------|---------|
-| `CARLOS_FLOW_MCP_ROOT` | ✅ | MCP source root (contains `src/` `bridge/` `client/`) | `D:/cindy/carlos-flow-mcp` |
-| `CARLOS_FLOW_HOME` | ✅ | State / audit / snapshot root | `~/carlos-flow` |
-| `BRIDGE_PORT` | ❌ | Bridge listen port (default `19099`) | `19099` |
-| `REA_MCP_ROOT` | ❌ | rea MCP source root | `D:/dev-env/rea` |
-| `GHIDRA_HOME` | ❌ | Ghidra install dir | `D:/dev-env/ghidra/ghidra_12.1.4_PUBLIC` |
-| `JAVA_HOME` | ❌ | JDK 21 install dir | `D:/dev-env/jdk-21.0.12.1+1` |
-| `NODE_PATH` | ❌ | Node.js executable path (default `node`) | `node` |
+### 📝 卡片与留痕
+| 工具 | 作用 | 关键参数 |
+|------|------|----------|
+| `flow_protocol` | 读取完整协议（档位 T0/T1/T2、合同、错误分层、状态 schema） | — |
+| `flow_add_user_msg` | 写入用户原话（锚点数据源） | `sessionId`, `text` |
+| `flow_submit_requirement` | 提交任务卡（校验 + 留痕） | `goal`, `quote`, `scope`, `acceptance`, `confirmed` |
 
-> **Tip**: changes made on the Cindy plugin settings page require a **full Cindy restart** to take effect.
+### 🚀 派发与执行
+| 工具 | 作用 | 关键参数 |
+|------|------|----------|
+| `flow_claim` | 领取派发名额，返回四段合同 | `sessionId`, `role`（`executor`\|`auditor`） |
+| `flow_dispatch` | 生成合同 prompt + 自动文件快照 | `sessionId`, `role`, `message`, `run?` |
+| `flow_run_verify` | **真实执行 `verify.cmd`** | `sessionId` |
+| `flow_check_scope` | **机器级 scope 越界拦截** | `sessionId`, `paths[]` |
+
+### ⚖️ 裁定与状态
+| 工具 | 作用 | 关键参数 |
+|------|------|----------|
+| `flow_verdict` | 记录裁定（`PASS`/`DIRECTION`/`LOCAL`） | `sessionId`, `verdict`, `notes` |
+| `flow_status` | 查询完整门禁状态 | `sessionId` |
+
+### 🔍 审计与取证
+| 工具 | 作用 | 关键参数 |
+|------|------|----------|
+| `flow_audit` | 读取审计流水（按类型/时间/会话筛选） | `sessionId`, `type?`, `since?` |
+| `flow_diff_hunks` | git diff hunk 级分析 | `sessionId`, `scope?` |
+| `flow_revert_plan` | 生成原子还原计划 | `sessionId` |
+
+### 🛡️ 免检与还原
+| 工具 | 作用 | 关键参数 |
+|------|------|----------|
+| `flow_bypass` | 免检开关（需 `confirmed`） | `sessionId`, `bypass`, `confirmed` |
+
+> 完整工具参考：运行时调用 `flow_protocol`，它是权威的机器可读规范。
 
 ---
 
-## 🧪 Testing
+## ⚙️ 环境变量
+
+| 变量 | 必填 | 说明 | 示例 |
+|------|------|------|------|
+| `CARLOS_FLOW_MCP_ROOT` | ✅ | MCP 源码根目录（含 `src/` `bridge/` `client/`） | `D:/cindy/carlos-flow-mcp` |
+| `CARLOS_FLOW_HOME` | ✅ | 状态 / 审计 / 快照根目录 | `~/carlos-flow` |
+| `BRIDGE_PORT` | ❌ | Bridge 监听端口（默认 `19099`） | `19099` |
+| `REA_MCP_ROOT` | ❌ | rea MCP 源码根目录 | `D:/dev-env/rea` |
+| `GHIDRA_HOME` | ❌ | Ghidra 安装目录 | `D:/dev-env/ghidra/ghidra_12.1.4_PUBLIC` |
+| `JAVA_HOME` | ❌ | JDK 21 安装目录 | `D:/dev-env/jdk-21.0.12.1+1` |
+| `NODE_PATH` | ❌ | Node.js 可执行文件路径（默认 `node`） | `node` |
+
+> **提示**：插件设置页修改后需**完全退出 Cindy 重启**生效。
+
+---
+
+## 🧪 测试
 
 ```bash
-npm test          # smoke test — isolated temp dir, < 10s
-npm run test:e2e  # 16-case end-to-end suite
-npm run test:rea  # 8-case real Ghidra analysis
+npm test          # 冒烟测试——隔离临时目录，< 10s
+npm run test:e2e  # 16 项端到端用例
+npm run test:rea  # 8 项 rea Ghidra 真实分析
 ```
 
-CI runs on **ubuntu-latest** and **windows-latest** for every push and pull request.
+CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request 运行。
 
 ---
 
-## 📋 Changelog
+## 📋 变更日志
 
-Full history → [CHANGELOG.md](CHANGELOG.md)
+完整历史 → [CHANGELOG.md](CHANGELOG.md)
 
-### v2.5.2 — 2026-11-04 · Phase 1 P0 complete
+### v2.5.2 — 2026-11-04 · Phase 1 P0 全修复
 
-| Type | Change |
-|------|--------|
-| ✨ New tools | `flow_run_verify`, `flow_check_scope` |
-| ✨ Core | `runVerifyCommand()` really executes `verify.cmd` |
-| ✨ Core | `enforceScope()` machine-level scope enforcement |
-| ✨ Core | `verifyAuditChain()` SHA-256 audit-chain validation |
-| ✨ Core | `isBypassed()` real bypass semantics |
-| 🐛 Fixed | role whitelist (only `executor`/`auditor`; typos now error) |
-| 🐛 Fixed | `dispatch_count` increments on dispatch only |
-| 🐛 Fixed | bypass auto-resets on new dispatch |
-| 🐛 Fixed | stale-card / quota / verdict-enum / param validation |
+| 类型 | 变更 |
+|------|------|
+| ✨ 新增工具 | `flow_run_verify`、`flow_check_scope` |
+| ✨ 核心 | `runVerifyCommand()` 真实执行 `verify.cmd` |
+| ✨ 核心 | `enforceScope()` 机器级 scope 越界拦截 |
+| ✨ 核心 | `verifyAuditChain()` SHA-256 审计链校验 |
+| ✨ 核心 | `isBypassed()` 免检模式真实判定 |
+| 🐛 修复 | role 白名单（仅 `executor`/`auditor`，拼错即报错） |
+| 🐛 修复 | `dispatch_count` 仅在 dispatch 时递增 |
+| 🐛 修复 | 免检状态在新派发时自动清零 |
+| 🐛 修复 | 过期卡 / 配额 / 裁定枚举 / 参数校验 |
 
-> ⚠️ **v2.5.1 contained 18 P0 defects.** Upgrade to **v2.5.2 or later**.
-
----
-
-## ❓ FAQ
-
-| Symptom | Fix |
-|---------|-----|
-| Bridge port conflict (`EADDRINUSE`) | Change `BRIDGE_PORT`, or `lsof -ti:19099 \| xargs kill` |
-| Plugin settings changes have no effect | **Fully quit Cindy and restart** (not minimize-to-tray) |
-| Audit chain validation fails | Check `CARLOS_FLOW_HOME` permissions, or delete `audit/` and let it rebuild |
-| Verification command times out | `verify.cmd` is killed after 60s — split it into fast commands |
-| Scope violation false positive | Use relative paths in `scope`; `git diff --name-only` must match |
+> ⚠️ **v2.5.1 存在 18 项 P0 缺陷**，请升级到 **v2.5.2 或更高版本**。
 
 ---
 
-## 📄 License
+## ❓ 常见问题
 
-MIT — see [LICENSE](LICENSE)
+| 现象 | 解决 |
+|------|------|
+| Bridge 端口冲突（`EADDRINUSE`） | 改 `BRIDGE_PORT`，或 `lsof -ti:19099 \| xargs kill` |
+| 插件设置页改完不生效 | **完全退出 Cindy 并重启**（不是最小化到托盘） |
+| 审计链校验失败 | 检查 `CARLOS_FLOW_HOME` 权限，或删除 `audit/` 重建 |
+| 验证命令超时 | `verify.cmd` 超过 60s 会被熔断，建议拆成快速命令 |
+| scope 越界误报 | `scope` 用相对路径，`git diff --name-only` 需一致 |
 
 ---
 
-## 🤝 Contributing
+## 📄 许可证
 
-PRs welcome! Please make sure `npm test` and `npm run test:e2e` pass first. See [CONTRIBUTING.md](CONTRIBUTING.md).
+MIT —— 见 [LICENSE](LICENSE)
 
 ---
 
-**Using OpenCode instead?** → [carlos-flow-opencode](https://github.com/skyer-now/carlos-flow-opencode) — pure stdio, no Bridge, configured via `.mcprc` / `opencode.json`.
+## 🤝 贡献
+
+欢迎 PR！请先跑通 `npm test` 和 `npm run test:e2e`。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+---
+
+**用 OpenCode？** → [carlos-flow-opencode](https://github.com/skyer-now/carlos-flow-opencode) —— 纯 stdio，无 Bridge，配置走 `.mcprc` / `opencode.json`。

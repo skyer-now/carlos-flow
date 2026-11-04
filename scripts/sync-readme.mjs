@@ -1,6 +1,10 @@
 #!/usr/bin/env node
-// sync-readme.mjs — keep README.en.md identical to README.md (English master)
-// and verify README.zh.md exists with the language-switch nav bar.
+// sync-readme.mjs — keep the bilingual README set consistent.
+//
+// Layout (scheme A — separate language files):
+//   README.md      ← 中文主文档（GitHub 首页 / npm 渲染页默认展示）
+//   README.zh.md   ← 中文副本（保证 /README.zh.md 直链可用，与主文档一致）
+//   README.en.md   ← 英文完整版（顶部语言栏切换目标）
 //
 // Usage:
 //   node scripts/sync-readme.mjs          # sync + verify (exit 1 on drift)
@@ -12,10 +16,9 @@ import path from "node:path";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 
-const MASTER = path.join(root, "README.md");       // English master
-const MIRROR = path.join(root, "README.en.md");    // English mirror (badge target)
-const ZH = path.join(root, "README.zh.md");        // Chinese version
-
+const ZH_MASTER = path.join(root, "README.md");     // 中文主文档（首页默认）
+const ZH_MIRROR = path.join(root, "README.zh.md");  // 中文副本
+const EN = path.join(root, "README.en.md");         // 英文完整版
 const checkOnly = process.argv.includes("--check");
 const NAV_EN = "(README.en.md)";
 const NAV_ZH = "(README.zh.md)";
@@ -26,46 +29,43 @@ const log = (ok, msg) => {
   if (!ok) failed = true;
 };
 
-// 1. English mirror
-if (!existsSync(MASTER)) {
-  log(false, "README.md (English master) is missing");
-} else {
-  const master = readFileSync(MASTER, "utf8");
-  if (!master.includes(NAV_EN) || !master.includes(NAV_ZH)) {
-    log(false, "README.md is missing the language-switch nav bar");
-  } else {
-    log(true, "README.md has the language-switch nav bar");
-  }
+const hasNav = (text) => text.includes(NAV_EN) && text.includes(NAV_ZH);
 
-  if (existsSync(MIRROR)) {
-    const mirror = readFileSync(MIRROR, "utf8");
-    if (mirror === master) {
-      log(true, "README.en.md is in sync with README.md");
+// ---- 1. 中文主文档（首页默认）----
+if (!existsSync(ZH_MASTER)) {
+  log(false, "README.md (中文主文档) is missing");
+} else {
+  const master = readFileSync(ZH_MASTER, "utf8");
+  log(hasNav(master), "README.md has the language-switch nav bar");
+
+  // 中文主文档 → README.zh.md 副本
+  if (existsSync(ZH_MIRROR)) {
+    if (readFileSync(ZH_MIRROR, "utf8") === master) {
+      log(true, "README.zh.md is in sync with README.md");
+    } else if (checkOnly) {
+      log(false, "README.zh.md differs from README.md — run `npm run sync:readme`");
     } else {
-      if (checkOnly) {
-        log(false, "README.en.md differs from README.md — run `npm run sync:readme`");
-      } else {
-        writeFileSync(MIRROR, master, "utf8");
-        log(true, "README.en.md synced from README.md");
-      }
+      writeFileSync(ZH_MIRROR, master, "utf8");
+      log(true, "README.zh.md synced from README.md");
     }
   } else if (checkOnly) {
-    log(false, "README.en.md is missing — run `npm run sync:readme`");
+    log(false, "README.zh.md is missing — run `npm run sync:readme`");
   } else {
-    writeFileSync(MIRROR, master, "utf8");
-    log(true, "README.en.md created from README.md");
+    writeFileSync(ZH_MIRROR, master, "utf8");
+    log(true, "README.zh.md created from README.md");
   }
 }
 
-// 2. Chinese version
-if (!existsSync(ZH)) {
-  log(false, "README.zh.md is missing");
+// ---- 2. 英文完整版 ----
+if (!existsSync(EN)) {
+  log(false, "README.en.md (English version) is missing");
 } else {
-  const zh = readFileSync(ZH, "utf8");
-  if (zh.includes(NAV_EN) && zh.includes(NAV_ZH)) {
-    log(true, "README.zh.md has the language-switch nav bar");
+  const en = readFileSync(EN, "utf8");
+  log(hasNav(en), "README.en.md has the language-switch nav bar");
+  if (/^#\s+.*(中文)/m.test(en.split("\n").slice(0, 12).join("\n"))) {
+    log(false, "README.en.md looks like the Chinese version — check the copy");
   } else {
-    log(false, "README.zh.md is missing the language-switch nav bar");
+    log(true, "README.en.md is the English version");
   }
 }
 
