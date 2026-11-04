@@ -264,7 +264,7 @@ CI runs on **ubuntu-latest** and **windows-latest** for every push and pull requ
 
 Full history → [CHANGELOG.md](CHANGELOG.md)
 
-### v2.5.2 — 2026-11-04 · Phase 1 P0 complete
+### v2.5.3 — 2026-11-04 · Fatal syntax fixes + verified gates
 
 | Type | Change |
 |------|--------|

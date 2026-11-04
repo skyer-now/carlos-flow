@@ -144,6 +144,8 @@ const TOOLS = [
           card_ts: Date.now(),
           tier,
           dispatch_count: 0,
+          claimed: false,
+          claimed_role: null,
           write_files: 0,
           last_user_ts: Date.now(),
           bypass: false,
@@ -183,13 +185,14 @@ const TOOLS = [
     },
     handler: async (args) => {
       try {
-        // Phase 1-1: role 白名单校验
+        // Phase 1-1: role 白名单校验（非法值必须报错，不得静默降级）
         const a = args || {};
-        const role = a.role === "auditor" ? "auditor" : "executor";
-        if (role !== "executor" && role !== "auditor") return fail("非法 role：" + role + "，必须是 executor 或 auditor");
-        const a = args || {};
+        const rawRole = a.role === undefined || a.role === null || a.role === "" ? "executor" : String(a.role);
+        if (rawRole !== "executor" && rawRole !== "auditor") {
+          return fail("非法 role：" + rawRole + "，必须是 executor 或 auditor");
+        }
+        const role = rawRole;
         const sessionId = a.sessionId || "unknown";
-        const role = a.role === "auditor" ? "auditor" : "executor";
         const state = loadState(sessionId);
 
         if (!state.card) {
@@ -203,6 +206,9 @@ const TOOLS = [
         }
 
         // Phase 1-1: 不在 claim 时增加 dispatch_count，改在 dispatch 时增加
+        // claim 只标记已领取（state.claimed），不消耗派发额度
+        state.claimed = true;
+        state.claimed_role = role;
         state.last_user_ts = Date.now();
         saveState(sessionId, state);
 
@@ -245,9 +251,12 @@ const TOOLS = [
     handler: async (args) => {
       try {
         const a = args || {};
-        // Phase 1-1: role 白名单校验
-        const role = a.role === "auditor" ? "auditor" : "executor";
-        if (role !== "executor" && role !== "auditor") return fail("非法 role：" + role + "，必须是 executor 或 auditor");
+        // Phase 1-1: role 白名单校验（非法值必须报错，不得静默降级）
+        const rawRole = a.role === undefined || a.role === null || a.role === "" ? "executor" : String(a.role);
+        if (rawRole !== "executor" && rawRole !== "auditor") {
+          return fail("非法 role：" + rawRole + "，必须是 executor 或 auditor");
+        }
+        const role = rawRole;
 
         // Phase 1-1: dispatch 前强制校验 stale / dispatch_count / claim
         const sessionId = a.sessionId || "unknown";
@@ -255,19 +264,25 @@ const TOOLS = [
         if (!state.card) return fail("没有留痕，不允许派发。");
         if (isStale(state)) return fail("留痕已过期（stale），请重新提交任务卡。");
         if (state.dispatch_count >= MAX_DISPATCH) return fail("派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。");
-        // 简单检查是否有过 claim（dispatch_count > 0 视为已 claim）
-        if ((Number(state.dispatch_count) || 0) === 0) return fail("未 claim，请先 flow_claim 领取派发名额。");
+        // 必须先 flow_claim 领取派发名额（claimed 标记由 claim 设置）
+        if (state.claimed !== true) return fail("未 claim，请先 flow_claim 领取派发名额。");
 
-        const role = a.role === "auditor" ? "auditor" : "executor";
         const cwd = a.cwd || process.cwd();
-        const state = loadState(sessionId);
 
-        if (!state.card) return fail("没有留痕，不允许派发。");
+        // Phase 1-1: dispatch 时才增加 dispatch_count（claim 不计数）
+        state.dispatch_count = (Number(state.dispatch_count) || 0) + 1;
+        // 额度已消耗，需要重新 claim 才能再次派发
+        state.claimed = false;
+        state.write_files = 0;
+        // Phase 1-1: 派发后自动清零免检，避免“忘记关免检”长期生效
+        if (state.bypass === true) {
+          state.bypass = false;
+          state.bypass_ts = 0;
+          audit("decision", sessionId, { kind: "bypass_auto_reset", reason: "派发后自动清零" });
+        }
+        saveState(sessionId, state);
 
-        
-            // Phase 1-1: dispatch 时才增加 dispatch_count
-            state.dispatch_count = (Number(state.dispatch_count) || 0) + 1;
-const prompt = buildContractPrompt(role, state.card, a.message);
+        const prompt = buildContractPrompt(role, state.card, a.message);
 
         const scope = Array.isArray(state.card.scope) ? state.card.scope : [];
         const entries = snapshotFiles(sessionId, scope, cwd);
@@ -509,22 +524,41 @@ const prompt = buildContractPrompt(role, state.card, a.message);
       properties: {
         sessionId: { type: "string", description: "会话 ID，默认 unknown" },
         on: { type: "boolean", description: "true 开启免检，false 关闭" },
+        confirmed: { type: "boolean", description: "开启免检时必须为 true（表示用户已明确授权）" },
         reason: { type: "string", description: "开启/关闭理由（建议写用户原话）" },
       },
+      required: ["on"],
     },
     handler: async (args) => {
       try {
         const a = args || {};
         const sessionId = a.sessionId || "unknown";
         const state = loadState(sessionId);
+
+        if (!state.card) {
+          return fail("没有留痕，无法开启免检。免检只能在已提交任务卡的前提下使用。");
+        }
+
+        // Phase 1-1: 开启免检必须显式确认，不允许隐式触发
+        if (a.on === true && a.confirmed !== true) {
+          audit("decision", sessionId, { kind: "bypass_denied", reason: "未确认" });
+          return fail("开启免检需要显式确认：用户必须明确授权后，传入 confirmed=true。");
+        }
+
         state.bypass = a.on === true;
         state.bypass_ts = Date.now();
         saveState(sessionId, state);
         audit("decision", sessionId, {
           kind: state.bypass ? "bypass_on" : "bypass_off",
           reason: a.reason,
+          confirmed: a.confirmed === true,
         });
-        return ok({ ok: true, bypass: state.bypass, reason: a.reason });
+        return ok({
+          ok: true,
+          bypass: state.bypass,
+          reason: a.reason,
+          note: state.bypass ? "免检已开启；下次 flow_dispatch 后会自动清零。" : "免检已关闭。",
+        });
       } catch (e) {
         return fail(e && e.message ? e.message : String(e));
       }
@@ -599,7 +633,32 @@ const prompt = buildContractPrompt(role, state.card, a.message);
       properties: {
         sessionId: { type: "string", description: "会话 ID，默认 unknown" },
         cwd: { type: "string", description: "工作目录，默认 process.cwd()" },
-      
+      },
+    },
+    handler: async (args) => {
+      try {
+        const a = args || {};
+        const sessionId = a.sessionId || "unknown";
+        const entries = readManifest(sessionId);
+        const plan = [];
+        for (const entry of entries) {
+          if (!entry) continue;
+          if (entry.created === true) {
+            plan.push({ action: "delete", target: entry.orig, source: null });
+          } else {
+            plan.push({ action: "restore", source: entry.backup, target: entry.orig });
+          }
+        }
+        return ok({
+          sessionId,
+          count: plan.length,
+          plan,
+          note: "这是还原计划，不会自动执行；实际还原需人工确认后按 plan 操作。",
+        });
+      } catch (e) {
+        return fail(e && e.message ? e.message : String(e));
+      }
+    },
   },
 
   // 13 -----------------------------------------------------------------------
@@ -670,33 +729,6 @@ const prompt = buildContractPrompt(role, state.card, a.message);
       }
     },
   },
-},
-    },
-    handler: async (args) => {
-      try {
-        const a = args || {};
-        const sessionId = a.sessionId || "unknown";
-        const entries = readManifest(sessionId);
-        const plan = [];
-        for (const entry of entries) {
-          if (!entry) continue;
-          if (entry.created === true) {
-            plan.push({ action: "delete", target: entry.orig, source: null });
-          } else {
-            plan.push({ action: "restore", source: entry.backup, target: entry.orig });
-          }
-        }
-        return ok({
-          sessionId,
-          count: plan.length,
-          plan,
-          note: "这是还原计划，不会自动执行；实际还原需人工确认后按 plan 操作。",
-        });
-      } catch (e) {
-        return fail(e && e.message ? e.message : String(e));
-      }
-    },
-  },
 ];
 
 // ---- 服务器装配 ------------------------------------------------------------
@@ -725,63 +757,74 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// ---- 传输模式：stdio（单次调用，兼容旧用法） ----
-const transport = new StdioServerTransport();
-await server.connect(transport);
-process.stderr.write("carlos-flow MCP server connected via stdio\n");
-
-// Phase 1-1: 工具参数校验器
+// ---- Phase 1-1: 工具参数校验器（required 字段 / 类型 / enum）----
 function validateToolArgs(toolName, args) {
-  const tool = TOOLS.find(t => t.name === toolName);
+  const tool = TOOLS.find((t) => t.name === toolName);
   if (!tool || !tool.inputSchema) return { ok: true };
-  
-  // 简单的 schema 校验：required 字段、类型、enum
   const schema = tool.inputSchema;
-  if (schema.required) {
+
+  if (Array.isArray(schema.required)) {
     for (const field of schema.required) {
-      if (args[field] === undefined || args[field] === null || args[field] === "") {
+      const v = args[field];
+      if (v === undefined || v === null || v === "") {
         return { ok: false, error: "缺少必填字段：" + field };
       }
     }
-    if (schema.properties) {
-      for (const [key, prop] of Object.entries(schema.properties)) {
-        if (args[key] !== undefined && prop.type) {
-          const expected = prop.type === "integer" ? "number" : prop.type;
-          const actual = Array.isArray(args[key]) ? "array" : typeof args[key];
-          if (expected === "number" && typeof args[key] !== "number") {
-            return { ok: false, error: "字段 " + key + " 类型错误，期望 number" };
-          }
-          if (expected === "array" && !Array.isArray(args[key])) {
-            return { ok: false, error: "字段 " + key + " 类型错误，期望 array" };
-          }
-          if (prop.enum && args[key] !== undefined && !prop.enum.includes(args[key])) {
-            return { ok: false, error: "字段 " + key + " 值非法，可选：" + prop.enum.join(", ") };
-          }
-        }
-      }
-    }
-    return { ok: true };
   }
 
-// Phase 1-1: CallTool handler 增加参数校验
-const originalHandler = server._requestHandlers.get("tools/call");
+  if (schema.properties) {
+    for (const [key, prop] of Object.entries(schema.properties)) {
+      const v = args[key];
+      if (v === undefined || v === null) continue;
+      if (prop.type) {
+        const expected = prop.type === "integer" ? "number" : prop.type;
+        if (expected === "number" && typeof v !== "number") {
+          return { ok: false, error: "字段 " + key + " 类型错误，期望 number" };
+        }
+        if (expected === "array" && !Array.isArray(v)) {
+          return { ok: false, error: "字段 " + key + " 类型错误，期望 array" };
+        }
+        if (expected === "string" && typeof v !== "string") {
+          return { ok: false, error: "字段 " + key + " 类型错误，期望 string" };
+        }
+        if (expected === "boolean" && typeof v !== "boolean") {
+          return { ok: false, error: "字段 " + key + " 类型错误，期望 boolean" };
+        }
+      }
+      if (prop.enum && !prop.enum.includes(v)) {
+        return { ok: false, error: "字段 " + key + " 值非法，可选：" + prop.enum.join(", ") };
+      }
+    }
+  }
+  return { ok: true };
+}
+
+// ---- CallTool：先校验参数，再分发到工具 handler ----
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const toolName = request.params.name;
   const args = request.params.arguments || {};
-  
-  // 先校验参数
+
+  const t = TOOLS.find((x) => x.name === toolName);
+  if (!t) {
+    return { content: [{ type: "text", text: "Unknown tool: " + toolName }], isError: true };
+  }
+
   const validation = validateToolArgs(toolName, args);
   if (!validation.ok) {
     return { content: [{ type: "text", text: "ERROR: " + validation.error }], isError: true };
   }
-  
-  // 调用原处理器
-  if (originalHandler) {
-    return await originalHandler(request);
-  }
-  return { content: [{ type: "text", text: "Unknown tool: " + toolName }], isError: true;
- });
 
+  try {
+    return await t.handler(args);
+  } catch (e) {
+    return {
+      content: [{ type: "text", text: "ERROR: " + (e && e.message ? e.message : String(e)) }],
+      isError: true,
+    };
+  }
+});
+
+// ---- 传输模式：stdio（单次调用，兼容旧用法） ----
 const transport = new StdioServerTransport();
 await server.connect(transport);
 process.stderr.write("carlos-flow MCP server connected via stdio\n");

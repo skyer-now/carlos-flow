@@ -2,7 +2,12 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
-const CLIENT = process.env.CARLOS_FLOW_MCP_ROOT + "/carlos.js";
+// 客户端路径：优先 client/carlos.js（发布版布局），回退到根目录 carlos.js（扁平布局）
+const ROOT = process.env.CARLOS_FLOW_MCP_ROOT;
+const CLIENT = [
+  ROOT + "/client/carlos.js",
+  ROOT + "/carlos.js",
+].find((p) => fs.existsSync(p)) || ROOT + "/client/carlos.js";
 const SID = "e2e-" + Date.now();
 const FLOW_HOME = process.env.CARLOS_FLOW_HOME || "D:/opencode-backups";
 
@@ -19,6 +24,8 @@ function call(tool, args) {
     p.stdout.on("data", (d) => (out += d.toString()));
     p.stderr.on("data", (d) => (err += d.toString()));
     const timer = setTimeout(() => { p.kill(); resolve({ ok: false, error: "timeout" }); }, 60000);
+    // spawn 失败（如客户端路径不存在）必须 resolve，否则 Promise 永远挂起
+    p.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, error: "spawn: " + e.message }); });
     p.on("close", (code) => {
       clearTimeout(timer);
       if (code !== 0) return resolve({ ok: false, error: (err || out).trim().slice(0, 300) });
@@ -100,11 +107,14 @@ async function main() {
   r = await call("flow_diff_hunks", { cwd: process.env.CARLOS_FLOW_MCP_ROOT, paths: ["README.md"] });
   check("10. flow_diff_hunks", r.ok && r.data?.ok === true, r.ok ? `files=${r.data.files?.length}` : r.error);
 
-  // 11. flow_bypass
-  r = await call("flow_bypass", { sessionId: SID, on: true, reason: "端测" });
+  // 11. flow_bypass（开启必须显式 confirmed=true）
+  r = await call("flow_bypass", { sessionId: SID, on: true, confirmed: false, reason: "未确认应被拒" });
+  const denied = r.ok === false;
+  r = await call("flow_bypass", { sessionId: SID, on: true, confirmed: true, reason: "端测" });
   const byOn = r.ok && r.data?.bypass === true;
   r = await call("flow_bypass", { sessionId: SID, on: false, reason: "端测结束" });
-  check("11. flow_bypass 开关", byOn && r.ok && r.data?.bypass === false, r.ok ? "开→关正常" : r.error);
+  check("11. flow_bypass 开关", denied && byOn && r.ok && r.data?.bypass === false,
+    r.ok ? (denied ? "未确认被拒，开→关正常" : "未确认未被拒") : r.error);
 
   // 12. flow_revert_plan
   r = await call("flow_revert_plan", { sessionId: SID });

@@ -42,6 +42,8 @@ export function defaultState() {
     tier: "read_only",
     task_id: null,
     dispatch_count: 0,
+    claimed: false,
+    claimed_role: null,
     write_files: 0,
     last_user_ts: 0,
     bypass: false,
@@ -344,5 +346,10 @@ export function isStale(state, ttlSec = 14400) {
 
 // Phase 1-1: 检查 bypass 是否启用
 export function isBypassed(state) {
-  return state && state.bypass === true;
+  if (!state || state.bypass !== true) return false;
+  // 免检必须显式开启（bypass_ts 有值）且发生在当前卡片之后，
+  // 否则旧卡片的免检状态会错误地作用于新卡片
+  if (!state.bypass_ts) return false;
+  if (state.card_ts && state.bypass_ts < state.card_ts) return false;
+  return true;
 }

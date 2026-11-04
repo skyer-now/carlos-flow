@@ -178,7 +178,7 @@ flowchart TB
     end
     BR <-- "TCP 127.0.0.1:19099 · Token · 限流" --> Server
     CLI[CLI 客户端] --> BR
-    REA[rea MCP] -. 可选 .-> BR
+    REA[rea MCP] -. 可选 · 需另行部署 .-> BR
 ```
 
 ### Cindy 版为什么要用 Bridge？
@@ -189,7 +189,7 @@ flowchart TB
 | 守护进程 | **全自动**——首次调用拉起、健康检查 | 由 OpenCode 托管 |
 | 配置方式 | 插件设置页 + 环境变量 | `.mcprc` / `opencode.json` |
 | 密钥存储 | **Cindy 加密保险库**，代码零明文 | 明文配置（用户自行管理） |
-| rea 集成 | 内置 `client/rea.js` | 需另注册 MCP server |
+| rea 集成 | 另行注册 rea MCP server（需 `REA_MCP_ROOT`/`GHIDRA_HOME`） | 另行注册 rea MCP server |
 | 适用场景 | Cindy App 用户 | OpenCode 2.2.2+ 用户 |
 
 ---
@@ -265,7 +265,7 @@ CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request
 
 完整历史 → [CHANGELOG.md](CHANGELOG.md)
 
-### v2.5.2 — 2026-11-04 · Phase 1 P0 全修复
+### v2.5.3 — 2026-11-04 · 致命语法错误修复 + 门禁真验证
 
 | 类型 | 变更 |
 |------|------|

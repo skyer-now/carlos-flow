@@ -5,6 +5,47 @@
 
 ---
 
+## [2.5.3] - 2026-11-04 — 致命语法错误修复 + 门禁真验证
+
+### 🚨 致命修复 | Critical Fixes
+
+> 2.5.2 存在 **5 处致命语法错误**，导致 MCP Server 完全无法启动。所有宣称"已修复"的功能实际均未运行。
+
+| # | 问题 | 修复 |
+|---|------|------|
+| C-1 | `flow_claim` 内 `const a` / `const role` 重复声明 → SyntaxError | 删除重复声明 |
+| C-2 | `flow_revert_plan` 的 `inputSchema` 未闭合，handler 丢失 | 补全完整实现 |
+| C-3 | `flow_check_scope` 后残留旧 `flow_revert_plan` 代码块 | 移除残留 |
+| C-4 | `Unknown tool` 返回缺右括号 `}` | 补齐 |
+| C-5 | `CallTool` handler 未闭合，`await` 处于非法位置 | 重建为单一正确 handler |
+| C-6 | `CallTool` handler 被注册两次（原始 + Phase1 补丁） | 合并为单一 handler，内含参数校验 |
+
+### 🔧 功能修复 | Functional Fixes
+
+| # | 问题 | 修复 |
+|---|------|------|
+| F-1 | role 白名单失效（`a.role === "auditor" ? ... : "executor"` 先降级，校验永不触发） | 非法值直接报错，不得静默降级 |
+| F-2 | dispatch 要求 `dispatch_count > 0` 但计数只在 dispatch 时 +1 → 首次 dispatch 死锁 | 新增 `state.claimed` 标记：claim 置位、dispatch 清零 |
+| F-3 | `flow_bypass` 无任何确认校验，可随意开启 | 开启必须 `confirmed=true`；派发后自动清零 |
+| F-4 | `isBypassed()` 只看 `bypass` 标志，旧卡片免检会作用于新卡片 | 增加时序校验（`bypass_ts >= card_ts`） |
+| F-5 | Bridge spawn 时未注入 `CARLOS_FLOW_MCP_ROOT` → bridge 拼出 `undefined/src/index.js` | 注入绝对路径 `ROOT_ABS` |
+| F-6 | `client/carlos.js` 从 `ROOT/mcp-bridge.js` 找 Bridge，但文件在 `bridge/` 下 | 双路径探测（优先 `bridge/`） |
+| F-7 | CLI 客户端丢弃 `isError` 标志，调用方无法区分成败 | 错误走 stderr 且退出码非 0 |
+| F-8 | E2E 脚本硬编码 `ROOT/carlos.js`（发布版无此文件）→ Promise 挂起 | 双路径探测 + `spawn error` 监听 |
+| F-9 | `validateToolArgs` 脱离作用域，参数校验实际未执行 | 重建为顶层函数，独立 handler 内调用 |
+
+### ✅ 验证 | Verification
+
+| 套件 | 结果 |
+|------|------|
+| `npm test`（smoke） | SMOKE_OK |
+| `test/e2e-carlos.mjs` | **16/16 通过** |
+| `test/p0-gates.mjs`（新增·门禁专项） | **10/10 通过** |
+
+`test/p0-gates.mjs` 逐条验证审核报告指出的门禁：非法 role 拦截 / 未 claim 拦截 / verify.cmd 真实执行 / verify 失败如实报 / scope 内外判定 / 非法 verdict 拦截 / 免检需确认 / 审计可读。
+
+---
+
 ## [2.5.2] - 2026-11-04 — Phase 1 P0 全修复版
 
 ### ✨ 新增 | Added

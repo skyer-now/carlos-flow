@@ -5,12 +5,19 @@
 import { createConnection, createServer } from "node:net";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const BRIDGE_PORT = parseInt(process.env.BRIDGE_PORT || "19099", 10);
 const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || ".";
-const BRIDGE_SCRIPT = ROOT + "/mcp-bridge.js";
-const MCP_SERVER = ROOT + "/src/index.js";
-const PID_FILE = ROOT + "/bridge.pid";
+const ROOT_ABS = resolve(ROOT);
+// Bridge 脚本位置：优先 bridge/mcp-bridge.js（发布版布局），回退到根目录 mcp-bridge.js（扁平布局）
+const BRIDGE_SCRIPT = [
+  ROOT_ABS + "/bridge/mcp-bridge.js",
+  ROOT_ABS + "/mcp-bridge.js",
+].find((p) => existsSync(p)) || ROOT_ABS + "/bridge/mcp-bridge.js";
+const MCP_SERVER = ROOT_ABS + "/src/index.js";
+const PID_FILE = ROOT_ABS + "/bridge.pid";
 const BRIDGE_TOKEN = process.env.CARLOS_BRIDGE_TOKEN || "carlos-local-token-2026";
 
 const toolName = process.argv[2];
@@ -18,7 +25,7 @@ const argsJson = process.argv[3] || "{}";
 
 if (!toolName) {
   console.error("用法: node carlos.js <tool_name> [json_args]");
-  console.error("工具: flow_protocol flow_submit_requirement flow_claim flow_dispatch flow_verdict flow_status flow_audit flow_diff_hunks flow_bypass flow_add_user_msg flow_save_result flow_revert_plan");
+  console.error("工具: flow_protocol flow_submit_requirement flow_claim flow_dispatch flow_run_verify flow_check_scope flow_verdict flow_status flow_audit flow_diff_hunks flow_bypass flow_add_user_msg flow_save_result flow_revert_plan");
   process.exit(1);
 }
 
@@ -73,6 +80,8 @@ function startBridge() {
       env: {
         ...process.env,
         CARLOS_BRIDGE_TOKEN: BRIDGE_TOKEN,
+        // Bridge 需要用它定位 MCP server 与 pid 文件；未设置时 bridge 会拼出 undefined/src/index.js
+        CARLOS_FLOW_MCP_ROOT: ROOT_ABS,
         // 状态/审计根目录：注入后由 bridge → MCP server 逐级继承
         CARLOS_FLOW_HOME: process.env.CARLOS_FLOW_HOME || "D:\\opencode-backups",
       },
@@ -209,7 +218,16 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(resp.result?.content?.[0]?.text || "");
+  const text = resp.result?.content?.[0]?.text || "";
+  const isError = resp.result?.isError === true;
+
+  if (isError) {
+    // 错误必须走 stderr 且以非零码退出，调用方才能可靠区分成败
+    console.error(text);
+    process.exit(1);
+  }
+
+  console.log(text);
   // 显式退出：Bridge 是常驻子进程，其管道/句柄会让事件循环无法自然结束
   process.exit(0);
 }
