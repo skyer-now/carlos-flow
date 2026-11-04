@@ -10,6 +10,9 @@
   "scripts": {
     "test": "node test/smoke.js",
     "test:e2e": "node test/e2e-carlos.mjs",
+    "sync:readme": "node scripts/sync-readme.mjs",
+    "check:readme": "node scripts/sync-readme.mjs --check",
+    "prepublishOnly": "npm run check:readme",
     "start:bridge": "node bridge/mcp-bridge.js",
     "lint": "echo \"no linter configured\""
   },
@@ -47,6 +50,8 @@
     "settings.js",
     ".env.example",
     "README.md",
+    "README.en.md",
+    "README.zh.md",
     "LICENSE"
   ]
 }
