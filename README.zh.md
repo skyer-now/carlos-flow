@@ -200,8 +200,9 @@ node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run 
 > 不传则**完全不启用自动触发**。中文场景请通过 `trigger-config.json` 扩展 `keywordWeights`。
 
 输出（stderr）：
+> 注：这里的 **37** 是 CLI 不带 `complexity` 时的值；代码示例里传了 `complexity: 1.2`，对应 **38**。
 ```
-[Carlos Trigger] 判定触发：评分 38 · 置信度 0.9
+[Carlos Trigger] 判定触发：评分 37 · 置信度 0.9
 [Carlos Trigger] 已执行激活步骤：flow_add_user_msg（写入用户原话…）
 [Carlos Trigger] 已执行激活步骤：flow_submit_requirement（开卡：会话置为已留痕状态…）
 【Carlos 触发引擎已激活工作流】…请补齐 scope / acceptance / verify.cmd 后重新提交…

@@ -165,7 +165,7 @@ node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run 
 
 stderr 输出：
 ```
-[Carlos Trigger] 判定触发：评分 38 · 置信度 0.9
+[Carlos Trigger] 判定触发：评分 37 · 置信度 0.9
 [Carlos Trigger] 已执行激活步骤：flow_add_user_msg（写入用户原话，作为任务卡 quote 锚点校验的数据源）
 [Carlos Trigger] 已执行激活步骤：flow_submit_requirement（开卡：将会话置为已留痕状态，审计链记录 activation 事件）
 
