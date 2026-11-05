@@ -65,6 +65,31 @@
 | T-7 | `test:trigger` 把结果文件写入发布目录 `test/trigger-e2e-results.json` | **污染 npm 发布内容** | 改为写入系统临时目录 |
 | T-8 | 命中自动激活后，客户端只打印一行日志，**没有执行任何实际动作** | 「自动触发」名不副实，工作流并不会真的启动 | 新增 `buildActivationPlan()` + 客户端逐步执行激活步骤 + `activation_pending` 派发闸门 |
 | T-9 | 触发状态所有会话共用一个 `trigger-state.json` | **一个会话的限流会影响另一个会话**，多场景下莫名“时间间隔不足” | 状态按 session 分文件存放到 `CARLOS_FLOW_HOME/trigger-state/<sessionId>.json` |
+| T-10 | 占位卡可以直接 `flow_verdict` 记 PASS | **假闭环**：未派发、未验证、未补齐字段，却把 `completed_ok` 置为 true | `flow_verdict` 增加闸门：`activation_pending` 非空时拒绝记裁定，并写入 `verdict_denied` 审计事件 |
+| T-11 | `sanitizeSessionId` 清洗后可能撞名（`a/b` 与 `a_b` 都变成 `a_b`） | 不同会话共用同一份状态文件，限流互相影响 | 文件名追加原始 sessionId 的哈希后缀，保证唯一 |
+
+### 🧬 变异测试 | Mutation Testing（新增）
+
+> 光有测试不够——还要证明**测试真的能抓住退化**。
+> `npm run test:mutation` 会在临时副本上注入 4 类退化，确认测试套件会失败。
+
+| 变异 | 注入内容 | 结果 |
+|------|---------|------|
+| M1 | 把 `checkTrigger` 里的 `callMCP` 换成假返回（激活只剩日志） | **CAUGHT** — `17b/17c` 失败 |
+| M2 | 移除 `flow_claim` 的 `activation_pending` 闸门 | **CAUGHT** — `15c/17c` 失败 |
+| M3 | 移除 `flow_verdict` 的 `activation_pending` 闸门（假闭环） | **CAUGHT** — `15e/15f` 失败 |
+| M4 | 去掉 `sanitizeSessionId` 的哈希后缀（会话撞名） | **CAUGHT** — 会话隔离用例失败 |
+
+> 两仓库（cindy / opencode）各跑一遍，**4/4 全部被抓住**。报告由 `npm run test:mutation` 自动生成。
+
+### 🧪 测试增强 | Test Hardening
+
+- `test/e2e-carlos.mjs` 新增第 17 组：**通过真实客户端进程**验证激活路径，
+  断言的是**服务端状态真的变了**（`has_card` / `activation_pending`），
+  而不是 stderr 里那句「已执行激活步骤」——只要把 `callMCP` 换成空实现，用例立即失败
+- `test/e2e-carlos.mjs` 新增 `15e/15f`：防假闭环（占位卡不许记 PASS）
+- `test/trigger-e2e.mjs` 新增：清洗后同形的 sessionId 不共用状态文件
+- 新增 `scripts/mutation-check.mjs` 与 `npm run test:mutation`
 
 ### 🔒 安全 | Security
 
@@ -104,9 +129,10 @@
 | 套件 | 结果 |
 |------|------|
 | `npm test`（smoke） | SMOKE_OK |
-| `npm run test:e2e`（e2e-carlos） | **23/23 通过**（新增 7 项激活闸门用例） |
+| `npm run test:e2e`（e2e-carlos） | **28/28 通过**（激活闸门 + 客户端真实激活路径 + 防假闭环） |
 | `npm run test:p0`（p0-gates） | **10/10 通过** |
-| `npm run test:trigger`（trigger-e2e） | **19/19 通过**（新增 4 项激活用例 + 1 项会话隔离回归） |
+| `npm run test:trigger`（trigger-e2e） | **20/20 通过**（激活计划 + 会话隔离 + 撞名回归） |
+| `npm run test:mutation`（变异测试） | **4/4 变异全部被抓住** |
 
 ---
 

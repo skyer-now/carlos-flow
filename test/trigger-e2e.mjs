@@ -4,7 +4,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -346,14 +346,40 @@ const testCases = [
       engineA.shouldTrigger('run dispatch workflow', { sessionId: a }, a);
       const engineB = TriggerEngine.create(b);
       const resultB = engineB.shouldTrigger('run dispatch workflow', { sessionId: b }, b);
-      const stateAFile = join(
+      // 两个会话应各自产生独立的状态文件（文件名带 session 哈希后缀）
+      const dir = join(
         process.env.CARLOS_FLOW_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.carlos-flow'),
-        'trigger-state', a + '.json'
+        'trigger-state'
       );
-      const exists = existsSync(stateAFile);
-      console.log(`  [DEBUG] B decision=${resultB.decision}, A独立文件=${exists}`);
-      // 会话 B 不应被会话 A 的限流影响
-      return resultB.decision === 'trigger' && exists === true;
+      const files = existsSync(dir) ? readdirSync(dir) : [];
+      const aFiles = files.filter((f) => f.startsWith('iso-A-'));
+      const bFiles = files.filter((f) => f.startsWith('iso-B-'));
+      console.log(`  [DEBUG] B decision=${resultB.decision}, A文件=${aFiles.length}, B文件=${bFiles.length}`);
+      // 会话 B 不应被会话 A 的限流影响，且两者状态文件不同
+      return resultB.decision === 'trigger' && aFiles.length >= 1 && bFiles.length >= 1 &&
+        aFiles[0] !== bFiles[0];
+    }
+  },
+  {
+    name: '回归: 清洗后同形的 sessionId 不共用状态文件',
+    test: () => {
+      // "col/a" 与 "col_a" 清洗后都变成 "col_a"——若不加哈希后缀会撞名
+      const p = 'col/' + Date.now();
+      const q = 'col_' + Date.now();
+      const engineP = TriggerEngine.create(p);
+      engineP.shouldTrigger('run dispatch workflow', { sessionId: p }, p);
+      const engineQ = TriggerEngine.create(q);
+      const resultQ = engineQ.shouldTrigger('run dispatch workflow', { sessionId: q }, q);
+      const dir = join(
+        process.env.CARLOS_FLOW_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.carlos-flow'),
+        'trigger-state'
+      );
+      const files = existsSync(dir) ? readdirSync(dir) : [];
+      const pFiles = files.filter((f) => f.startsWith('col_'));
+      const distinct = new Set(pFiles).size >= 2;
+      console.log(`  [DEBUG] Q decision=${resultQ.decision}, col_前缀文件数=${pFiles.length}`);
+      // 两个同形 id 必须落在不同文件上，且互不干扰
+      return distinct && resultQ.decision === 'trigger';
     }
   },
 ];

@@ -352,6 +352,18 @@ const TOOLS = [
 
         if (!state.card) return fail("没有留痕，无法记录裁定。");
 
+        // 激活占位卡尚未补齐时不允许裁定：
+        // 否则会出现「未派发、未验证、却直接 PASS」的假闭环。
+        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
+          audit("decision", sessionId, {
+            kind: "verdict_denied",
+            reason: "激活占位卡未补齐",
+            pending: state.activation_pending,
+          });
+          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "），不能记录裁定。请先补齐后重新调用 flow_submit_requirement。");
+        }
+
         const verdict = a.verdict;
         const findings = [];
         if (state.verdict && state.verdict !== verdict) {

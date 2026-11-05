@@ -35,7 +35,7 @@ The earlier implementation only printed a log line when it hit — it never actu
 | **Translation** | `buildActivationPlan()` | Turns the verdict into an **executable MCP action sequence** (each step tagged `auto`) |
 | **Activation ①** | `flow_add_user_msg` | The user's own words are recorded and become the anchor source for the card's `quote` |
 | **Activation ②** | `flow_submit_requirement` (`activation: true`) | Submits a `read_only` placeholder card — the session **enters the gated state** |
-| **Gate** | `activation_pending` | Until `scope` / `acceptance` / `verify.cmd` are filled in, `flow_claim` and `flow_dispatch` **refuse to dispatch** |
+| **Gate** | `activation_pending` | Until `scope` / `acceptance` / `verify.cmd` are filled in, `flow_claim`, `flow_dispatch` and `flow_verdict` all **refuse** (no "PASS without ever running it") |
 | **Release** | Resubmit the complete card | `activation_pending` clears → normal dispatch proceeds |
 
 > Safety constraint: when the session **already has a card**, auto-activation skips card creation (it never overwrites an existing task). Auto-activation only handles "record + enter the gate" — it **never decides which files may change** on the agent's behalf.
@@ -146,7 +146,7 @@ flowchart LR
 | **Translation** | `buildActivationPlan()` | Turns the verdict into an **executable MCP action sequence** |
 | **Activation ①** | `flow_add_user_msg` | The user's own words become the anchor source for the card's `quote` |
 | **Activation ②** | `flow_submit_requirement` (`activation: true`) | Submits a `read_only` placeholder card — the session **enters the gated state** |
-| **Gate** | `activation_pending` | Until `scope` / `acceptance` / `verify.cmd` are filled in, `flow_claim` and `flow_dispatch` **refuse to dispatch** |
+| **Gate** | `activation_pending` | Until `scope` / `acceptance` / `verify.cmd` are filled in, `flow_claim`, `flow_dispatch` and `flow_verdict` all **refuse** (no "PASS without ever running it") |
 | **Release** | Resubmit the complete card | `activation_pending` clears → normal dispatch proceeds |
 
 > Safety constraint: when the session **already has a card**, auto-activation skips card creation (it never overwrites an existing task). Auto-activation only handles "record + enter the gate" — it **never decides which files may change** on the agent's behalf.

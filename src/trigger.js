@@ -18,8 +18,19 @@ const DEFAULT_STATE_PATH = join(TRIGGER_HOME, 'trigger-state.json');
 // sessionId 会被清洗成安全的文件名，避免路径穿越。
 function sanitizeSessionId(sessionId) {
   const raw = String(sessionId || 'default');
-  const safe = raw.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80);
-  return safe || 'default';
+  // 1) 清洗路径分隔符与非法字符（斜杠、背杠、冒号等）
+  let safe = raw.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 48);
+  // 2) 不允许以点开头（避免 "." / ".." 语义）
+  safe = safe.replace(/^\.+/, '_');
+  if (!safe) safe = 'default';
+  // 3) 追加原始 id 的短哈希：清洗后可能撞名（"a/b" 与 "a_b" 都会变成 "a_b"），
+  //    用哈希保证不同 session 不会共用同一份状态文件
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) {
+    h = (h * 31 + raw.charCodeAt(i)) >>> 0;
+  }
+  const suffix = h.toString(16).padStart(8, '0').slice(0, 8);
+  return safe + '-' + suffix;
 }
 
 function statePathFor(sessionId) {

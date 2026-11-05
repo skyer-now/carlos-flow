@@ -262,7 +262,13 @@ result.activationPlan = {
 
 3. **闸门生效** — `activation_pending`
    状态里记下待补齐字段 `scope` / `acceptance` / `verify.cmd`。
-   在补齐之前，`flow_claim` 与 `flow_dispatch` **一律拒绝派发**：
+   在补齐之前，以下三个工具 **一律拒绝**：
+
+   | 工具 | 拒绝原因 |
+   |------|---------|
+   | `flow_claim` | 不能拿一张没补齐的卡去领派发名额 |
+   | `flow_dispatch` | 不能拿一张没补齐的卡去派发执行 |
+   | `flow_verdict` | **防假闭环**——未经派发与验证，不能直接记 PASS |
 
    ```
    ERROR: 激活占位卡尚未补齐（待补：scope、acceptance、verify.cmd）。
@@ -278,6 +284,7 @@ result.activationPlan = {
 | 约束 | 行为 |
 |------|------|
 | 会话**已有任务卡** | 跳过自动开卡，**不覆盖用户已有任务** |
+| 占位卡**不许记 PASS** | `flow_verdict` 在字段未补齐时拒绝，堵住「未执行、未验证、却直接完成」的假闭环 |
 | 自动激活**不决定改哪些文件** | 只负责“留痕 + 进入门禁”，`scope` 必须由 Agent 确认 |
 | 目标描述是**推断值** | `goal` 由关键词推导，**标记为占位**，需与用户确认后改写 |
 | `manual` 档 | 只输出建议与补全指引，**不执行任何 MCP 动作** |
@@ -476,7 +483,8 @@ node client/carlos.js flow_status '{"sessionId":"my-task"}'
 
 ## 📚 相关资源
 
-- [测试脚本](test/trigger-e2e.mjs) - E2E 测试套件（15 项，含 4 项回归用例）
+- [测试脚本](test/trigger-e2e.mjs) - E2E 测试套件（20 项，含 6 项回归用例）
+- [变异测试](scripts/mutation-check.mjs) - 注入退化验证测试套件真的能抓住（4 类变异）
 - [核心代码](src/trigger.js) - 触发引擎实现
 - [集成示例](client/carlos.js) - 客户端集成代码
 - [E2E 测试报告](../../trigger-e2e-test-report.md) - 详细测试报告

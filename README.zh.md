@@ -35,7 +35,7 @@
 | **翻译** | `buildActivationPlan()` | 判定转成**可执行的 MCP 动作序列**（带 `auto` 标记） |
 | **激活 ①** | `flow_add_user_msg` | 用户原话入库，成为任务卡 `quote` 的锚点数据源 |
 | **激活 ②** | `flow_submit_requirement`（`activation: true`） | 提交 `read_only` 占位卡，**会话进入已留痕门禁态** |
-| **闸门** | `activation_pending` | 字段补齐前，`flow_claim` / `flow_dispatch` **一律拒绝派发** |
+| **闸门** | `activation_pending` | 字段补齐前，`flow_claim` / `flow_dispatch` / `flow_verdict` **一律拒绝**（防未执行就记 PASS 的假闭环） |
 | **放行** | 重新提交完整卡 | 补齐后 `activation_pending` 清空 → 正常派发 |
 
 > 安全约束：会话**已有任务卡**时自动激活会跳过开卡（不覆盖用户已有任务）；

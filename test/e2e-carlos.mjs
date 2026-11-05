@@ -53,6 +53,32 @@ function check(name, cond, detail = "") {
   else { fail++; results.push(`  ✗ ${name}${detail ? "  " + detail : ""}`); }
 }
 
+/**
+ * 直接跑客户端进程并捕获 stderr（不走 MCP 直调）。
+ *
+ * 用途：验证**客户端激活路径**真的执行了动作，而不只是打印日志。
+ * 如果 checkTrigger 里的 callMCP 被改成空实现，本函数返回的 stderr
+ * 依然会说「已执行激活步骤」，但随后的 flow_status 查不到 has_card=true，
+ * 因此第 17 组用例会失败——这正是用来卡住「只打印日志」退化的断言。
+ */
+function runClient(tool, argsObj) {
+  return new Promise((resolve) => {
+    const p = spawn("node", [CLIENT, tool, JSON.stringify(argsObj)], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, CARLOS_FLOW_HOME: FLOW_HOME, BRIDGE_PORT },
+    });
+    let out = "", err = "";
+    p.stdout.on("data", (d) => (out += d.toString()));
+    p.stderr.on("data", (d) => (err += d.toString()));
+    const timer = setTimeout(() => { p.kill(); resolve({ ok: false, error: "timeout", stderr: err, stdout: out }); }, 60000);
+    p.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, error: "spawn: " + e.message, stderr: err, stdout: out }); });
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ ok: code === 0, code, error: code !== 0 ? (err || out).trim().slice(0, 300) : "", stderr: err, stdout: out });
+    });
+  });
+}
+
 const QUOTE = "帮我把 carlos-flow 的端到端测试跑通，确认 12 个工具都能正常工作";
 
 async function main() {
@@ -172,6 +198,15 @@ async function main() {
   const dispatchBlocked = r.ok === false && /占位卡/.test(r.error || "");
   check("15d. 占位卡未补齐时 dispatch 被拒", dispatchBlocked, r.ok ? "未被拒绝（异常）" : "已拒绝");
 
+  // 15e. 防假闭环：占位卡未补齐时不能记 PASS 裁定
+  r = await call("flow_verdict", { sessionId: ACT_SID, verdict: "PASS", notes: "占位卡直接通过" });
+  const verdictBlocked = r.ok === false && /占位卡/.test(r.error || "");
+  check("15e. 占位卡未补齐时 verdict 被拒（防假闭环）", verdictBlocked, r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  r = await call("flow_status", { sessionId: ACT_SID });
+  const notClosed = r.ok && r.data?.completed_ok !== true;
+  check("15f. 占位卡状态未标记为完成", notClosed, r.ok ? `completed_ok=${r.data?.completed_ok}` : r.error);
+
   // 16. 补齐后重新提交完整卡 → 闸门解除
   r = await call("flow_submit_requirement", {
     sessionId: ACT_SID,
@@ -191,6 +226,32 @@ async function main() {
 
   r = await call("flow_claim", { sessionId: ACT_SID, role: "executor" });
   check("16c. 补齐后 claim 放行", r.ok && r.data?.ok === true, r.ok ? "" : r.error);
+
+  // 17. 客户端激活路径（防退化）：必须真的执行了动作，而不只是打印日志
+  // 这一组跑的是真实客户端进程，断言的是**服务端状态真的变了**，
+  // 而不是 stderr 里那句「已执行激活步骤」——只要把 checkTrigger 里的
+  // callMCP 换成空实现，这里就会失败。
+  const CLI_SID = SID + "-cli";
+  const cli = await runClient("flow_status", {
+    sessionId: CLI_SID,
+    triggerMessage: "run dispatch workflow",
+  });
+  const loggedAdd = /已执行激活步骤：flow_add_user_msg/.test(cli.stderr || "");
+  const loggedCard = /已执行激活步骤：flow_submit_requirement/.test(cli.stderr || "");
+  check("17a. 客户端输出激活日志", loggedAdd && loggedCard,
+    `add=${loggedAdd} card=${loggedCard}${cli.ok ? "" : " | " + cli.error}`);
+
+  // 关键断言：服务端状态必须真的改变（has_card + activation_pending）
+  r = await call("flow_status", { sessionId: CLI_SID });
+  const reallyActivated = r.ok && r.data?.has_card === true &&
+    Array.isArray(r.data?.activation_pending) && r.data.activation_pending.length === 3;
+  check("17b. 激活真实改变了服务端状态（非仅打印日志）", reallyActivated,
+    r.ok ? `has_card=${r.data?.has_card} pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
+
+  // 17c. 客户端激活后，闸门对该会话同样生效
+  r = await call("flow_claim", { sessionId: CLI_SID, role: "executor" });
+  const cliGate = r.ok === false && /占位卡/.test(r.error || "");
+  check("17c. 客户端激活后闸门生效", cliGate, r.ok ? "未被拒绝（异常）" : "已拒绝");
 
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
