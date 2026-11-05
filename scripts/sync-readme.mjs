@@ -86,8 +86,9 @@ if (!existsSync(TRIGGER_GUIDE)) {
       return null;
     }
   })();
-  const versionMatch = guide.match(/^##\s*\[(\d+\.\d+\.\d+)\]/m);
-  const versionInGuide = versionMatch ? versionMatch[1] : null;
+  // 尝试从末尾的 '**版本**:' 字段提取版本号，去掉可能的 'v' 前缀
+  const versionMatch = guide.match(/\*\*版本\*\*\s*:\s *(v?\d+\.\d+\.\d+)/);
+  const versionInGuide = versionMatch ? versionMatch[1].replace(/^v/, '') : null;
   if (pkgVersion && versionInGuide) {
     log(versionInGuide === pkgVersion, `TRIGGER_GUIDE.md version is ${versionInGuide} vs package.json ${pkgVersion}`);
   } else if (!pkgVersion || !versionInGuide) {

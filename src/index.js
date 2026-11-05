@@ -139,42 +139,33 @@ const TOOLS = [
 
         const prev = loadState(sessionId);
         // 激活占位卡：记录待补齐字段，闸门未解除前不允许派发。
-        // 重新提交完整卡（不带 activation）即视为补齐，清空待办。
+        // 闸门待补字段由**服务端从当前卡片内容派生**（不再由调用方自报 activation 硬编码三项）。
         const prevPending = Array.isArray(prev.activation_pending) ? prev.activation_pending : [];
         const newScope = Array.isArray(card.scope) ? card.scope : [];
         const newAcceptance = Array.isArray(card.acceptance) ? card.acceptance : [];
         const newVerifyCmd = card.verify && typeof card.verify.cmd === "string" ? card.verify.cmd.trim() : "";
-        // 字段是否真的被补齐（逐项判定，而不是「只要有一项非空就放行」）
-        const filled = {
-          "scope": newScope.length > 0,
-          "acceptance": newAcceptance.length > 0,
-          "verify.cmd": newVerifyCmd !== "",
-        };
-        const stillMissing = prevPending.filter((f) => !filled[f]);
-
-        let activationPending;
-
-        // 计算当前卡片在提交时的缺失字段（服务端派生）
+        // 当前卡片实际缺失的三项（服务端视角，逐项判定）
         const currentMissing = [
-          ...(!card.scope || card.scope.length === 0 ? ["scope"] : []),
-          ...(!card.acceptance || card.acceptance.length === 0 ? ["acceptance"] : []),
-          ...(!card.verify || typeof card.verify.cmd !== "string" || card.verify.cmd.trim() === "" ? ["verify.cmd"] : []),
+          ...(newScope.length === 0 ? ["scope"] : []),
+          ...(newAcceptance.length === 0 ? ["acceptance"] : []),
+          ...(newVerifyCmd === "" ? ["verify.cmd"] : []),
         ];
 
+        let activationPending;
         if (a.activation === true) {
-          // 显式占位卡激活，使用当前缺失字段
+          // 显式占位卡：待补项 = 服务端从这张卡实际缺什么推导出来的。
+          // 若这张占位卡其实已把三项都写全（调用方误标），则不设闸门。
           activationPending = currentMissing;
           audit("decision", sessionId, {
             kind: "activation_gate_activated",
-            reason: "智能触发占位卡激活",
+            reason: "智能触发占位卡激活（服务端从卡片内容派生待补字段）",
             pending: activationPending,
           });
         } else if (prevPending.length > 0) {
-          // 检查补齐状态
-          const stillMissing = prevPending.filter((f) => !currentMissing.includes(f));
+          // 闸门已存在：只有 prevPending 里**当前仍然缺失**的字段才算待补。
+          // 半补齐（只补了 scope）不解闸 —— 交集语义。
+          const stillMissing = prevPending.filter((f) => currentMissing.includes(f));
           if (stillMissing.length > 0) {
-            // 半补齐不算补齐：例如只补了 scope、acceptance 仍空、verify.cmd 仍缺，
-            // 此时必须继续拦住派发与裁定，否则会出现「未写验收标准、未跑验证命令就完成」。
             activationPending = stillMissing;
             audit("decision", sessionId, {
               kind: "activation_gate_held",
@@ -186,17 +177,13 @@ const TOOLS = [
             audit("decision", sessionId, {
               kind: "activation_gate_unlocked",
               reason: "字段已补齐，激活闸门解除",
+              released: prevPending,
             });
           }
-        } else if (currentMissing.length > 0) {
-          // 服务端派生审批 pending：如果没有 prior 状态但当前卡片不完整，则激活门
-          activationPending = currentMissing;
-          audit("decision", sessionId, {
-            kind: "activation_gate_activated",
-            reason: "服务端从卡片内容派生激活",
-            pending: currentMissing,
-          });
         } else {
+          // 普通卡（未标 activation，且此前未被闸门锁住）：不上闸门。
+          // 档位必填项已由 validateCard 按 tier 强制（read_only 只要 goal+quote），
+          // 此处再加闸门会误伤 T1 只读调研。
           activationPending = [];
         }
         const state = {
