@@ -5,8 +5,12 @@
 import { createConnection, createServer } from "node:net";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import os from "node:os";
+
+// 状态/审计根目录默认值：与 src/state.js 的 FLOW_HOME 保持一致（跨平台）
+const DEFAULT_FLOW_HOME = join(os.homedir(), ".carlos-flow");
 
 const BRIDGE_PORT = parseInt(process.env.BRIDGE_PORT || "19099", 10);
 const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || ".";
@@ -17,8 +21,19 @@ const BRIDGE_SCRIPT = [
   ROOT_ABS + "/mcp-bridge.js",
 ].find((p) => existsSync(p)) || ROOT_ABS + "/bridge/mcp-bridge.js";
 const MCP_SERVER = ROOT_ABS + "/src/index.js";
-const PID_FILE = ROOT_ABS + "/bridge.pid";
+// PID 文件按端口区分：多 Bridge 并存（测试用独立端口）时不会互相覆盖
+const PID_FILE = ROOT_ABS + "/bridge-" + BRIDGE_PORT + ".pid";
 const BRIDGE_TOKEN = process.env.CARLOS_BRIDGE_TOKEN || "carlos-local-token-2026";
+
+// 智能触发引擎（本文件是 ESM，必须用动态 import；require 在 ESM 中不存在）
+// 加载失败时降级为「不触发」，不影响主流程
+let TriggerEngine = null;
+try {
+  const triggerMod = await import(pathToFileURL(join(ROOT_ABS, "src", "trigger.js")).href);
+  TriggerEngine = triggerMod.TriggerEngine || null;
+} catch (e) {
+  TriggerEngine = null;
+}
 
 const toolName = process.argv[2];
 const argsJson = process.argv[3] || "{}";
@@ -31,6 +46,93 @@ if (!toolName) {
 
 let args;
 try { args = JSON.parse(argsJson); } catch (e) { console.error("JSON 解析失败:", e.message); process.exit(1); }
+
+/**
+ * 智能触发检查
+ * 在调用 MCP 之前，检查是否应该触发工作流
+ */
+async function checkTrigger(message = '') {
+  if (!TriggerEngine) {
+    return { triggered: false, reason: '触发引擎未加载' };
+  }
+
+  // 没有显式传入用户原话 → 不启用触发（不评分、不动作）
+  if (!message || String(message).trim() === '') {
+    return { triggered: false, reason: '未提供 triggerMessage，不启用自动触发' };
+  }
+
+  const sessionId = args.sessionId || 'default';
+
+  try {
+    const result = TriggerEngine.processUserMessage(message, {
+      sessionId,
+      complexity: args.complexity || 1.0
+    });
+
+    if (!result.shouldTrigger) {
+      // 未达触发阈值：只如实报告评分，不做任何动作
+      if (result.decision === 'review' || result.decision === 'throttled') {
+        console.error(`[Carlos Trigger] 未激活（${result.decision}）：评分 ${result.score} · 置信度 ${result.confidence} · ${result.reason}`);
+      }
+      return { triggered: false, result };
+    }
+
+    console.error(`[Carlos Trigger] 判定触发：评分 ${result.score} · 置信度 ${result.confidence}`);
+
+    const plan = result.activationPlan;
+    if (!plan || !plan.activated) {
+      return { triggered: true, result };
+    }
+
+    if (result.action && result.action.recommendedAction !== 'auto') {
+      // manual 档：只给出建议，不自动执行
+      console.error('[Carlos Trigger] 建议手动启动门禁（未达自动激活阈值）');
+      console.error(plan.prompt);
+      return { triggered: true, result, plan, autoTrigger: false };
+    }
+
+    // ---- 自动激活：执行激活计划中参数完整的步骤 ----
+    const executed = [];
+    for (const step of plan.steps) {
+      if (!step.auto) continue;
+
+      // 安全约束：会话已有卡片时，不自动开卡（避免覆盖用户已有任务）
+      if (step.tool === 'flow_submit_requirement') {
+        const st = await callMCP('tools/call', { name: 'flow_status', arguments: { sessionId } });
+        const statusText = st.result?.content?.[0]?.text || '';
+        let hasCard = false;
+        try { hasCard = JSON.parse(statusText).has_card === true; } catch {}
+        if (hasCard) {
+          console.error('[Carlos Trigger] 会话已有任务卡，跳过自动开卡（不覆盖已有任务）');
+          break;
+        }
+      }
+
+      try {
+        const r = await callMCP('tools/call', { name: step.tool, arguments: step.args });
+        const isErr = r.result?.isError === true;
+        const txt = r.result?.content?.[0]?.text || '';
+        if (isErr) {
+          console.error(`[Carlos Trigger] 激活步骤 ${step.tool} 失败：${txt.split('\n')[0]}`);
+        } else {
+          executed.push(step.tool);
+          console.error(`[Carlos Trigger] 已执行激活步骤：${step.tool}（${step.reason}）`);
+        }
+      } catch (e) {
+        console.error(`[Carlos Trigger] 激活步骤 ${step.tool} 异常：${e.message}`);
+      }
+    }
+
+    console.error('');
+    console.error(plan.prompt);
+    console.error('');
+
+    return { triggered: true, result, plan, autoTrigger: true, executed };
+  } catch (e) {
+    console.error('[Carlos Trigger] 触发检查失败:', e.message);
+    return { triggered: false, error: e.message };
+  }
+}
 
 // 检查 bridge 是否已在运行（先读 PID，再 TCP 探测）
 function isBridgeRunning() {
@@ -83,7 +185,7 @@ function startBridge() {
         // Bridge 需要用它定位 MCP server 与 pid 文件；未设置时 bridge 会拼出 undefined/src/index.js
         CARLOS_FLOW_MCP_ROOT: ROOT_ABS,
         // 状态/审计根目录：注入后由 bridge → MCP server 逐级继承
-        CARLOS_FLOW_HOME: process.env.CARLOS_FLOW_HOME || "D:\\opencode-backups",
+        CARLOS_FLOW_HOME: process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME,
       },
     });
     child.unref();
@@ -204,10 +306,30 @@ async function main() {
     }
   }
 
+  // 智能触发检查：真实输入必须显式传入
+  //   node carlos.js flow_status '{"sessionId":"x","triggerMessage":"run dispatch workflow"}'
+  //   或环境变量 CARLOS_TRIGGER_MESSAGE
+  //
+  // 不传时**不启用自动触发**（空串 = 不触发）。
+  // 早先的兜底项（工具名 + 参数 JSON）会造成两个真实故障：
+  //   ① 自伤：参数里含触发词 → 自己给自己开占位卡 → 同一次调用的
+  //      flow_dispatch 反被 activation_pending 闸门拒绝；
+  //   ② 锚点污染：写入的“用户原话”是命令行文本 → Agent 用真实原话重提卡时
+  //      quote 锚点校验失败 → 补齐流程被自己的兜底串卡死。
+  const triggerMessage = args.triggerMessage || process.env.CARLOS_TRIGGER_MESSAGE || "";
+  // 客户端专用字段不透传给 MCP 工具（用副本，避免改到调用方对象）
+  const toolArgs = { ...args };
+  delete toolArgs.triggerMessage;
+  delete toolArgs.complexity;
+  const triggerResult = await checkTrigger(triggerMessage);
+  if (triggerResult.autoTrigger) {
+    console.error('[Carlos Trigger] 工作流已激活（会话进入已留痕状态），继续执行本次工具调用...');
+  }
+
   // Call tool
   let resp;
   try {
-    resp = await callMCP("tools/call", { name: toolName, arguments: args });
+    resp = await callMCP("tools/call", { name: toolName, arguments: toolArgs });
   } catch (e) {
     console.error("❌ 工具调用失败:", e.message);
     process.exit(1);

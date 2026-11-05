@@ -78,6 +78,7 @@ const TOOLS = [
         cwd: { type: "string", description: "工作目录，默认 process.cwd()" },
         userMessages: { type: "array", items: { type: "string" }, description: "用户原话列表（可选，会与自动读取的结果合并）" },
         cardText: { type: "string", description: "完整任务卡文本，含 FLOW_CARD: 前缀；提供时优先于结构化参数" },
+        activation: { type: "boolean", description: "true = 这是智能触发引擎自动开的占位卡；在 scope/acceptance/verify.cmd 补齐前会阻止派发" },
       },
     },
     handler: async (args) => {
@@ -137,6 +138,67 @@ const TOOLS = [
         card.env = { git_head: gitHead(cwd), project: cwd };
 
         const prev = loadState(sessionId);
+        // 激活占位卡：记录待补齐字段，闸门未解除前不允许派发。
+        // 重新提交完整卡（不带 activation）即视为补齐，清空待办。
+        const prevPending = Array.isArray(prev.activation_pending) ? prev.activation_pending : [];
+        const newScope = Array.isArray(card.scope) ? card.scope : [];
+        const newAcceptance = Array.isArray(card.acceptance) ? card.acceptance : [];
+        const newVerifyCmd = card.verify && typeof card.verify.cmd === "string" ? card.verify.cmd.trim() : "";
+        // 字段是否真的被补齐（逐项判定，而不是「只要有一项非空就放行」）
+        const filled = {
+          "scope": newScope.length > 0,
+          "acceptance": newAcceptance.length > 0,
+          "verify.cmd": newVerifyCmd !== "",
+        };
+        const stillMissing = prevPending.filter((f) => !filled[f]);
+
+        let activationPending;
+
+        // 计算当前卡片在提交时的缺失字段（服务端派生）
+        const currentMissing = [
+          ...(!card.scope || card.scope.length === 0 ? ["scope"] : []),
+          ...(!card.acceptance || card.acceptance.length === 0 ? ["acceptance"] : []),
+          ...(!card.verify || typeof card.verify.cmd !== "string" || card.verify.cmd.trim() === "" ? ["verify.cmd"] : []),
+        ];
+
+        if (a.activation === true) {
+          // 显式占位卡激活，使用当前缺失字段
+          activationPending = currentMissing;
+          audit("decision", sessionId, {
+            kind: "activation_gate_activated",
+            reason: "智能触发占位卡激活",
+            pending: activationPending,
+          });
+        } else if (prevPending.length > 0) {
+          // 检查补齐状态
+          const stillMissing = prevPending.filter((f) => !currentMissing.includes(f));
+          if (stillMissing.length > 0) {
+            // 半补齐不算补齐：例如只补了 scope、acceptance 仍空、verify.cmd 仍缺，
+            // 此时必须继续拦住派发与裁定，否则会出现「未写验收标准、未跑验证命令就完成」。
+            activationPending = stillMissing;
+            audit("decision", sessionId, {
+              kind: "activation_gate_held",
+              reason: "字段尚未补齐，激活闸门继续保持",
+              pending: stillMissing,
+            });
+          } else {
+            activationPending = [];
+            audit("decision", sessionId, {
+              kind: "activation_gate_unlocked",
+              reason: "字段已补齐，激活闸门解除",
+            });
+          }
+        } else if (currentMissing.length > 0) {
+          // 服务端派生审批 pending：如果没有 prior 状态但当前卡片不完整，则激活门
+          activationPending = currentMissing;
+          audit("decision", sessionId, {
+            kind: "activation_gate_activated",
+            reason: "服务端从卡片内容派生激活",
+            pending: currentMissing,
+          });
+        } else {
+          activationPending = [];
+        }
         const state = {
           ...defaultState(),
           ...prev,
@@ -152,12 +214,31 @@ const TOOLS = [
           verdict: null,
           completed_ok: false,
           stale: false,
+          activation_pending: activationPending,
         };
         saveState(sessionId, state);
 
         audit("run", sessionId, { kind: "record", tier, goal: card.goal });
         audit("decision", sessionId, { kind: "accepted", tier, goal: card.goal });
         for (const f of findings) audit("finding", sessionId, { kind: "card_finding", detail: f, tier });
+
+        // 激活占位卡建立 / 闸门解除都要在审计链里留专属事件，
+        // 否则事后无法从 gate-audit 流水回答「这是不是占位卡、有没有解闸过」。
+        if (a.activation === true) {
+          audit("run", sessionId, {
+            kind: "activation",
+            tier,
+            goal: card.goal,
+            pending: activationPending,
+          });
+        } else if (prevPending.length > 0 && activationPending.length === 0) {
+          audit("decision", sessionId, {
+            kind: "activation_released",
+            tier,
+            goal: card.goal,
+            released: prevPending,
+          });
+        }
 
         const sensitivePaths = (Array.isArray(card.scope) ? card.scope : []).filter((p) => isSensitive(p));
 
@@ -203,6 +284,11 @@ const TOOLS = [
         }
         if (state.dispatch_count >= MAX_DISPATCH) {
           return fail("派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。");
+        }
+        // 激活占位卡闸门：占位卡未补齐字段时不允许领取派发名额
+        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
+          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "）。请先补齐后重新调用 flow_submit_requirement，再来领取派发名额。");
         }
 
         // Phase 1-1: 不在 claim 时增加 dispatch_count，改在 dispatch 时增加
@@ -264,6 +350,11 @@ const TOOLS = [
         if (!state.card) return fail("没有留痕，不允许派发。");
         if (isStale(state)) return fail("留痕已过期（stale），请重新提交任务卡。");
         if (state.dispatch_count >= MAX_DISPATCH) return fail("派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。");
+        // 激活占位卡闸门：占位卡未补齐字段时不允许派发
+        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
+          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "）。请先补齐后重新调用 flow_submit_requirement，再来派发。");
+        }
         // 必须先 flow_claim 领取派发名额（claimed 标记由 claim 设置）
         if (state.claimed !== true) return fail("未 claim，请先 flow_claim 领取派发名额。");
 
@@ -336,6 +427,34 @@ const TOOLS = [
         if (!state.card) return fail("没有留痕，无法记录裁定。");
 
         const verdict = a.verdict;
+
+        // 激活占位卡尚未补齐时不允许裁定：
+        // 否则会出现「未派发、未验证、却直接 PASS」的假闭环。
+        // （先于 dispatch_count 检查：占位卡的错误信息更具体，也更可操作）
+        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
+          audit("decision", sessionId, {
+            kind: "verdict_denied",
+            reason: "激活占位卡未补齐",
+            pending: state.activation_pending,
+          });
+          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "），不能记录裁定。请先补齐后重新调用 flow_submit_requirement。");
+        }
+
+        // 防假闭环之二：从未派发过任何执行，就不允许落 PASS 裁定。
+        // 否则一张刚提交、什么都没跑的卡也能直接标 completed_ok=true。
+        // 只施加于 PASS：DIRECTION / LOCAL 是「有问题」的裁定，不构成「完成」，
+        // 允许在未派发时先记录返工意见。
+        if (verdict === "PASS" && !(Number(state.dispatch_count) > 0)) {
+          audit("decision", sessionId, {
+            kind: "verdict_denied",
+            reason: "尚未派发任何执行",
+            dispatch_count: state.dispatch_count,
+          });
+          return fail("尚未派发任何执行（dispatch_count=0），不能记录 PASS 裁定。" +
+            "请先 flow_claim / flow_dispatch 派发并完成验证后再落 PASS。");
+        }
+
         const findings = [];
         if (state.verdict && state.verdict !== verdict) {
           findings.push(`裁定被覆盖：${state.verdict} → ${verdict}`);
@@ -389,6 +508,7 @@ const TOOLS = [
           bypass: !!state.bypass,
           card: state.card,
           card_ts: state.card_ts,
+          activation_pending: Array.isArray(state.activation_pending) ? state.activation_pending : [],
         };
         if (state.card && !state.verdict) result.unreviewed = true;
         return ok(result);

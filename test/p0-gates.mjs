@@ -2,9 +2,21 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
-const ROOT = process.env.CARLOS_FLOW_MCP_ROOT;
+import os from 'node:os';
+import { join, dirname } from 'node:path';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// 状态/审计根目录默认值：与 src/state.js 的 FLOW_HOME 保持一致（跨平台）
+const DEFAULT_FLOW_HOME = join(os.homedir(), '.carlos-flow');
+
+// 仓库根目录：优先环境变量，缺失时回退到本脚本所在目录的上一级（= 仓库根）
+const REPO_ROOT = dirname(fileURLToPath(import.meta.url)) + "/..";
+const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || REPO_ROOT;
 const CLIENT = [ROOT + "/client/carlos.js", ROOT + "/carlos.js"].find(p => fs.existsSync(p));
-const FLOW_HOME = process.env.CARLOS_FLOW_HOME || "D:/opencode-backups";
+const FLOW_HOME = process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME;
+// 独立 Bridge 端口：避免复用本机已有的 Bridge（它可能带旧的 FLOW_HOME）
+const BRIDGE_PORT = String(process.env.BRIDGE_PORT || (19500 + (process.pid % 400)));
 
 let pass = 0, fail = 0;
 const lines = [];
@@ -13,7 +25,7 @@ function call(tool, args) {
   return new Promise((resolve) => {
     const p = spawn("node", [CLIENT, tool, JSON.stringify(args)], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, CARLOS_FLOW_HOME: FLOW_HOME },
+      env: { ...process.env, CARLOS_FLOW_HOME: FLOW_HOME, BRIDGE_PORT },
     });
     let out = "", err = "";
     p.stdout.on("data", d => out += d.toString());
@@ -120,8 +132,70 @@ async function main() {
   const list = await call("flow_protocol", {});
   check("9. flow_protocol 可用", list.ok && !!list.data?.protocol);
 
+  // --- 11. 激活占位卡闸门（独立 QA 审计补齐） ---
+  const actSid = "p0-activation-" + Date.now();
+  await call("flow_add_user_msg", { sessionId: actSid, text: "run dispatch workflow" });
+  r = await call("flow_submit_requirement", {
+    sessionId: actSid, goal: "占位", quote: "run dispatch workflow",
+    scope: [], acceptance: [], confirmed: false, activation: true,
+  });
+  check("10. 激活占位卡提交成功",
+    r.ok && r.data?.ok === true && (r.data?.state?.activation_pending || []).length === 3,
+    r.ok ? `pending=${(r.data?.state?.activation_pending || []).join(",")}` : r.error);
+
+  r = await call("flow_claim", { sessionId: actSid, role: "executor" });
+  check("11. 占位卡未补齐时 claim 被拒",
+    r.ok === false && /占位卡/.test(r.error || ""),
+    (r.error||"").slice(0,70));
+
+  r = await call("flow_verdict", { sessionId: actSid, verdict: "PASS" });
+  check("12. 占位卡未补齐时 verdict 被拒（防假闭环）",
+    r.ok === false && /占位卡/.test(r.error || ""),
+    (r.error||"").slice(0,70));
+
+  // --- 12. 未派发直接 PASS 必须被拒 ---
+  const noDispSid = "p0-nodispatch-" + Date.now();
+  await call("flow_add_user_msg", { sessionId: noDispSid, text: "quote here" });
+  r = await call("flow_submit_requirement", {
+    sessionId: noDispSid, goal: "只提交不派发", quote: "quote here",
+    scope: [ROOT + "/README.md"], acceptance: ["x"],
+    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
+  });
+  r = await call("flow_verdict", { sessionId: noDispSid, verdict: "PASS" });
+  check("13. 未派发直接 PASS 被拒",
+    r.ok === false && /尚未派发/.test(r.error || ""),
+    (r.error||"").slice(0,70));
+
+  // --- 13. 空 scope 必须 fail-closed ---
+  const emptyScopeSid = "p0-emptyscope-" + Date.now();
+  await call("flow_add_user_msg", { sessionId: emptyScopeSid, text: "quote here" });
+  r = await call("flow_submit_requirement", {
+    sessionId: emptyScopeSid, goal: "空 scope", quote: "quote here",
+    scope: [], acceptance: ["x"], confirmed: true,
+  });
+  r = await call("flow_check_scope", { sessionId: emptyScopeSid, paths: [ROOT + "/README.md"] });
+  check("14. 空 scope 对任意改动都判越界",
+    r.ok && r.data?.ok === false && (r.data?.violations || []).length === 1,
+    r.ok ? `ok=${r.data?.ok} violations=${JSON.stringify(r.data?.violations)}` : r.error);
+
   console.log(lines.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
+  cleanupBridge();
   process.exit(fail ? 1 : 0);
 }
+
+// 清理本次测试拉起的 Bridge（端口隔离，不影响其他实例）
+function cleanupBridge() {
+  try {
+    const pidFile = path.join(ROOT, `bridge-${BRIDGE_PORT}.pid`);
+    if (fs.existsSync(pidFile)) {
+      const pid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+      if (pid && pid !== process.pid) {
+        try { process.kill(pid); } catch { /* 已退出 */ }
+      }
+      fs.unlinkSync(pidFile);
+    }
+  } catch { /* 清理失败不影响测试结果 */ }
+}
+
 main();

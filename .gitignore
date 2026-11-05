@@ -39,4 +39,32 @@ coverage/
 
 # 打包产物
 *.tgz
-*.tar.gz.npmrc.local
+*.tar.gz
+# npm 本地凭据（绝不入库）
+.npmrc.local
+.npmrc.*.local
+# .npmrc 本身是入库的模板文件（含注释），但真实凭据必须放在 .npmrc.local
+!.npmrc
+
+# 一次性调试/修复脚本与临时产物
+fix_*.mjs
+fix*.mjs
+debug_*.mjs
+do_patch.*
+patch_phase1.py
+apply_*.mjs
+add_tools*.mjs
+add_new_tools.mjs
+insert_dispatch.mjs
+update_index.mjs
+fix_final.mjs
+*.b64
+secret.json
+current.json
+job.json
+new_release.yml
+trigger-state.json
+test-results.json
+test/trigger-e2e-results.json
+src/*.bak
+src/*.patch

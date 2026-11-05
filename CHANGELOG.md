@@ -5,6 +5,201 @@
 
 ---
 
+## [2.5.5] - 2026-11-05 — 智能触发引擎正式发布 + 激活机制 + 9 项缺陷修复
+
+### 🔁 激活机制 | Activation（本次最关键的一环）
+
+> 之前的实现只会在命中时**打一行日志**，并没有真的启动工作流。
+> 现在「动态决策 → 判断 → 激活」形成闭环，判定会转成**真实执行**的门禁动作。
+
+| 阶段 | 动作 | 实际效果 |
+|------|------|---------|
+| **判断** | L1 上限 → L2 评分 → L3 四档决策 | 得到 `decision` + `score` + `confidence` + `breakdown` |
+| **翻译** | `buildActivationPlan()` | 判定转成**可执行的 MCP 动作序列**（每步带 `auto` 标记） |
+| **激活 ①** | `flow_add_user_msg` | 用户原话入库，成为任务卡 `quote` 的锚点数据源 |
+| **激活 ②** | `flow_submit_requirement`（`activation: true`） | 提交 `read_only` 占位卡，**会话进入已留痕门禁态** |
+| **闸门** | `activation_pending` | 字段补齐前，`flow_claim` / `flow_dispatch` **一律拒绝派发** |
+| **放行** | 重新提交完整卡（不带 `activation`） | `activation_pending` 清空 → 正常派发 |
+
+**安全约束**：会话已有任务卡时跳过自动开卡（不覆盖已有任务）；自动激活不决定改哪些文件；
+推断出的 `goal` 标记为占位需确认；`manual` 档只给建议不执行任何动作。
+
+### ✨ 新增 | Added
+
+**智能触发引擎**：三层智能触发系统（零外部依赖，纯 JavaScript）
+
+| 层级 | 组件 | 说明 |
+|------|------|------|
+| L1 | `DynamicTriggerManager` | 动态触发上限：会话时长、任务复杂度、近期触发频率（惩罚项） |
+| L2 | `TriggerScorer` | 触发评分：关键词 (0-50, 权重 0.5) + 上下文 (0-30, 权重 0.3) + 意图 (0-20, 权重 0.2) = 加权满分 **38** |
+| L3 | `TriggerDecisionEngine` | 决策引擎：`trigger` / `review` / `ignore` / `throttled` |
+
+- **激活计划**：`buildActivationPlan()` 把决策翻译成可执行动作序列，含 `steps` / `pendingFields` / `prompt`
+- **激活闸门**：`flow_submit_requirement` 新增 `activation` 参数；`flow_claim` / `flow_dispatch` 检查 `activation_pending` 拒绝派发
+- **状态可见**：`flow_status` 新增 `activation_pending` 字段
+- **配置系统**：`trigger-config.json` 可覆盖全部阈值与权重（`triggerThreshold: 15`、`autoTriggerThreshold: 25`、`lowConfidenceThreshold: 10`）
+- **状态持久化**：触发历史落在 `CARLOS_FLOW_HOME`，不污染仓库目录
+- **用户反馈学习**：接受/拒绝行为驱动权重调整
+- **评分可解释**：每次决策返回完整 `breakdown`（命中的关键词 / 上下文词 / 意图类型）
+- **限流也如实**：被限流时仍返回真实评分与置信度，不假装 0 分
+- **详细文档**：[TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
+
+**测试套件**
+
+- `test/trigger-e2e.mjs`：15 项触发引擎用例（含 4 项回归用例）
+- `npm run test:all`：串联 smoke + e2e-carlos + p0-gates + trigger-e2e
+- 测试脚本在缺少 `CARLOS_FLOW_MCP_ROOT` 时自动回退到仓库根目录，**本地无需额外配置环境变量**
+
+### 🐛 修复 | Fixed
+
+> 以下 9 项均为**真实可复现的缺陷**，在本次发布前由独立验证发现并修复。
+
+| # | 问题 | 影响 | 修复 |
+|---|------|------|------|
+| T-1 | `client/carlos.js` 是 ESM 模块却使用 `require()` 加载触发引擎 | 异常被 catch 吞掉，**触发引擎集成完全失效（死代码）** | 改用 `await import(pathToFileURL(...))` |
+| T-2 | `canTrigger()` 用 `calculateHistoryFactor()`（返回 0~1 加权均值）与上限 5~15 比较 | **上限检查永远不触发**，限流形同虚设 | 新增 `countTriggersInWindow()` 返回窗口内实际次数 |
+| T-3 | 动态上限公式中历史因子为**加项** | 触发越多上限越高，**封顶逻辑自我抵消** | 改为惩罚项：近期触发越频繁，上限越低 |
+| T-4 | `processUserMessage()` 硬编码 `sessionId='default'`，忽略 `context.sessionId` | 多会话场景状态串扰 | 按 `context.sessionId` 创建引擎并透传 |
+| T-5 | `src/trigger.js` 的 CLI 入口用 `import.meta.url.endsWith(process.argv[1])` | `file:///` 前缀导致永不匹配，**独立测试模式从未运行过** | 改用 `fileURLToPath` + `resolve` 路径比较 |
+| T-6 | `shouldTrigger()` 在限流分支提前 `return`，未先计算评分 | 评分丢成 `0`、置信度缺失，调用方无法判断真实意图强度 | 改为先算评分再判限流，`throttled` 分支也返回 `score` / `confidence` / `breakdown` |
+| T-7 | `test:trigger` 把结果文件写入发布目录 `test/trigger-e2e-results.json` | **污染 npm 发布内容** | 改为写入系统临时目录 |
+| T-8 | 命中自动激活后，客户端只打印一行日志，**没有执行任何实际动作** | 「自动触发」名不副实，工作流并不会真的启动 | 新增 `buildActivationPlan()` + 客户端逐步执行激活步骤 + `activation_pending` 派发闸门 |
+| T-9 | 触发状态所有会话共用一个 `trigger-state.json` | **一个会话的限流会影响另一个会话**，多场景下莫名“时间间隔不足” | 状态按 session 分文件存放到 `CARLOS_FLOW_HOME/trigger-state/<sessionId>.json` |
+| T-10 | 占位卡可以直接 `flow_verdict` 记 PASS | **假闭环**：未派发、未验证、未补齐字段，却把 `completed_ok` 置为 true | `flow_verdict` 增加闸门：`activation_pending` 非空时拒绝记裁定，并写入 `verdict_denied` 审计事件 |
+| T-11 | `sanitizeSessionId` 清洗后可能撞名（`a/b` 与 `a_b` 都变成 `a_b`） | 不同会话共用同一份状态文件，限流互相影响 | 文件名追加原始 sessionId 的哈希后缀，保证唯一 |
+| T-12 | 占位卡闸门可被「空 scope 的普通卡」清掉 | **绕过路径**：Agent 提交一张 scope 为空的普通卡即可解除闸门，而空 scope 意味着「不许改任何文件」 | 解除闸门要求本次提交的 scope 非空；否则保持闸门并记 `activation_gate_held` 审计事件 |
+| T-13 | 客户端触发兜底项是「工具名 + 参数 JSON」 | **自伤**：参数含触发词 → 自己开占位卡 → 同一次调用的 `flow_dispatch` 反被闸门拒绝；**锚点污染**：写入的「用户原话」是命令行文本 → Agent 用真实原话重提卡时 quote 锚点校验失败 → 补齐流程卡死 | 兜底改为空串：**不传 `triggerMessage` 即完全不启用自动触发** |
+| T-14 | `create(sessionId)` 与 `shouldTrigger(msg, ctx, sessionId)` 两个入参未强制一致；L2 评分器还自己去磁盘读会话状态 | L1 读 A 会话状态、L2 读 B 会话历史 → 跨会话污染评分 | L3 记住会话 ID（`this.sessionId`），评分器不再读磁盘、由 L3 传入本会话历史条数 |
+| T-15 | 激活闸门的释放判据只看 `scope` 非空 | **半补齐绕过**：只补 `scope`、`acceptance`/`verify.cmd` 仍缺就解闸 → 可记 PASS → `completed_ok=true` | 改为**逐字段核验**：`scope` / `acceptance` / `verify.cmd` 三项全补齐才解闸，`activation_pending` 精确列出还缺哪几项 |
+| T-16 | `enforceScope()` 在空 scope 时直接 `return { ok: true }` | **fail-open**：白名单为空等于「随便改」，任意路径都判未越界 | 改为 **fail-closed**：空 scope + 有变更 → 全部判越界 |
+| T-17 | `flow_verdict` 只要求「有卡片」 | **未复核即完成**：刚提交、什么都没跑的卡也能直接记 PASS → `completed_ok=true` | 增加前置：记 **PASS** 前必须 `dispatch_count > 0`（`DIRECTION`/`LOCAL` 不受影响，不误伤返工意见） |
+| T-18 | 反馈学习是**死代码**：`recordFeedback` 只写进程内 Map，`updateFeedbackWeights()` 无任何调用点，调整的权重也没人读 | 文档宣称「反馈学习」但功能不存在 | 反馈改为**持久化**到会话状态；每 10 条自动触发学习；学习结果**真正影响触发阈值**（`effectiveThreshold`） |
+| T-19 | `triggerWindowMinutes: 15` 与 `minTriggerIntervalSeconds: 300` 不匹配 | 窗口内最多触发 3 次，而上限至少 6 → 「次数达上限」分支**永远不可达**，实际只有 5 分钟冷却 | 默认窗口改为 **60 分钟**（1 小时内最多 12 次），上限惩罚项才有意义 |
+| T-20 | 激活占位卡的建立与解闸在审计链里没有专属事件（只有通用 `record`/`accepted`） | 事后无法从 `gate-audit` 流水回答「这是不是占位卡？解闸过没有？」 | 新增四类专属事件：`activation` / `activation_gate_held` / `activation_released` / `verdict_denied` |
+| T-21 | `verdict` 的 `dispatch_count` 前置最初对三档裁定一视同仁 | 未派发时 `DIRECTION`/`LOCAL` 也被拦 —— 「先标返工意见」的合理流程被误伤 | 前置**只施加于 PASS** |
+
+### 📝 文档事实性修正 | Documentation Corrections
+
+> 第三方只读评审逐条核对文档与实现的差异，以下为已修正的**事实性偏差**（此前文档写错或写了未实现的功能）：
+
+| # | 文档原文 | 实际 | 已修正为 |
+|---|---------|------|---------|
+| D-1 | 评分示例 `score: 37` | 带 `complexity: 1.2` 时真实值是 **38** | 全部示例改为 38 |
+| D-2 | CLI 示例用中文/非词表英文句子，声称「判定触发」 | 默认词表是**英文**，那些句子命中 0 个词 → 实际 `ignore` | 改为能真正触发的 `run dispatch workflow`，并明确「必须显式传入、默认词表为英文」 |
+| D-3 | 决策伪码与实现不一致（漏了 `throttled` 分支与反馈偏移） | 实现含限流分支与反馈学习偏移 | 伪码改为**与 `src/trigger.js` 逐行对应**，并补四档决策表 |
+| D-4 | 未说明 `confidence` 的计数口径 | 命中项数决定（0→0.3 / 1~2→0.6 / ≥3→0.9），且存在重复计数 | 新增「置信度口径」小节，说明口径与已知偏差 |
+| D-5 | 「衰减加权值仅用于上限微调」 | 代码里**没有这个行为** | 改为如实描述（原始次数判定 + 惩罚项公式） |
+| D-6 | 「免检」被暗示为能跳过检查 | `isBypassed()` 全仓无调用点，免检只是**标志位 + 派发后自动清零** | 文档措辞按实际语义修正 |
+| D-7 | 「反馈学习」被描述为已实现 | 当时是死代码 | 随 T-18 一并实现，文档改为真实行为 |
+
+### 🔬 变异测试扩展 | Mutation Testing（8 类退化）
+
+| 变异 | 注入内容 | 结果 |
+|------|---------|------|
+| M1 | 把 `checkTrigger` 里的 `callMCP` 换成假返回（激活只剩日志） | **CAUGHT** — `17b/17c` 失败 |
+| M2 | 移除 `flow_claim` 的 `activation_pending` 闸门 | **CAUGHT** — `15c/17c` 失败 |
+| M3 | 移除 `flow_verdict` 的 `activation_pending` 闸门 | **CAUGHT** — `15e/15f` 失败 |
+| M4 | 去掉 `sanitizeSessionId` 的哈希后缀（会话撞名） | **CAUGHT** — 会话隔离用例失败 |
+| M5 | 把 `filled.scope` 硬置 true（scope 未补也算补齐） | **CAUGHT** — 半补齐用例失败 |
+| M6 | 移除逐字段核验（只要提交就解闸） | **CAUGHT** — `19a~19d` 失败 |
+| M7 | `enforceScope` 空 scope 改回 fail-open | **CAUGHT** — 空 scope 用例失败 |
+| M8 | 移除 `verdict` 的 `dispatch_count` 检查 | **CAUGHT** — 未派发用例失败 |
+
+> 两仓库（cindy / opencode）各跑一遍，**8/8 全部被抓住**。报告：[`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md)
+
+### 🧪 测试增强 | Test Hardening
+
+- `test/e2e-carlos.mjs`：16 → **42** 项
+  - 第 17 组：走**真实客户端进程**验证激活路径（断言服务端状态真的变了，而非 stderr 里那句话）
+  - 第 18 组：不传 `triggerMessage` 不触发（防自伤）
+  - 第 19 组：半补齐不解闸、三项补齐才解闸
+  - 第 20 组：未派发不许记 PASS；`DIRECTION` 不误伤
+  - 第 21 组：空 scope fail-closed
+  - 第 22 组：审计链四类专属事件可查
+- `test/trigger-e2e.mjs`：15 → **23** 项（激活计划完整性、quote 锚点、会话隔离、撞名回归、`create`/`shouldTrigger` 会话一致、反馈学习生效、`reset("*")` 重置全部会话）
+- `test/p0-gates.mjs`：10 → **15** 项（新增激活占位卡闸门、未派发记 PASS、空 scope fail-closed）
+
+### 🧬 变异测试 | Mutation Testing（新增）
+
+> 光有测试不够——还要证明**测试真的能抓住退化**。
+> `npm run test:mutation` 会在临时副本上注入 4 类退化，确认测试套件会失败。
+
+| 变异 | 注入内容 | 结果 |
+|------|---------|------|
+| M1 | 把 `checkTrigger` 里的 `callMCP` 换成假返回（激活只剩日志） | **CAUGHT** — `17b/17c` 失败 |
+| M2 | 移除 `flow_claim` 的 `activation_pending` 闸门 | **CAUGHT** — `15c/17c` 失败 |
+| M3 | 移除 `flow_verdict` 的 `activation_pending` 闸门（假闭环） | **CAUGHT** — `15e/15f` 失败 |
+| M4 | 去掉 `sanitizeSessionId` 的哈希后缀（会话撞名） | **CAUGHT** — 会话隔离用例失败 |
+| M5 | 移除「空 scope 提交不能解除激活闸门」的防护 | **CAUGHT** — `16d/16e` 失败 |
+
+> 两仓库（cindy / opencode）各跑一遍，**8/8 全部被抓住**。报告由 `npm run test:mutation` 自动生成。
+
+### 🧪 测试增强 | Test Hardening
+
+- `test/e2e-carlos.mjs` 新增第 17 组：**通过真实客户端进程**验证激活路径，
+  断言的是**服务端状态真的变了**（`has_card` / `activation_pending`），
+  而不是 stderr 里那句「已执行激活步骤」——只要把 `callMCP` 换成空实现，用例立即失败
+- `test/e2e-carlos.mjs` 新增 `15e/15f`：防假闭环（占位卡不许记 PASS）
+- `test/trigger-e2e.mjs` 新增：清洗后同形的 sessionId 不共用状态文件
+- 新增 `scripts/mutation-check.mjs` 与 `npm run test:mutation`
+- 变异测试报告归档：[`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md)
+
+### 🔒 安全 | Security
+
+| # | 问题 | 修复 |
+|---|------|------|
+| S-1 | `.gitignore` 末行为 `*.tar.gz.npmrc.local`（粘连），导致 `.npmrc.local`（含 npm token）**未被忽略** | 拆分为独立规则，并补充 `.npmrc.*.local` |
+| S-2 | 一次性修复脚本（`fix_*.mjs`、`debug_*.mjs` 等 42 个）与 `.b64`、`secret.json` 等临时文件混入仓库 | 加入 `.gitignore` 忽略规则 |
+| S-3 | 触发器状态文件默认写入当前工作目录 | 改为与 `state.js` 一致的 `CARLOS_FLOW_HOME` 约定 |
+| S-4 | 硬编码机器路径 `D:\opencode-backups` | 改为跨平台默认 `~/.carlos-flow` |
+
+### 🚀 发布工程 | Release Engineering
+
+| 项目 | 说明 |
+|------|------|
+| **OIDC 发布** | GitHub Actions 使用 OIDC 身份发布到 npm，**仓库不再需要存放 npm token** |
+| **`scripts/release.mjs`** | 一条命令跑完版本校验 / 双语一致性 / 测试 / 构建 / 发布 |
+| **`npm run check:readme`** | `prepublishOnly` 钩子自动校验 README.md / README.zh.md / README.en.md 三份文件不漂移 |
+| **独立 QA 验收** | [`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md)：两仓库 × 四套件 = **8/8 全绿** |
+
+### 📚 文档 | Documentation
+
+- **README 可读性**：清除了被重复注入的**语言栏 / 版本行噪音**（每份 24~26 处 → 收敛到顶部 1 处），原先粘在 Markdown 表格行尾导致表格被截断的问题已修复
+- **README 新增**：v2.5.5 更新速览区（三层触发架构表、7 项缺陷表、安全与发布工程、文档可读性说明）
+- **README 修正**：触发评分的真实满分（38 而非 100）、动态上限的惩罚项语义、决策引擎的四档输出
+- **FAQ 补充**：触发不生效 / 触发过频 / 状态文件位置 三条排查项
+- **测试命令**：`npm run test:p0`、`npm run test:trigger`、`npm run test:all` 全部写入 README
+
+### 🔧 变更 | Changed
+
+- 触发引擎 E2E 测试迁入 `test/trigger-e2e.mjs`，纳入 npm scripts
+- README / CHANGELOG / package.json 版本号统一为 **2.5.5**
+- `carlos-flow-cindy` 与 `carlos-flow-opencode` 的 `src/` 保持逐文件一致
+- 清理 42 个一次性修复脚本与临时产物（净删 5325 行）
+
+### ✅ 验证 | Verification
+
+| 套件 | 结果 |
+|------|------|
+| `npm test`（smoke） | SMOKE_OK |
+| `npm run test:e2e`（e2e-carlos） | **42/42 通过**（激活闸门 + 客户端真实激活路径 + 四道门禁防线） |
+| `npm run test:p0`（p0-gates） | **15/15 通过**（新增激活闸门与 fail-closed 断言） |
+| `npm run test:trigger`（trigger-e2e） | **23/23 通过**（激活计划 + 会话一致 + 反馈学习 + 撞名回归） |
+| `npm run test:mutation`（变异测试） | **8/8 变异全部被抓住** |
+
+---
+
+## [2.5.4] - 2026-11-04 — 智能绑定图标修复与文档标准化
+
+### 🎨 界面修复 | UI Fixes
+
+- **README 徽章**：移除 Shield.IO 图像，改用纯文本标签，解决乱码/方框显示问题
+- **多语言导航**：添加 [中文](README.zh.md) / [English](README.en.md) 语言栏
+
+> 🚨 **注意**：v2.5.2 及更早版本存在 5 处致命语法错误（MCP Server 无法启动），**强烈建议升级到 2.5.3+**。
+
+---
+
 ## [2.5.3] - 2026-11-04 — 致命语法错误修复 + 门禁真验证
 
 ### 🚨 致命修复 | Critical Fixes
@@ -113,6 +308,13 @@
 
 ## 升级指南 | Upgrade Guide
 
+### 从 2.5.4 → 2.5.5
+
+1. **更新包**：`npm install -g carlos-flow-cindy@2.5.5`
+2. **新特性**：智能触发引擎自动加载，配置 `trigger-config.json` 可调阈值
+3. **零破坏性**：完全向后兼容；配置文件不存在时使用默认参数
+4. **行为变更**：触发上限现在会随近期触发频率收紧（之前形同虚设）
+
 ### 从 2.5.1 → 2.5.2
 
 1. **更新包**：`npm install -g carlos-flow-cindy@2.5.2`
@@ -128,10 +330,12 @@
 
 ## 版本对照表 | Version Cross-reference
 
-| 版本 | npm | GitHub Release | 核心状态 |
-|------|-----|----------------|----------|
-| 2.5.3 | carlos-flow-opencode | v2.5.3 | 同步 2.5.2 全部修复 |
-| 2.5.2 | carlos-flow-cindy | v2.5.2 | **Phase 1 P0 完整修复** |
-| 2.5.1 | 双包 | v2.5.1 | 基础版（含已知 P0 缺陷） |
+| 版本 | npm (Cindy) | npm (OpenCode) | GitHub Release | 核心状态 |
+|------|-------------|----------------|----------------|----------|
+| 2.5.5 | carlos-flow-cindy@2.5.5 | carlos-flow-opencode@2.5.5 | v2.5.5 | **智能触发引擎 + 7 项缺陷修复 + OIDC 发布** |
+| 2.5.4 | - | carlos-flow-opencode@2.5.4 | v2.5.4 | 文档标准化 + UI 修复 |
+| 2.5.3 | carlos-flow-cindy@2.5.3 | carlos-flow-opencode@2.5.3 | v2.5.3 | **致命语法修复 + 门禁真验证** |
+| 2.5.2 | carlos-flow-cindy@2.5.2 | carlos-flow-opencode@2.5.2 | v2.5.2 | Phase 1 P0 全修复 |
+| 2.5.1 | 双包 | 双包 | v2.5.1 | 基础版（含已知 P0 缺陷） |
 
-> **注意**：2.5.1 版本存在上述 18 项 P0 缺陷，**强烈建议升级到 2.5.2+**
+> **注意**：2.5.1 版本存在 18 项 P0 缺陷，2.5.2 存在 5 处致命语法错误，**强烈建议升级到 2.5.5**。
