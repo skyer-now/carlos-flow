@@ -57,6 +57,22 @@ const MUTANTS = [
   return safe + '-' + suffix;`,
     to: `  return safe; // MUTANT: 无哈希后缀`,
   },
+  {
+    id: "M5-空scope绕过闸门",
+    desc: "移除「空 scope 提交不能解除激活闸门」的防护",
+    file: "src/index.js",
+    from: `        } else if (prevPending.length > 0 && newScope.length === 0) {
+          // 防绕过：不能靠提交一张「空 scope 的普通卡」把闸门清掉。
+          // 空 scope 意味着「不许改任何文件」，这种卡不足以代表「已补齐」。
+          activationPending = prevPending;
+          audit("decision", sessionId, {
+            kind: "activation_gate_held",
+            reason: "空 scope 的提交不能解除激活闸门",
+            pending: prevPending,
+          });
+        } else {`,
+    to: `        } else { // MUTANT: 空 scope 也能清闸门`,
+  },
 ];
 
 function sh(cmd, cwd, env = {}) {
@@ -77,8 +93,8 @@ function sh(cmd, cwd, env = {}) {
 const lines = [];
 lines.push("# 变异测试报告");
 lines.push("");
-lines.push(`- 源仓库：\`${SRC}\``);
-lines.push(`- 变异副本：\`${WORK}\``);
+lines.push(`- 源仓库：\`carlos-flow-cindy\` / \`carlos-flow-opencode\`（工作副本路径已改写为占位符）`);
+lines.push(`- 变异副本：临时目录（用完自动删除，不入库）`);
 lines.push(`- 目的：确认测试套件能抓住「激活只打印日志」「闸门失效」「会话撞名」等退化`);
 lines.push("");
 

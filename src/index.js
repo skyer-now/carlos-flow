@@ -140,9 +140,23 @@ const TOOLS = [
         const prev = loadState(sessionId);
         // 激活占位卡：记录待补齐字段，闸门未解除前不允许派发。
         // 重新提交完整卡（不带 activation）即视为补齐，清空待办。
-        const activationPending = a.activation === true
-          ? ["scope", "acceptance", "verify.cmd"]
-          : [];
+        const prevPending = Array.isArray(prev.activation_pending) ? prev.activation_pending : [];
+        const newScope = Array.isArray(card.scope) ? card.scope : [];
+        let activationPending;
+        if (a.activation === true) {
+          activationPending = ["scope", "acceptance", "verify.cmd"];
+        } else if (prevPending.length > 0 && newScope.length === 0) {
+          // 防绕过：不能靠提交一张「空 scope 的普通卡」把闸门清掉。
+          // 空 scope 意味着「不许改任何文件」，这种卡不足以代表「已补齐」。
+          activationPending = prevPending;
+          audit("decision", sessionId, {
+            kind: "activation_gate_held",
+            reason: "空 scope 的提交不能解除激活闸门",
+            pending: prevPending,
+          });
+        } else {
+          activationPending = [];
+        }
         const state = {
           ...defaultState(),
           ...prev,

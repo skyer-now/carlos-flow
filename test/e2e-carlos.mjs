@@ -227,6 +227,27 @@ async function main() {
   r = await call("flow_claim", { sessionId: ACT_SID, role: "executor" });
   check("16c. 补齐后 claim 放行", r.ok && r.data?.ok === true, r.ok ? "" : r.error);
 
+  // 16d. 防绕过：不能靠「空 scope 的普通卡」清掉激活闸门
+  const BYPASS_SID = SID + "-bypass";
+  await call("flow_add_user_msg", { sessionId: BYPASS_SID, text: "run dispatch workflow" });
+  await call("flow_submit_requirement", {
+    sessionId: BYPASS_SID, goal: "占位", quote: "run dispatch workflow",
+    scope: [], acceptance: [], confirmed: false, activation: true,
+  });
+  // 尝试提交一张 scope 为空的普通卡（不带 activation）
+  r = await call("flow_submit_requirement", {
+    sessionId: BYPASS_SID, goal: "试图绕过", quote: "run dispatch workflow",
+    scope: [], acceptance: [], confirmed: false,
+  });
+  r = await call("flow_status", { sessionId: BYPASS_SID });
+  const gateHeld = r.ok && Array.isArray(r.data?.activation_pending) && r.data.activation_pending.length === 3;
+  check("16d. 空 scope 提交无法解除激活闸门", gateHeld,
+    r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
+
+  r = await call("flow_claim", { sessionId: BYPASS_SID, role: "executor" });
+  const bypassBlocked = r.ok === false && /占位卡/.test(r.error || "");
+  check("16e. 绕过尝试后 claim 仍被拒", bypassBlocked, r.ok ? "未被拒绝（异常）" : "已拒绝");
+
   // 17. 客户端激活路径（防退化）：必须真的执行了动作，而不只是打印日志
   // 这一组跑的是真实客户端进程，断言的是**服务端状态真的变了**，
   // 而不是 stderr 里那句「已执行激活步骤」——只要把 checkTrigger 里的
