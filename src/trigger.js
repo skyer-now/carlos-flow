@@ -69,6 +69,21 @@ const DEFAULT_CONFIG = {
   autoTriggerThreshold: 25,         // 自动触发阈值（高中意图时）
   lowConfidenceThreshold: 10,       // 低置信度阈值
 
+  // 只读意图识别：命中只读词且**不含**改动动词 → 不进入工作流门禁。
+  // 原因：占位卡恒为 read_only 档（scope=[]），若一个只需要只读调研的任务
+  // 被激活，它的待补项（scope/acceptance/verify.cmd）永远无法被满足 ——
+  // 因为只读任务本来就不需要改文件 —— 该会话会被永久锁死。
+  readOnlyIntentWords: [
+    'explain', 'describe', 'analyse', 'analyze', 'summarize', 'summarise',
+    'what', 'why', 'how', 'understand', 'overview', 'compare', 'inspect',
+    'read', '查找', '解释', '分析', '总结', '为什么', '是什么', '调研', '对比', '了解', '查看', '读一下', '看看',
+  ],
+  mutatingActionWords: [
+    'fix', 'refactor', 'change', 'update', 'implement', 'add', 'remove',
+    'modify', 'rewrite', 'migrate', 'patch', 'upgrade', 'rename',
+    '修复', '重构', '修改', '更新', '实现', '新增', '删除', '重写', '迁移', '改造', '写一个', '写个',
+  ],
+
   // 用户反馈学习
   feedbackLearningRate: 0.1,
   feedbackLearningCycle: 10,        // 每累积多少条反馈重新学习一次
@@ -94,6 +109,29 @@ if (existsSync(CONFIG_PATH)) {
 }
 
 // ============ 激活动作辅助 ============
+
+/**
+ * 只读意图识别。
+ *
+ * 命中只读词（explain/analyze/调研/看看…）且**不含**改动动词
+ * （fix/refactor/修改/修复…）→ 判定为只读调研。
+ *
+ * 为什么要单独识别：智能触发引擎开的占位卡恒为 read_only 档（scope=[]），
+ * 其待补项是 scope/acceptance/verify.cmd。如果一个**只需要只读调研**的任务
+ * 被激活，这三项永远无法被满足（只读任务本来就不改文件）——
+ * 该会话会被永久锁死，且没有任何合法路径解闸。
+ */
+function isReadOnlyIntent(message) {
+  const s = String(message || '').toLowerCase();
+  if (!s) return false;
+  const ro = config.readOnlyIntentWords || [];
+  const mut = config.mutatingActionWords || [];
+  const hasReadOnly = ro.some((w) => s.includes(String(w).toLowerCase()));
+  if (!hasReadOnly) return false;
+  // 同时含改动动词 → 以改动为准（避免 "analyze and refactor" 被误判为只读）
+  const hasMutating = mut.some((w) => s.includes(String(w).toLowerCase()));
+  return !hasMutating;
+}
 
 /**
  * 从用户原话与命中关键词推导一个粗粒度目标。
@@ -569,6 +607,19 @@ class TriggerDecisionEngine {
       return { activated: false, reason: '决策不是 trigger，不激活' };
     }
 
+    // 只读调研不进入工作流门禁（否则该会话永远无法解闸，见 isReadOnlyIntent 注释）
+    if (isReadOnlyIntent(message)) {
+      return {
+        activated: false,
+        reason: '只读调研意图，不进入工作流门禁（占位卡的待补项对只读任务永远无法满足）',
+        decision: result.decision,
+        score: result.score,
+        confidence: result.confidence,
+        steps: [],
+        pendingFields: [],
+      };
+    }
+
     const matched = (result.breakdown && result.breakdown.keyword &&
       result.breakdown.keyword.matchedKeywords) || [];
     const goal = deriveGoal(message, matched);
@@ -731,6 +782,13 @@ export const TriggerEngine = {
    */
   getConfig() {
     return { ...config };
+  },
+
+  /**
+   * 只读意图判定（供测试与外部查询）
+   */
+  isReadOnlyIntent(message) {
+    return isReadOnlyIntent(message);
   },
 
   /**

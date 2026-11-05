@@ -431,6 +431,31 @@ const testCases = [
     }
   },
   {
+    name: '激活: 只读调研意图不进入工作流门禁',
+    test: () => {
+      // 占位卡恒为 read_only 档（scope=[]），其待补项 scope/acceptance/verify.cmd
+      // 对只读任务永远无法满足 → 会把会话永久锁死。所以只读意图不得激活。
+      const roCases = [
+        'explain how the trigger engine works',
+        '请分析一下这个仓库的结构',
+        '看看这个模块是干什么的',
+      ];
+      const mutatingCases = [
+        'analyze and refactor the trigger engine',
+        '分析并修复这个 bug',
+      ];
+      const roOk = roCases.every((m) => TriggerEngine.isReadOnlyIntent(m) === true);
+      const mutOk = mutatingCases.every((m) => TriggerEngine.isReadOnlyIntent(m) === false);
+      // 且实际不产生激活计划
+      const sid = 'ro-' + Date.now();
+      const engine = TriggerEngine.create(sid);
+      const res = engine.shouldTrigger('explain how the trigger engine works', { sessionId: sid }, sid);
+      const plan = res.activationPlan;
+      console.log(`  [DEBUG] ro判定=${roOk} 改动词不误伤=${mutOk} plan.activated=${plan && plan.activated}`);
+      return roOk && mutOk && !!plan && plan.activated === false;
+    }
+  },
+  {
     name: '回归: reset("*") 可重置全部会话状态',
     test: () => {
       const sid = 'rst-' + Date.now();

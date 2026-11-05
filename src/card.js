@@ -187,6 +187,14 @@ export function validateCard(card, options) {
       findings.push('scope 里有空路径');
       return { ok: false, reason: 'scope 中有无效路径，拒绝派发（锚点 veto）', findings, tier };
     }
+    // 拒绝「整个目录」作为改动范围：scope=["."] 等价于授权修改整个 cwd，
+    // 会把合同边界放大到仓库全量；而 enforceScope(".") 又会把任意改动判越界。
+    // 这里直接拒绝 "." / ".." 及其路径形式。
+    const normPath = p.trim().replace(/\\/g, '/').replace(/\/+$/, '') || p.trim();
+    if (normPath === '.' || normPath === '..' || normPath.endsWith('/.') || normPath.endsWith('/..')) {
+      findings.push('scope 不能包含整个目录（"." / ".."）—— 必须精确到文件');
+      return { ok: false, reason: 'scope 中有指向整个目录的路径，拒绝派发（合同边界 veto）', findings, tier };
+    }
   }
 
   if (typeof opts.scopeExists === 'function') {

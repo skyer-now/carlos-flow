@@ -54,6 +54,10 @@ export function defaultState() {
     // 智能触发引擎激活占位卡时尚待补齐的字段。
     // 非空时 flow_claim / flow_dispatch 会拒绝派发，防止空卡片被直接派发。
     activation_pending: [],
+    // 该会话是否曾被智能触发引擎激活过（单调，只增不减）。
+    // 闸门状态由「卡片内容 + 此标记」幂等派生，不再依赖上一轮的 pending 传递，
+    // 这样跨进程并发写入也不会出现「卡片为空却 pending=[]」的矛盾组合。
+    activation_activated: false,
   };
 }
 
@@ -76,6 +80,66 @@ export function saveState(sid, state) {
   fs.writeFileSync(tmp, JSON.stringify(state ?? defaultState(), null, 2), "utf8");
   fs.renameSync(tmp, target);
   return target;
+}
+
+// 跨进程排他锁。
+// 问题背景：flow_submit_requirement 是「读状态 → 算 pending → 写状态」的读-改-写，
+// 多个 MCP server 进程共享同一个 CARLOS_FLOW_HOME 时会互相丢更新：
+//   进程A 写（占位卡, pending=[三项]） 与 进程B 写（普通空卡, pending=[]）
+// 若两者交错，后写入者可能用**过期的 prevState** 算出 pending=[]，
+// 而它写入的卡片字段仍为空 —— 闸门就被绕过了（红队实测 40 轮复现 4 次）。
+// 这里用 mkdir 的原子性做锁（open(..., "wx") 同理），把读-改-写包成临界区。
+const sleepMs = (ms) => {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    /* SharedArrayBuffer 不可用时退化为自旋 */
+  }
+};
+
+export function withStateLock(sid, fn, opts = {}) {
+  const dir = path.join(RUNS_DIR, sanitizeId(sid));
+  const lockFile = path.join(dir, ".state.lock");
+  const timeoutMs = Number(opts.timeoutMs) || 5000;
+  const staleMs = Number(opts.staleMs) || 30000;
+  const deadline = Date.now() + timeoutMs;
+  let acquired = false;
+
+  for (;;) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      // wx = O_CREAT|O_EXCL，文件已存在则抛 EEXIST —— 原子排他
+      const fd = fs.openSync(lockFile, "wx");
+      fs.closeSync(fd);
+      acquired = true;
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      // 陈旧锁（持有者已崩溃）→ 回收
+      try {
+        const st = fs.statSync(lockFile);
+        if (Date.now() - st.mtimeMs > staleMs) {
+          fs.unlinkSync(lockFile);
+          continue;
+        }
+      } catch {
+        continue; // 锁刚好被释放，重试
+      }
+      if (Date.now() > deadline) {
+        // 拿不到锁：fail-closed —— 宁可报错也不要在无锁下写状态
+        throw new Error(`获取状态锁超时（session=${sanitizeId(sid)}），请稍后重试`);
+      }
+      sleepMs(15);
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    if (acquired) {
+      try { fs.unlinkSync(lockFile); } catch { /* 已回收 */ }
+    }
+  }
 }
 
 // 追加审计行；永不抛错，失败仅写 stderr；返回记录对象

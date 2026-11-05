@@ -357,6 +357,34 @@ async function main() {
   check("19e. 占位卡待补项由服务端从卡片内容派生（非硬编码三项）", derivedPending,
     r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
 
+  // 19f. 规则③正向断言：普通卡（未标 activation、此前也未被锁）**不上闸门**。
+  // 即：字段完整性只由 validateCard 按风险档强制（read_only 只要 goal+quote），
+  // 激活闸门不重复拦截普通卡 —— 否则会误伤 T1 只读调研。
+  // 变异体 M10（把普通卡也上闸）会让本用例变红。
+  const PLAIN_SID = SID + "-plain";
+  await call("flow_add_user_msg", { sessionId: PLAIN_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: PLAIN_SID, goal: "普通卡（字段不齐）", quote: QUOTE,
+    scope: [], acceptance: [], confirmed: false,
+  });
+  r = await call("flow_status", { sessionId: PLAIN_SID });
+  const plainNoGate = r.ok && Array.isArray(r.data?.activation_pending) &&
+    r.data.activation_pending.length === 0;
+  check("19f. 普通卡不上激活闸门（不误伤只读调研）", plainNoGate,
+    r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
+
+  // 19g. 同上，但普通卡字段齐全 —— 必须能正常 claim（证明不是「一律锁死」）
+  const PLAIN_FULL_SID = SID + "-plainfull";
+  await call("flow_add_user_msg", { sessionId: PLAIN_FULL_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: PLAIN_FULL_SID, goal: "普通卡（字段齐全）", quote: QUOTE,
+    scope: [ROOT + "/README.md"], acceptance: ["验收项"],
+    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
+  });
+  r = await call("flow_claim", { sessionId: PLAIN_FULL_SID, role: "executor" });
+  const plainFullClaim = r.ok && r.data?.ok === true;
+  check("19g. 普通卡（字段齐全）可正常 claim", plainFullClaim, r.ok ? "" : r.error);
+
   // 20. 未派发就记 PASS 裁定 → 必须被拒（防假闭环之二）
   const NO_DISPATCH_SID = SID + "-nodispatch";
   await call("flow_add_user_msg", { sessionId: NO_DISPATCH_SID, text: QUOTE });

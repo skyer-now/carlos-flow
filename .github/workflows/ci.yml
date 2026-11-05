@@ -48,16 +48,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: node --version && npm --version
-      - run: npm install
-      - name: Mutation check (5 类退化必须全部被抓住)
+      - run: npm ci
+      - name: Mutation check (11 类退化必须全部被抓住)
         run: npm run test:mutation
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-mutation-home
+          MUTATION_REPORT: ${{ github.workspace }}/.mutation-report.md
       - name: 上传变异测试报告
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mutation-report
-          path: .mutation-report.md
-          if-no-files-found: ignore
+          path: ${{ github.workspace }}/.mutation-report.md
+          if-no-files-found: error

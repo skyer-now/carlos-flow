@@ -2,15 +2,23 @@
 // 变异测试：在临时副本上注入退化，确认测试套件能抓住。
 // 目的：验证「激活只打印日志」「闸门失效」「会话撞名」这类退化无法蒙混过关。
 //
-// 用法: node scripts/mutation-check.mjs
-// 产物: D:/cindy/.mutation-report.md
+// 用法: node scripts/mutation-check.mjs [源仓路径]
+// 产物: <仓库>/.mutation-report.md（可用 MUTATION_REPORT 覆盖）
+//
+// 跨平台：原先硬编码 D:/cindy/... 与 Git Bash 路径，CI（ubuntu）必失败。
+// 现在：源仓默认取当前仓库根目录；工作副本/报告路径走临时目录或环境变量；
+// shell 按平台选择（Windows 用 cmd，POSIX 用默认 sh）。
 import { execSync } from "node:child_process";
 import { cpSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
-const SRC = resolve(process.argv[2] || "D:/cindy/publish-output/carlos-flow-cindy");
-const WORK = "D:/cindy/.mutant-check/mut";
-const REPORT = "D:/cindy/.mutation-report.md";
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(HERE, "..");
+const SRC = resolve(process.argv[2] || process.env.MUTATION_SRC || REPO_ROOT);
+const WORK = resolve(process.env.MUTATION_WORK || join(tmpdir(), "carlos-flow-mutant-work"));
+const REPORT = resolve(process.env.MUTATION_REPORT || join(REPO_ROOT, ".mutation-report.md"));
 
 // 变异定义：id / 描述 / 文件 / 旧文本 / 新文本（精确字符串替换）
 const MUTANTS = [
@@ -59,42 +67,64 @@ const MUTANTS = [
     id: "M5-scope不算补齐项",
     desc: "把 scope 从「当前缺失项」里剔除（scope 未补也不算缺）",
     file: "src/index.js",
-    from: `          ...(newScope.length === 0 ? ["scope"] : []),`,
+    from: `          ...(!cardHasScope ? ["scope"] : []),`,
     to: `          ...(false ? ["scope"] : []), // MUTANT: scope 未补也不算缺`,
   },
   {
     id: "M6-半补齐绕过闸门",
-    desc: "只要提交就解闸（移除三项全补齐才解闸的逐项判定）",
+    desc: "已激活会话改成「只要提交就解闸」（移除幂等派生）",
     file: "src/index.js",
-    from: `          const stillMissing = prevPending.filter((f) => currentMissing.includes(f));`,
-    to: `          const stillMissing = []; // MUTANT: 只要提交就解闸`,
+    from: `            activationPending = currentMissing;
+          } else {
+            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。`,
+    to: `            activationPending = []; // MUTANT: 只要提交就解闸
+          } else {
+            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。`,
   },
   {
-    id: "M9-闸门交集取反",
-    desc: "把交集语义改回补集语义（半补齐会误解闸）",
+    id: "M9-闸门派生回退",
+    desc: "把「已激活会话」的待补项改回上一轮 pending 传递（并发丢更新时会失效）",
     file: "src/index.js",
-    from: `          const stillMissing = prevPending.filter((f) => currentMissing.includes(f));`,
-    to: `          const stillMissing = prevPending.filter((f) => !currentMissing.includes(f)); // MUTANT: 取反`,
+    from: `            activationPending = currentMissing;
+          } else {
+            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。`,
+    to: `            activationPending = prevPendingBefore; // MUTANT: 回退到状态传递
+          } else {
+            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。`,
   },
   {
     id: "M10-普通卡也上闸",
     desc: "普通卡（无 activation 且此前未被锁）也被上闸 —— 会误伤 T1 只读调研",
     file: "src/index.js",
-    from: `          // 此处再加闸门会误伤 T1 只读调研。
-          activationPending = [];`,
-    to: `          // 此处再加闸门会误伤 T1 只读调研。
-          activationPending = currentMissing; // MUTANT: 普通卡也上闸`,
+    from: `            activationPending = [];
+          }`,
+    to: `            activationPending = currentMissing; // MUTANT: 普通卡也上闸
+          }`,
   },
   {
     id: "M11-占位卡硬编码三项",
     desc: "占位卡待补项退回硬编码三项（服务端派生失效）",
     file: "src/index.js",
-    from: `          activationPending = currentMissing;
-          audit("decision", sessionId, {
-            kind: "activation_gate_activated",`,
-    to: `          activationPending = ["scope", "acceptance", "verify.cmd"]; // MUTANT: 硬编码
-          audit("decision", sessionId, {
-            kind: "activation_gate_activated",`,
+    from: `            activationPending = currentMissing;
+          } else if (wasActivatedBefore) {`,
+    to: `            activationPending = ["scope", "acceptance", "verify.cmd"]; // MUTANT: 硬编码
+          } else if (wasActivatedBefore) {`,
+  },
+  {
+    id: "M12-跨进程锁失效",
+    desc: "把锁文件改成非排他创建（'wx' → 'a'），跨进程排他性失效 → 读-改-写重新变成非原子",
+    file: "src/state.js",
+    from: `      const fd = fs.openSync(lockFile, "wx");`,
+    to: `      const fd = fs.openSync(lockFile, "a"); // MUTANT: 非排他`,
+  },
+  {
+    id: "M13-只读意图误判",
+    desc: "把只读意图判定改为「命中只读词就算只读」（含改动动词时误判 → 会永久锁死）",
+    file: "src/trigger.js",
+    from: `  const hasMutating = mut.some((w) => s.includes(String(w).toLowerCase()));
+  return !hasMutating;`,
+    to: `  const hasMutating = mut.some((w) => s.includes(String(w).toLowerCase()));
+  return true; // MUTANT: 无视改动动词`,
   },
   {
     id: "M7-空scope fail-open",
@@ -122,10 +152,13 @@ const MUTANTS = [
 
 function sh(cmd, cwd, env = {}) {
   try {
+    // Windows 下走 Git Bash（npm 是 .cmd 包装器），POSIX 下用系统 sh
+    const isWin = process.platform === "win32";
+    const shell = isWin ? "C:/Program Files/Git/bin/bash.exe" : "/bin/sh";
     return execSync(cmd, {
       cwd,
       encoding: "utf8",
-      shell: "C:/Program Files/Git/bin/bash.exe",
+      shell,
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 600000,
@@ -143,8 +176,8 @@ lines.push(`- 变异副本：临时目录（用完自动删除，不入库）`);
 lines.push(`- 目的：确认测试套件能抓住「激活只打印日志」「闸门失效」「会话撞名」等退化`);
 lines.push("");
 
-const base = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?", SRC, {
-  CARLOS_FLOW_HOME: "D:/cindy/.mutant-home/base",
+const base = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?", SRC, {
+  CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", "base"),
 });
 const baseE2e = /════ 结果: (\d+) 通过 \/ (\d+) 失败/.exec(base);
 const baseTr = /总测试数: (\d+)[\s\S]*?✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(base);
@@ -166,10 +199,21 @@ for (const m of MUTANTS) {
   // 复用依赖（必须成功，否则 bridge 找不到 MCP SDK，测试会全超时）
   const nm = join(WORK, "node_modules");
   if (!existsSync(nm)) {
+    // 优先 junction/symlink（快）；POSIX 上若不支持则退化为拷贝（CI 稳但慢）
+    let linked = false;
     try {
-      symlinkSync(join(SRC, "node_modules"), nm, "junction");
+      symlinkSync(join(SRC, "node_modules"), nm, process.platform === "win32" ? "junction" : "dir");
+      linked = true;
     } catch (e) {
-      console.warn("symlink 失败：", e.message);
+      console.warn("symlink 失败，退化为拷贝 node_modules：", e.message);
+    }
+    if (!linked) {
+      try {
+        cpSync(join(SRC, "node_modules"), nm, { recursive: true, dereference: true });
+      } catch (e2) {
+        console.error("✗ 无法准备 node_modules（symlink 与拷贝均失败）：", e2.message);
+        process.exit(1);
+      }
     }
   }
 
@@ -200,17 +244,21 @@ for (const m of MUTANTS) {
   }
   writeFileSync(target, mutated, "utf8");
 
-  const out = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?", WORK, {
-    CARLOS_FLOW_HOME: "D:/cindy/.mutant-home/" + m.id.replace(/[^A-Za-z0-9]/g, "_"),
+  const out = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?", WORK, {
+    CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", m.id.replace(/[^A-Za-z0-9]/g, "_")),
   });
   const e2eFail = /════ 结果: (\d+) 通过 \/ (\d+) 失败/.exec(out);
   const trFail = /总测试数: (\d+)[\s\S]*?✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(out);
-  const caught = (e2eFail && Number(e2eFail[2]) > 0) || (trFail && Number(trFail[3]) > 0);
+  const concFail = /✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(out.slice(out.lastIndexOf("跨进程并发")));
+  const caught =
+    (e2eFail && Number(e2eFail[2]) > 0) ||
+    (trFail && Number(trFail[3]) > 0) ||
+    (concFail && Number(concFail[2]) > 0);
   const verdict = caught ? "CAUGHT ✅" : "NOT CAUGHT ❌";
   results.push({
     ...m,
     verdict,
-    detail: `e2e ${e2eFail ? e2eFail[1] + "/" + e2eFail[2] : "?"} 失败, trigger ${trFail ? trFail[3] : "?"} 失败`,
+    detail: `e2e ${e2eFail ? e2eFail[1] + "/" + e2eFail[2] : "?"} 失败, trigger ${trFail ? trFail[3] : "?"} 失败, concurrency ${concFail ? concFail[2] : "?"} 失败`,
   });
 
   lines.push(`## ${m.id}`);
@@ -218,7 +266,7 @@ for (const m of MUTANTS) {
   lines.push(`- 注入：${m.desc}`);
   lines.push(`- 文件：\`${m.file}\``);
   lines.push(`- 结果：**${verdict}**`);
-  lines.push(`- 详情：e2e ${e2eFail ? e2eFail[1] + " 通过 / " + e2eFail[2] + " 失败" : "?"}；trigger ${trFail ? trFail[2] + " 通过 / " + trFail[3] + " 失败" : "?"}`);
+  lines.push(`- 详情：e2e ${e2eFail ? e2eFail[1] + " 通过 / " + e2eFail[2] + " 失败" : "?"}；trigger ${trFail ? trFail[2] + " 通过 / " + trFail[3] + " 失败" : "?"}；concurrency ${concFail ? concFail[1] + " 通过 / " + concFail[2] + " 失败" : "?"}`);
   lines.push("");
   const failed = (out.match(/✗[^\n]*/g) || []).slice(0, 6);
   if (failed.length) {

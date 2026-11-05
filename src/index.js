@@ -8,7 +8,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { PROTOCOL } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
-import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain } from "./state.js";
+import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock } from "./state.js";
 import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, enforceScope, MAX_DISPATCH } from "./dispatch.js";
 
 const log = (msg) => {
@@ -137,73 +137,96 @@ const TOOLS = [
 
         card.env = { git_head: gitHead(cwd), project: cwd };
 
-        const prev = loadState(sessionId);
-        // 激活占位卡：记录待补齐字段，闸门未解除前不允许派发。
-        // 闸门待补字段由**服务端从当前卡片内容派生**（不再由调用方自报 activation 硬编码三项）。
-        const prevPending = Array.isArray(prev.activation_pending) ? prev.activation_pending : [];
-        const newScope = Array.isArray(card.scope) ? card.scope : [];
-        const newAcceptance = Array.isArray(card.acceptance) ? card.acceptance : [];
-        const newVerifyCmd = card.verify && typeof card.verify.cmd === "string" ? card.verify.cmd.trim() : "";
-        // 当前卡片实际缺失的三项（服务端视角，逐项判定）
+        // ---- 闸门待补项：服务端从当前卡片内容**幂等派生** ----
+        // 内容判定而非长度判定：acceptance=[""] / [null] 这类「长度>0 但内容无效」
+        // 不得被算作「已补齐」（与 verify.cmd 的 trim 口径保持一致）。
+        const cardHasScope = Array.isArray(card.scope) && card.scope.some(
+          (p) => typeof p === "string" && p.trim() !== "" && p !== "." && p !== ".."
+        );
+        const cardHasAcceptance = Array.isArray(card.acceptance) && card.acceptance.some(
+          (x) => typeof x === "string" && x.trim() !== ""
+        );
+        const cardHasVerify = !!(card.verify && typeof card.verify.cmd === "string" && card.verify.cmd.trim() !== "");
         const currentMissing = [
-          ...(newScope.length === 0 ? ["scope"] : []),
-          ...(newAcceptance.length === 0 ? ["acceptance"] : []),
-          ...(newVerifyCmd === "" ? ["verify.cmd"] : []),
+          ...(!cardHasScope ? ["scope"] : []),
+          ...(!cardHasAcceptance ? ["acceptance"] : []),
+          ...(!cardHasVerify ? ["verify.cmd"] : []),
         ];
 
-        let activationPending;
-        if (a.activation === true) {
-          // 显式占位卡：待补项 = 服务端从这张卡实际缺什么推导出来的。
-          // 若这张占位卡其实已把三项都写全（调用方误标），则不设闸门。
-          activationPending = currentMissing;
+        // activation 标记既可能来自工具参数（结构化提交），也可能来自卡片本身（cardText 提交）。
+        // 两条路径必须一致，否则 cardText 路径可以完全绕开闸门。
+        const isActivation = a.activation === true || card.activation === true;
+
+        // ---- 读-改-写放进跨进程排他锁 ----
+        // 多个 MCP server 进程共享同一 CARLOS_FLOW_HOME 时，未加锁会丢更新：
+        // 后写入者用过期 prevState 算出 pending=[]，而它写的卡片字段仍为空 ⇒ 闸门被绕过。
+        const gated = withStateLock(sessionId, () => {
+          const prev = loadState(sessionId);
+          const wasActivatedBefore = prev.activation_activated === true;
+          const prevPendingBefore = Array.isArray(prev.activation_pending) ? prev.activation_pending : [];
+
+          let activationPending;
+          if (isActivation) {
+            // 显式占位卡：待补项 = 服务端从这张卡实际缺什么推导出来的。
+            activationPending = currentMissing;
+          } else if (wasActivatedBefore) {
+            // 该会话开过占位卡：继续按**当前卡片实际缺什么**锁定。
+            // 幂等派生（而不是「上一轮 pending 传递」），所以即使并发丢更新，
+            // 落盘的 pending 永远与同一份落盘卡片一致，不会出现「卡片空却 pending=[]」。
+            activationPending = currentMissing;
+          } else {
+            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。
+            // 档位必填项已由 validateCard 按 tier 强制（read_only 只要 goal+quote），
+            // 此处再加闸门会误伤 T1 只读调研。
+            activationPending = [];
+          }
+
+          const state = {
+            ...defaultState(),
+            ...prev,
+            card,
+            card_ts: Date.now(),
+            tier,
+            dispatch_count: 0,
+            claimed: false,
+            claimed_role: null,
+            write_files: 0,
+            last_user_ts: Date.now(),
+            bypass: false,
+            verdict: null,
+            completed_ok: false,
+            stale: false,
+            activation_pending: activationPending,
+            // 单调标记：一旦激活过就永不清除
+            activation_activated: isActivation || wasActivatedBefore,
+          };
+          saveState(sessionId, state);
+          return { state, activationPending, wasActivatedBefore, prevPendingBefore };
+        });
+
+        const { state, activationPending, wasActivatedBefore, prevPendingBefore } = gated;
+
+        // 闸门事件：建立 / 保持 / 解除，都要在审计链里留痕。
+        if (isActivation) {
           audit("decision", sessionId, {
             kind: "activation_gate_activated",
             reason: "智能触发占位卡激活（服务端从卡片内容派生待补字段）",
             pending: activationPending,
           });
-        } else if (prevPending.length > 0) {
-          // 闸门已存在：只有 prevPending 里**当前仍然缺失**的字段才算待补。
-          // 半补齐（只补了 scope）不解闸 —— 交集语义。
-          const stillMissing = prevPending.filter((f) => currentMissing.includes(f));
-          if (stillMissing.length > 0) {
-            activationPending = stillMissing;
-            audit("decision", sessionId, {
-              kind: "activation_gate_held",
-              reason: "字段尚未补齐，激活闸门继续保持",
-              pending: stillMissing,
-            });
-          } else {
-            activationPending = [];
-            audit("decision", sessionId, {
-              kind: "activation_gate_unlocked",
-              reason: "字段已补齐，激活闸门解除",
-              released: prevPending,
-            });
-          }
-        } else {
-          // 普通卡（未标 activation，且此前未被闸门锁住）：不上闸门。
-          // 档位必填项已由 validateCard 按 tier 强制（read_only 只要 goal+quote），
-          // 此处再加闸门会误伤 T1 只读调研。
-          activationPending = [];
+        } else if (wasActivatedBefore && prevPendingBefore.length > 0 && activationPending.length === 0) {
+          // 解锁事件统一由「pending 由非空变空」触发，避免被误记成 activated。
+          audit("decision", sessionId, {
+            kind: "activation_gate_unlocked",
+            reason: "字段已补齐，激活闸门解除",
+            released: prevPendingBefore,
+          });
+        } else if (wasActivatedBefore && activationPending.length > 0) {
+          audit("decision", sessionId, {
+            kind: "activation_gate_held",
+            reason: "字段尚未补齐，激活闸门继续保持",
+            pending: activationPending,
+          });
         }
-        const state = {
-          ...defaultState(),
-          ...prev,
-          card,
-          card_ts: Date.now(),
-          tier,
-          dispatch_count: 0,
-          claimed: false,
-          claimed_role: null,
-          write_files: 0,
-          last_user_ts: Date.now(),
-          bypass: false,
-          verdict: null,
-          completed_ok: false,
-          stale: false,
-          activation_pending: activationPending,
-        };
-        saveState(sessionId, state);
 
         audit("run", sessionId, { kind: "record", tier, goal: card.goal });
         audit("decision", sessionId, { kind: "accepted", tier, goal: card.goal });
@@ -211,19 +234,19 @@ const TOOLS = [
 
         // 激活占位卡建立 / 闸门解除都要在审计链里留专属事件，
         // 否则事后无法从 gate-audit 流水回答「这是不是占位卡、有没有解闸过」。
-        if (a.activation === true) {
+        if (isActivation) {
           audit("run", sessionId, {
             kind: "activation",
             tier,
             goal: card.goal,
             pending: activationPending,
           });
-        } else if (prevPending.length > 0 && activationPending.length === 0) {
+        } else if (wasActivatedBefore && prevPendingBefore.length > 0 && activationPending.length === 0) {
           audit("decision", sessionId, {
             kind: "activation_released",
             tier,
             goal: card.goal,
-            released: prevPending,
+            released: prevPendingBefore,
           });
         }
 
