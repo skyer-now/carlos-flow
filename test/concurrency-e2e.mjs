@@ -26,9 +26,13 @@ const REPO_ROOT = resolve(__dirname, "..");
 const SERVER = join(REPO_ROOT, "src", "index.js");
 const QUOTE = "并发回归 请把激活闸门跑通";
 const ROUNDS = Number(process.env.CONCURRENCY_ROUNDS) || 40;
+// 重复组数：单组对「锁失效」这类变异的检出率约 80%，3 组后接近 99%。
+const GROUPS = Number(process.env.CONCURRENCY_GROUPS) || 3;
 
-// 隔离状态目录：绝不污染用户的 ~/.carlos-flow
-const HOME = join(tmpdir(), "carlos-flow-concurrency-home");
+// 隔离状态目录：绝不污染用户的 ~/.carlos-flow。
+// 必须**每次运行唯一**：若复用固定路径，上一次运行残留的 server 进程（kill 不干净）
+// 会与本次运行共享同一 HOME，把状态写进同一目录，造成偶发误判。
+const HOME = join(tmpdir(), `carlos-flow-concurrency-home-${Date.now()}-${process.pid}`);
 try { rmSync(HOME, { recursive: true, force: true }); } catch { /* ignore */ }
 mkdirSync(HOME, { recursive: true });
 
@@ -85,11 +89,15 @@ function readState(sid) {
   } catch { return null; }
 }
 
+const sleepMs = (ms) => {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* ignore */ }
+};
+
 async function main() {
   log("🧪 Carlos Flow 跨进程并发 · 激活闸门回归测试");
   log("=".repeat(60));
   log(`  隔离 CARLOS_FLOW_HOME: ${HOME}`);
-  log(`  轮次: ${ROUNDS}`);
+  log(`  轮次: ${GROUPS} 组 × ${ROUNDS} 轮 = ${GROUPS * ROUNDS}`);
 
   const env = { CARLOS_FLOW_HOME: HOME };
   const c1 = new Mcp(SERVER, env).start();
@@ -99,8 +107,11 @@ async function main() {
 
   let rounds = 0, leaked = 0, exploited = 0;
   const evidences = [];
+  // 重复多组：单组 40 轮的竞态检出率约 80%，多组后任一组出现泄漏即失败。
+  // （单组判定的假警报与真 bug 难以区分，用多组把概率压下去。）
+  for (let g = 0; g < GROUPS; g++) {
   for (let i = 0; i < ROUNDS; i++) {
-    const sid = "conc-" + i + "-" + Date.now();
+    const sid = "conc-g" + g + "-" + i + "-" + Date.now();
     await c1.call("flow_add_user_msg", { sessionId: sid, text: QUOTE });
     const emptyArgs = {
       sessionId: sid, goal: "待补充目标", quote: QUOTE,
@@ -123,17 +134,32 @@ async function main() {
     const ver = st.card && st.card.verify;
     const incomplete = scope.length === 0 || acc.length === 0 || !(ver && ver.cmd);
     if (pending.length === 0 && incomplete) {
+      // 二次确认：等待落盘完全稳定后重读，排除“读到写入中间态”的假象。
+      // 连续两次读到相同的不一致状态，才算真泄漏。
+      sleepMs(250);
+      const st2 = readState(sid);
+      const p2 = st2 && Array.isArray(st2.activation_pending) ? st2.activation_pending : null;
+      const s2 = (st2 && st2.card && st2.card.scope) || [];
+      const a2 = (st2 && st2.card && st2.card.acceptance) || [];
+      const v2 = st2 && st2.card && st2.card.verify;
+      const stillLeak = p2 && p2.length === 0 &&
+        (s2.length === 0 || a2.length === 0 || !(v2 && v2.cmd));
+      if (!stillLeak) continue; // 假警报（未稳定/被后续写入覆盖）
       leaked++;
       const cl = await c1.call("flow_claim", { sessionId: sid, role: "executor", cwd: REPO_ROOT });
       const vd = await c1.call("flow_verdict", { sessionId: sid, verdict: "PASS", notes: "exploit", role: "auditor" });
       if (!isErr(cl) && !isErr(vd)) exploited++;
       if (evidences.length < 3) {
-        evidences.push(`  第${i}轮：pending=[] 但卡片 scope=${JSON.stringify(scope)} acceptance=${JSON.stringify(acc)} verify=${JSON.stringify(ver && ver.cmd)} → claim=${isErr(cl) ? "拒" : "放行"} verdict=${isErr(vd) ? "拒" : "放行"}`);
+        evidences.push(`  组${g}第${i}轮：pending=[] 但卡片 scope=${JSON.stringify(s2)} acceptance=${JSON.stringify(a2)} verify=${JSON.stringify(v2 && v2.cmd)} activation_activated=${st2 && st2.activation_activated} → claim=${isErr(cl) ? "拒" : "放行"} verdict=${isErr(vd) ? "拒" : "放行"}`);
       }
     }
   }
+  }
 
   c1.stop(); c2.stop();
+
+  // 清理本次运行的隔离目录（不影响其他运行的目录）
+  try { rmSync(HOME, { recursive: true, force: true }); } catch { /* ignore */ }
 
   results.total = 3;
   const okNoLeak = leaked === 0;
