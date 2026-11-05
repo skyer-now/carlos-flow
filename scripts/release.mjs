@@ -55,6 +55,27 @@ const step = (msg) => console.log(`\n▶ ${msg}`);
 const ok = (msg) => console.log(`  ✓ ${msg}`);
 
 /**
+ * 跑一条命令；失败时打印**可读**的错误（命令名 + 失败输出末几行），
+ * 而不是把 Node 原始堆栈糊到脸上。发布脚本的错误信息要能直接告诉人下一步做什么。
+ */
+const runOrFail = (cmd, args, opts = {}, label = "") => {
+  try {
+    return run(cmd, args, opts);
+  } catch (e) {
+    const name = label || `${cmd} ${(args || []).join(" ")}`;
+    console.error(`  ✗ ${name} 失败`);
+    const out = `${(e.stdout || "")}${e.stderr || ""}`.trim();
+    const tail = out.split("\n").filter((l) => l.trim()).slice(-12);
+    if (tail.length) {
+      console.error("    ---- 失败输出末段 ----");
+      for (const l of tail) console.error("    " + l);
+      console.error("    ----------------------");
+    }
+    process.exit(1);
+  }
+};
+
+/**
  * 校验一个仓库是否可发布：版本一致 / lock 文件版本一致 / CHANGELOG 顶部版本 / 工作区干净。
  * lock 文件版本不一致会让 release.yml 里的 `npm ci` 直接失败（npm 要求
  * package.json 与 package-lock.json 的 version 一致），所以必须在这里拦住。
@@ -132,19 +153,19 @@ ok("工作区干净");
 step("运行测试套件");
 // 测试脚本依赖 CARLOS_FLOW_MCP_ROOT 定位仓库根目录
 process.env.CARLOS_FLOW_MCP_ROOT = process.env.CARLOS_FLOW_MCP_ROOT || root;
-run("npm", ["run", "test:all"], {
+runOrFail("npm", ["run", "test:all"], {
   cwd: root,
-});
-ok("test:all 通过（smoke + e2e-carlos + p0-gates + trigger-e2e）");
+}, "test:all（smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency）");
+ok("test:all 通过（smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency）");
 
 // 5. 双语 README 一致性（prepublishOnly 也会再查一次）
 step("校验双语 README");
-run("npm", ["run", "check:readme"]);
-ok("README.md / README.zh.md / README.en.md 一致");
+runOrFail("npm", ["run", "check:readme"], {}, "check:readme");
+ok("README.md / README.zh.md / README.en.md 一致 + TRIGGER_GUIDE.md 版本号一致");
 
 // 6. 打包内容检查
 step("检查 npm 包内容");
-const packOut = run("npm", ["pack", "--dry-run"]);
+const packOut = runOrFail("npm", ["pack", "--dry-run"], {}, "npm pack --dry-run");
 const suspicious = packOut
   .split("\n")
   .filter((l) => /\.npmrc|secret\.json|\.b64|fix_|debug_|\.bak|\.patch/.test(l));
@@ -167,9 +188,9 @@ if (includeOpencode) {
   verifyRepo(opencodePath, "carlos-flow-opencode");
   // opencode 也跑一遍自己的测试与文档校验
   process.env.CARLOS_FLOW_MCP_ROOT = opencodePath;
-  run("npm", ["run", "test:all"], { cwd: opencodePath });
+  runOrFail("npm", ["run", "test:all"], { cwd: opencodePath }, "opencode test:all");
   ok("opencode test:all 通过");
-  run("npm", ["run", "check:readme"], { cwd: opencodePath });
+  runOrFail("npm", ["run", "check:readme"], { cwd: opencodePath }, "opencode check:readme");
   ok("opencode check:readme 通过");
   process.env.CARLOS_FLOW_MCP_ROOT = root;
 }
