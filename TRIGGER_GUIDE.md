@@ -9,8 +9,10 @@ Carlos Flow 智能触发引擎是一个三层智能系统，能够自动感知�
 1. **动态上限控制** - 基于会话时长、任务复杂度和触发历史动态调整触发上限
 2. **评分系统** - 对每个用户输入评分：关键词 50 + 上下文 30 + 意图 20，加权后满分 **38**
 3. **决策引擎** - 基于评分和动态上限决定是否触发工作流（四档：`trigger` / `review` / `ignore` / `throttled`）
-4. **用户反馈学习** - 记录用户接受/拒绝，持续优化触发
-5. **零外部依赖** - 纯 JavaScript 实现，无需 npm 包
+4. **激活机制** - 把判定转成**可执行的 MCP 动作序列**：留痕 → 占位卡 → 闸门 → 放行
+5. **会话隔离** - 触发历史与限流状态按 session 分文件存放，多会话互不干扰
+6. **用户反馈学习** - 记录用户接受/拒绝，持续优化触发
+7. **零外部依赖** - 纯 JavaScript 实现，无需 npm 包
 
 ### 系统架构
 
@@ -153,12 +155,26 @@ engine.recordFeedback('negative'); // 用户拒绝
 
 ### 3. 通过 CLI 客户端集成
 
-触发引擎已集成到 `client/carlos.js`：每次调用 MCP 工具前先做一次触发检查，命中时在 stderr 打印评分与置信度。
+触发引擎已集成到 `client/carlos.js`：每次调用 MCP 工具前先做一次触发检查。
+命中后**不只是打印日志**——它会执行[激活流程](#🔁-激活机制判断--动作)，真正把会话推进门禁态。
 
 ```bash
-node client/carlos.js flow_dispatch '{"sessionId":"my-task","role":"executor"}'
-# stderr: [Carlos Trigger] 评分 37 · 置信度 0.9 · 命中 work, flow, dispatch
+# triggerMessage 传入真实用户原话（也可用环境变量 CARLOS_TRIGGER_MESSAGE）
+node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run dispatch workflow"}'
 ```
+
+stderr 输出：
+```
+[Carlos Trigger] 判定触发：评分 37 · 置信度 0.9
+[Carlos Trigger] 已执行激活步骤：flow_add_user_msg（写入用户原话，作为任务卡 quote 锚点校验的数据源）
+[Carlos Trigger] 已执行激活步骤：flow_submit_requirement（开卡：将会话置为已留痕状态，审计链记录 activation 事件）
+
+【Carlos 触发引擎已激活工作流】
+…
+```
+
+> `triggerMessage` 是**客户端专用字段**，不会被透传给 MCP 工具。
+> 不传时退化为用「工具名 + 参数」作为弱信号，只用于演示，不建议生产依赖。
 
 > **当前定位**：触发引擎是**库级能力**（`src/trigger.js`），由客户端集成调用；
 > 它**尚未**作为独立的 MCP 工具暴露给宿主 Agent。如果你需要 `flow_trigger_check` 之类的
@@ -185,7 +201,7 @@ node client/carlos.js flow_dispatch '{"sessionId":"my-task","role":"executor"}'
 
 ```javascript
 if (score >= autoTriggerThreshold && confidence >= 0.8) {
-  // ✅ 自动触发
+  // ✅ 自动触发（进入激活流程）
   decision = 'trigger';
 } else if (score >= triggerThreshold) {
   // ⚠️ 需人工确认
@@ -195,6 +211,89 @@ if (score >= autoTriggerThreshold && confidence >= 0.8) {
   decision = 'ignore';
 }
 ```
+
+另外还有一档：**`throttled`**——决策本来是 `trigger`，但被动态上限或最短间隔拦下。
+**限流时依然返回真实的 `score` / `confidence` / `breakdown`**，不会丢成 0，也不会假装“未评分”。
+
+---
+
+## 🔁 激活机制（判断 → 动作）
+
+决策本身只是判断。**激活机制**负责把判断变成**真实执行的门禁动作**。
+
+### 三个阶段
+
+| 阶段 | 组件 | 产物 |
+|------|------|------|
+| **判断** | `TriggerDecisionEngine.shouldTrigger()` | `decision` + `score` + `confidence` + `breakdown` |
+| **翻译** | `TriggerDecisionEngine.buildActivationPlan()` | 可执行的 MCP 动作序列（每步带 `auto` 标记） |
+| **激活** | `client/carlos.js` 逐步执行 | 会话进入“已留痕”门禁态 |
+
+### 激活计划长什么样
+
+```javascript
+const result = engine.shouldTrigger('run dispatch workflow', { sessionId: 'my-task' });
+
+result.activationPlan = {
+  activated: true,
+  decision: 'trigger',
+  score: 37,
+  confidence: 0.9,
+  matchedKeywords: ['work', 'flow', 'dispatch', 'run'],
+  goal: '执行 Carlos 工作流任务：run dispatch workflow（命中：work, flow, dispatch, run）',
+  steps: [
+    { tool: 'flow_add_user_msg',      auto: true  },  // 自动：留痕用户原话
+    { tool: 'flow_submit_requirement', auto: true  },  // 自动：提交 read_only 占位卡
+    { tool: 'flow_submit_requirement', auto: false,  // 引导：补齐字段后重新提交
+      needsFill: ['scope', 'acceptance', 'verify.cmd'] },
+  ],
+  pendingFields: ['scope', 'acceptance', 'verify.cmd'],
+  prompt: '【Carlos 触发引擎已激活工作流】…',
+};
+```
+
+### 激活的四个实际动作
+
+1. **留痕用户原话** — `flow_add_user_msg`
+   把用户原话写进会话消息文件。它是任务卡 `quote` 锚点校验的**唯一数据源**，必须先于开卡。
+
+2. **提交占位卡** — `flow_submit_requirement`（`activation: true`）
+   以 `read_only` 档提交（只要求 `goal` + `quote`），**会话进入已留痕门禁态**，审计链记录激活事件。
+
+3. **闸门生效** — `activation_pending`
+   状态里记下待补齐字段 `scope` / `acceptance` / `verify.cmd`。
+   在补齐之前，`flow_claim` 与 `flow_dispatch` **一律拒绝派发**：
+
+   ```
+   ERROR: 激活占位卡尚未补齐（待补：scope、acceptance、verify.cmd）。
+   请先补齐后重新调用 flow_submit_requirement，再来领取派发名额。
+   ```
+
+4. **补齐后放行** — 重新提交完整卡
+   Agent 补齐字段后重新调用 `flow_submit_requirement`（**不带** `activation`），
+   `activation_pending` 被清空，门禁解除，可以正常 `flow_claim` / `flow_dispatch`。
+
+### 安全约束
+
+| 约束 | 行为 |
+|------|------|
+| 会话**已有任务卡** | 跳过自动开卡，**不覆盖用户已有任务** |
+| 自动激活**不决定改哪些文件** | 只负责“留痕 + 进入门禁”，`scope` 必须由 Agent 确认 |
+| 目标描述是**推断值** | `goal` 由关键词推导，**标记为占位**，需与用户确认后改写 |
+| `manual` 档 | 只输出建议与补全指引，**不执行任何 MCP 动作** |
+
+### 手动使用激活计划
+
+```javascript
+const plan = result.activationPlan;
+for (const step of plan.steps) {
+  if (!step.auto) continue;        // 只执行参数完整的步骤
+  await callMCP('tools/call', { name: step.tool, arguments: step.args });
+}
+// 然后把 plan.prompt 交给 Agent，让它补齐字段
+```
+
+---
 
 ## 🔄 动态上限计算
 
@@ -346,6 +445,34 @@ state.save(); // 持久化到 disk
 1. 确认 `src/trigger.js` 存在且与 `client/carlos.js` 同版本
 2. 确认客户端用的是**动态 import**（ESM 下 `require()` 不存在，会被 try/catch 静默吞掉）
 3. 直接运行 `node src/trigger.js "你的消息"` 验证引擎本体
+
+### 问题 5: 激活后 `flow_claim` / `flow_dispatch` 被拒
+
+**症状**: `ERROR: 激活占位卡尚未补齐（待补：scope、acceptance、verify.cmd）`
+
+**这不是 bug，是激活闸门在起作用**。自动激活只负责“留痕 + 进入门禁”，
+不知道该改哪些文件，所以必须先补齐字段：
+
+1. 确认目标描述（激活时自动推断的 `goal` 可能不准，需与用户确认后改写）
+2. 补齐 `scope`（只准改动的文件）、`acceptance`（可判定的验收标准）、`verify.cmd`（验证命令）
+3. **重新调用 `flow_submit_requirement`**（不要带 `activation` 参数）——这一步会清空 `activation_pending`
+4. 再调用 `flow_claim` / `flow_dispatch`
+
+查看当前待补字段：
+
+```bash
+node client/carlos.js flow_status '{"sessionId":"my-task"}'
+# → "activation_pending": ["scope", "acceptance", "verify.cmd"]
+```
+
+### 问题 6: 一个会话的触发影响了另一个会话
+
+**症状**: 明明是新会话，却提示“时间间隔不足”
+
+**原因**: 早期版本所有会话共用一个触发状态文件（`trigger-state.json`），跨会话互相限流。
+
+**现状**: 已修复——状态按 session 分文件存放在 `CARLOS_FLOW_HOME/trigger-state/<sessionId>.json`。
+若仍遇到，请确认客户端与 `src/trigger.js` 版本一致（见问题 4）。
 
 ## 📚 相关资源
 

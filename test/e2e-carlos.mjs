@@ -144,6 +144,54 @@ async function main() {
   const landed = fs.existsSync(path.join(runDir, "state.json"));
   check("14. 状态落盘到 FLOW_HOME", landed, runDir);
 
+  // 15. 激活占位卡闸门：占位卡未补齐时 claim / dispatch 必须被拒
+  const ACT_SID = SID + "-act";
+  r = await call("flow_add_user_msg", { sessionId: ACT_SID, text: "run dispatch workflow" });
+  r = await call("flow_submit_requirement", {
+    sessionId: ACT_SID,
+    goal: "执行 Carlos 工作流任务（占位）",
+    quote: "run dispatch workflow",
+    scope: [],
+    acceptance: [],
+    confirmed: false,
+    activation: true,
+  });
+  const actCardOk = r.ok && r.data?.ok === true;
+  const actPending = r.ok ? (r.data?.state?.activation_pending || []) : [];
+  check("15a. 激活占位卡提交成功", actCardOk, actCardOk ? `pending=${actPending.join(",")}` : r.error);
+
+  r = await call("flow_status", { sessionId: ACT_SID });
+  const pendingShown = r.ok && Array.isArray(r.data?.activation_pending) && r.data.activation_pending.length === 3;
+  check("15b. flow_status 暴露 activation_pending", pendingShown, r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
+
+  r = await call("flow_claim", { sessionId: ACT_SID, role: "executor" });
+  const claimBlocked = r.ok === false && /占位卡/.test(r.error || "");
+  check("15c. 占位卡未补齐时 claim 被拒", claimBlocked, r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  r = await call("flow_dispatch", { sessionId: ACT_SID, role: "executor" });
+  const dispatchBlocked = r.ok === false && /占位卡/.test(r.error || "");
+  check("15d. 占位卡未补齐时 dispatch 被拒", dispatchBlocked, r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  // 16. 补齐后重新提交完整卡 → 闸门解除
+  r = await call("flow_submit_requirement", {
+    sessionId: ACT_SID,
+    goal: "给 README 补一段说明",
+    quote: "run dispatch workflow",
+    scope: ["README.md"],
+    acceptance: ["README 含新增段落"],
+    verify: { cmd: "node -e \"process.exit(0)\"" },
+    confirmed: true,
+  });
+  const refillOk = r.ok && r.data?.ok === true && r.data?.tier === "single_file";
+  check("16a. 补齐后重新提交完整卡", refillOk, r.ok ? `tier=${r.data?.tier}` : r.error);
+
+  r = await call("flow_status", { sessionId: ACT_SID });
+  const cleared = r.ok && Array.isArray(r.data?.activation_pending) && r.data.activation_pending.length === 0;
+  check("16b. 补齐后 activation_pending 清空", cleared, r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
+
+  r = await call("flow_claim", { sessionId: ACT_SID, role: "executor" });
+  check("16c. 补齐后 claim 放行", r.ok && r.data?.ok === true, r.ok ? "" : r.error);
+
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
   console.log(`sessionId=${SID}`);

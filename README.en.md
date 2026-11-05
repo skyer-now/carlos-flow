@@ -26,6 +26,22 @@ No more manually saying "run the gate" every time. The engine reads your input, 
 - 🧠 **Learns from feedback**: records accepted / rejected triggers and adjusts positive-negative weights
 - 📦 **Zero external dependencies**: plain JavaScript, no new npm packages
 
+#### 🔁 Decision → Judgment → Activation (the piece that matters most here)
+The earlier implementation only printed a log line when it hit — it never actually started the workflow. That gap is now closed:
+
+| Stage | Action | Real effect |
+|-------|--------|-------------|
+| **Judgment** | L1 cap → L2 scoring → L3 four-way decision | Yields `decision` + `score` + `confidence` + `breakdown` |
+| **Translation** | `buildActivationPlan()` | Turns the verdict into an **executable MCP action sequence** (each step tagged `auto`) |
+| **Activation ①** | `flow_add_user_msg` | The user's own words are recorded and become the anchor source for the card's `quote` |
+| **Activation ②** | `flow_submit_requirement` (`activation: true`) | Submits a `read_only` placeholder card — the session **enters the gated state** |
+| **Gate** | `activation_pending` | Until `scope` / `acceptance` / `verify.cmd` are filled in, `flow_claim` and `flow_dispatch` **refuse to dispatch** |
+| **Release** | Resubmit the complete card | `activation_pending` clears → normal dispatch proceeds |
+
+> Safety constraint: when the session **already has a card**, auto-activation skips card creation (it never overwrites an existing task). Auto-activation only handles "record + enter the gate" — it **never decides which files may change** on the agent's behalf.
+>
+> Also fixed: trigger state was previously kept in **one shared file for all sessions**, so one session could throttle another — it is now stored per session.
+
 ### 🐛 7 real defects fixed
 > These are all reproducible bugs, not "theoretical risks".
 
@@ -103,8 +119,39 @@ npm run test:e2e          # 16-case end-to-end suite
 ---
 ## 🌟 Core capabilities
 #### 🆕 Smart trigger engine — `src/trigger.js`
-> **Three layers of perception**: decides *before* the workflow starts whether this is the moment to run the gate — and shows its reasoning.
+> **Decision → judgment → activation**, end to end: decides *before* the workflow starts whether this is the moment to run the gate, then turns that verdict into **real gate actions**.
 
+##### 🔁 Decision & activation flow
+```mermaid
+flowchart LR
+    U[User input] --> L1{"L1 dynamic cap<br/>still allowed?"}
+    L1 -->|"throttled"| T["throttled<br/>reports the real score<br/>takes no action"]
+    L1 -->|"allowed"| L2{"L2 three-axis score<br/>keyword + context + intent"}
+    L2 -->|"< 10"| I["ignore"]
+    L2 -->|"10 ~ 15"| R["review<br/>suggest manual start"]
+    L2 -->|"≥ 15"| L3{"≥ 25 and<br/>confidence ≥ 0.8?"}
+    L3 -->|"no"| M["manual<br/>advice only<br/>no auto execution"]
+    L3 -->|"yes"| A["✅ activated"]
+    A --> A1["flow_add_user_msg<br/>record the user text"]
+    A1 --> A2["flow_submit_requirement<br/>submit a read_only placeholder card"]
+    A2 --> G{"Gate<br/>scope / acceptance / verify.cmd<br/>filled in?"}
+    G -->|"not yet"| B["flow_claim / flow_dispatch<br/>refuse to dispatch"]
+    G -->|"yes"| C["normal dispatch<br/>executor → auditor"]
+```
+
+##### What activation actually does (it is not just a log line)
+| Stage | Action | Effect |
+|-------|--------|--------|
+| **Judgment** | L1 cap → L2 scoring → L3 four-way decision | Produces `decision` + `score` + `confidence` + `breakdown` |
+| **Translation** | `buildActivationPlan()` | Turns the verdict into an **executable MCP action sequence** |
+| **Activation ①** | `flow_add_user_msg` | The user's own words become the anchor source for the card's `quote` |
+| **Activation ②** | `flow_submit_requirement` (`activation: true`) | Submits a `read_only` placeholder card — the session **enters the gated state** |
+| **Gate** | `activation_pending` | Until `scope` / `acceptance` / `verify.cmd` are filled in, `flow_claim` and `flow_dispatch` **refuse to dispatch** |
+| **Release** | Resubmit the complete card | `activation_pending` clears → normal dispatch proceeds |
+
+> Safety constraint: when the session **already has a card**, auto-activation skips card creation (it never overwrites an existing task). Auto-activation only handles "record + enter the gate" — it **never decides which files may change** on the agent's behalf.
+
+##### Code usage
 ```javascript
 import TriggerEngine from './src/trigger.js';
 
@@ -117,13 +164,31 @@ const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 }
 //   score: 37,                  // weighted total, 0~38
 //   confidence: 0.9,
 //   breakdown: { keyword: {...}, context: {...}, intent: {...} },
-//   action: { type: 'workflow_trigger', recommendedAction: 'auto' }
+//   action: { type: 'workflow_trigger', recommendedAction: 'auto' },
+//   activationPlan: {           // ← the verdict translated into actions
+//     activated: true,
+//     steps: [
+//       { tool: 'flow_add_user_msg',      auto: true  },
+//       { tool: 'flow_submit_requirement', auto: true  },
+//       { tool: 'flow_submit_requirement', auto: false, needsFill: ['scope','acceptance','verify.cmd'] }
+//     ],
+//     pendingFields: ['scope', 'acceptance', 'verify.cmd'],
+//     prompt: '【Carlos 触发引擎已激活工作流】…'
+//   }
 // }
 ```
 
+##### One-line activation from the CLI
+```bash
+# pass the real user text via triggerMessage (or the CARLOS_TRIGGER_MESSAGE env var)
+node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"add parameter validation to the login endpoint"}'
+```
+
+##### Engine highlights
 - **L1 dynamic cap** — `5 + sessionHours×0.5 + complexity×2 − triggersInWindow×0.3`, capped at 15
 - **L2 trigger scoring** — keywords (0–50, weight 0.5) + context (0–30, weight 0.3) + intent (0–20, weight 0.2), weighted maximum **38**
 - **L3 decision engine** — four outcomes: `trigger` / `review` (borderline, needs confirmation) / `ignore` (below 10) / `throttled` (rate-limited)
+- **Per-session isolation** — trigger history and throttling state are stored **per session file**, so sessions never throttle each other
 - **Tunable thresholds** — `triggerThreshold: 15`, `autoTriggerThreshold: 25`, `lowConfidenceThreshold: 10`
 - **Zero external dependencies** — plain JavaScript, no new npm packages
 - **Learns from feedback** — records accepted / rejected triggers and adjusts positive-negative weights

@@ -5,7 +5,24 @@
 
 ---
 
-## [2.5.5] - 2026-11-05 — 智能触发引擎正式发布 + 7 项缺陷修复
+## [2.5.5] - 2026-11-05 — 智能触发引擎正式发布 + 激活机制 + 9 项缺陷修复
+
+### 🔁 激活机制 | Activation（本次最关键的一环）
+
+> 之前的实现只会在命中时**打一行日志**，并没有真的启动工作流。
+> 现在「动态决策 → 判断 → 激活」形成闭环，判定会转成**真实执行**的门禁动作。
+
+| 阶段 | 动作 | 实际效果 |
+|------|------|---------|
+| **判断** | L1 上限 → L2 评分 → L3 四档决策 | 得到 `decision` + `score` + `confidence` + `breakdown` |
+| **翻译** | `buildActivationPlan()` | 判定转成**可执行的 MCP 动作序列**（每步带 `auto` 标记） |
+| **激活 ①** | `flow_add_user_msg` | 用户原话入库，成为任务卡 `quote` 的锚点数据源 |
+| **激活 ②** | `flow_submit_requirement`（`activation: true`） | 提交 `read_only` 占位卡，**会话进入已留痕门禁态** |
+| **闸门** | `activation_pending` | 字段补齐前，`flow_claim` / `flow_dispatch` **一律拒绝派发** |
+| **放行** | 重新提交完整卡（不带 `activation`） | `activation_pending` 清空 → 正常派发 |
+
+**安全约束**：会话已有任务卡时跳过自动开卡（不覆盖已有任务）；自动激活不决定改哪些文件；
+推断出的 `goal` 标记为占位需确认；`manual` 档只给建议不执行任何动作。
 
 ### ✨ 新增 | Added
 
@@ -17,6 +34,9 @@
 | L2 | `TriggerScorer` | 触发评分：关键词 (0-50, 权重 0.5) + 上下文 (0-30, 权重 0.3) + 意图 (0-20, 权重 0.2) = 加权满分 **38** |
 | L3 | `TriggerDecisionEngine` | 决策引擎：`trigger` / `review` / `ignore` / `throttled` |
 
+- **激活计划**：`buildActivationPlan()` 把决策翻译成可执行动作序列，含 `steps` / `pendingFields` / `prompt`
+- **激活闸门**：`flow_submit_requirement` 新增 `activation` 参数；`flow_claim` / `flow_dispatch` 检查 `activation_pending` 拒绝派发
+- **状态可见**：`flow_status` 新增 `activation_pending` 字段
 - **配置系统**：`trigger-config.json` 可覆盖全部阈值与权重（`triggerThreshold: 15`、`autoTriggerThreshold: 25`、`lowConfidenceThreshold: 10`）
 - **状态持久化**：触发历史落在 `CARLOS_FLOW_HOME`，不污染仓库目录
 - **用户反馈学习**：接受/拒绝行为驱动权重调整
@@ -32,7 +52,7 @@
 
 ### 🐛 修复 | Fixed
 
-> 以下 7 项均为**真实可复现的缺陷**，在本次发布前由独立验证发现并修复。
+> 以下 9 项均为**真实可复现的缺陷**，在本次发布前由独立验证发现并修复。
 
 | # | 问题 | 影响 | 修复 |
 |---|------|------|------|
@@ -43,6 +63,8 @@
 | T-5 | `src/trigger.js` 的 CLI 入口用 `import.meta.url.endsWith(process.argv[1])` | `file:///` 前缀导致永不匹配，**独立测试模式从未运行过** | 改用 `fileURLToPath` + `resolve` 路径比较 |
 | T-6 | `shouldTrigger()` 在限流分支提前 `return`，未先计算评分 | 评分丢成 `0`、置信度缺失，调用方无法判断真实意图强度 | 改为先算评分再判限流，`throttled` 分支也返回 `score` / `confidence` / `breakdown` |
 | T-7 | `test:trigger` 把结果文件写入发布目录 `test/trigger-e2e-results.json` | **污染 npm 发布内容** | 改为写入系统临时目录 |
+| T-8 | 命中自动激活后，客户端只打印一行日志，**没有执行任何实际动作** | 「自动触发」名不副实，工作流并不会真的启动 | 新增 `buildActivationPlan()` + 客户端逐步执行激活步骤 + `activation_pending` 派发闸门 |
+| T-9 | 触发状态所有会话共用一个 `trigger-state.json` | **一个会话的限流会影响另一个会话**，多场景下莫名“时间间隔不足” | 状态按 session 分文件存放到 `CARLOS_FLOW_HOME/trigger-state/<sessionId>.json` |
 
 ### 🔒 安全 | Security
 
@@ -82,9 +104,9 @@
 | 套件 | 结果 |
 |------|------|
 | `npm test`（smoke） | SMOKE_OK |
-| `npm run test:e2e`（e2e-carlos） | **16/16 通过** |
+| `npm run test:e2e`（e2e-carlos） | **23/23 通过**（新增 7 项激活闸门用例） |
 | `npm run test:p0`（p0-gates） | **10/10 通过** |
-| `npm run test:trigger`（trigger-e2e） | **15/15 通过** |
+| `npm run test:trigger`（trigger-e2e） | **19/19 通过**（新增 4 项激活用例 + 1 项会话隔离回归） |
 
 ---
 

@@ -51,6 +51,9 @@ export function defaultState() {
     verdict: null,
     completed_ok: false,
     stale: false,
+    // 智能触发引擎激活占位卡时尚待补齐的字段。
+    // 非空时 flow_claim / flow_dispatch 会拒绝派发，防止空卡片被直接派发。
+    activation_pending: [],
   };
 }
 

@@ -282,6 +282,80 @@ const testCases = [
       return !leaked && atHome;
     }
   },
+  // ---- 动态决策 → 判断 → 激活 闭环 ----
+  {
+    name: '激活: trigger 决策生成完整激活计划',
+    test: () => {
+      const sid = 'act-plan-' + Date.now();
+      const engine = TriggerEngine.create(sid);
+      const result = engine.shouldTrigger('run dispatch workflow', { sessionId: sid }, sid);
+      const plan = result.activationPlan;
+      console.log(`  [DEBUG] decision=${result.decision}, activated=${plan && plan.activated}`);
+      if (!plan || plan.activated !== true) return false;
+      // 必须包含：自动留痕 → 自动开卡 → 引导补齐
+      const tools = plan.steps.map((s) => s.tool);
+      const autoCount = plan.steps.filter((s) => s.auto === true).length;
+      const manualStep = plan.steps.find((s) => s.auto === false);
+      console.log(`  [DEBUG] steps=${tools.join(',')} auto=${autoCount} pending=${plan.pendingFields.join(',')}`);
+      return (
+        tools.includes('flow_add_user_msg') &&
+        tools.includes('flow_submit_requirement') &&
+        autoCount === 2 &&
+        !!manualStep &&
+        manualStep.needsFill.includes('scope') &&
+        plan.pendingFields.length === 3 &&
+        typeof plan.prompt === 'string' && plan.prompt.length > 0
+      );
+    }
+  },
+  {
+    name: '激活: 非 trigger 决策不激活',
+    test: () => {
+      const sid = 'act-none-' + Date.now();
+      const engine = TriggerEngine.create(sid);
+      const result = engine.shouldTrigger('hello there', { sessionId: sid }, sid);
+      const plan = result.activationPlan;
+      console.log(`  [DEBUG] decision=${result.decision}, activated=${plan && plan.activated}`);
+      return result.shouldTrigger === false && !!plan && plan.activated === false;
+    }
+  },
+  {
+    name: '激活: 激活动作包含 quote 锚点数据源',
+    test: () => {
+      const sid = 'act-anchor-' + Date.now();
+      const engine = TriggerEngine.create(sid);
+      const message = 'run dispatch workflow';
+      const result = engine.shouldTrigger(message, { sessionId: sid }, sid);
+      const step = result.activationPlan.steps.find((s) => s.tool === 'flow_add_user_msg');
+      const cardStep = result.activationPlan.steps.find((s) => s.tool === 'flow_submit_requirement' && s.auto === true);
+      console.log(`  [DEBUG] quote=${cardStep && cardStep.args.quote}`);
+      return (
+        !!step && step.args.text === message &&
+        !!cardStep && cardStep.args.quote === message &&
+        cardStep.args.activation === true
+      );
+    }
+  },
+  {
+    name: '回归: 不同会话的触发状态互相隔离',
+    test: () => {
+      const a = 'iso-A-' + Date.now();
+      const b = 'iso-B-' + Date.now();
+      const engineA = TriggerEngine.create(a);
+      // 会话 A 触发一次，撑满最短间隔
+      engineA.shouldTrigger('run dispatch workflow', { sessionId: a }, a);
+      const engineB = TriggerEngine.create(b);
+      const resultB = engineB.shouldTrigger('run dispatch workflow', { sessionId: b }, b);
+      const stateAFile = join(
+        process.env.CARLOS_FLOW_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.carlos-flow'),
+        'trigger-state', a + '.json'
+      );
+      const exists = existsSync(stateAFile);
+      console.log(`  [DEBUG] B decision=${resultB.decision}, A独立文件=${exists}`);
+      // 会话 B 不应被会话 A 的限流影响
+      return resultB.decision === 'trigger' && exists === true;
+    }
+  },
 ];
 
 // 运行测试

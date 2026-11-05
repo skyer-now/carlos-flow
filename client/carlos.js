@@ -56,25 +56,73 @@ async function checkTrigger(message = '') {
     return { triggered: false, reason: '触发引擎未加载' };
   }
 
+  const sessionId = args.sessionId || 'default';
+
   try {
-    const result = TriggerEngine.processUserMessage(message, { 
-      sessionId: args.sessionId || 'default',
-      complexity: args.complexity || 1.0 
+    const result = TriggerEngine.processUserMessage(message, {
+      sessionId,
+      complexity: args.complexity || 1.0
     });
 
-    if (result.shouldTrigger) {
-      console.error('[Carlos Trigger] 检测到工作流触发意图!');
-      console.error(`评分: ${result.score}, 置信度: ${result.confidence}`);
-      
-      // 如果是自动触发，直接调用 dispatch 工具
-      if (result.action && result.action.recommendedAction === 'auto') {
-        console.error('[Carlos Trigger] 自动触发工作流...');
-        // 这里可以添加自动调用 flow_dispatch 的逻辑
-        return { triggered: true, result, autoTrigger: true };
+    if (!result.shouldTrigger) {
+      // 未达触发阈值：只如实报告评分，不做任何动作
+      if (result.decision === 'review' || result.decision === 'throttled') {
+        console.error(`[Carlos Trigger] 未激活（${result.decision}）：评分 ${result.score} · 置信度 ${result.confidence} · ${result.reason}`);
+      }
+      return { triggered: false, result };
+    }
+
+    console.error(`[Carlos Trigger] 判定触发：评分 ${result.score} · 置信度 ${result.confidence}`);
+
+    const plan = result.activationPlan;
+    if (!plan || !plan.activated) {
+      return { triggered: true, result };
+    }
+
+    if (result.action && result.action.recommendedAction !== 'auto') {
+      // manual 档：只给出建议，不自动执行
+      console.error('[Carlos Trigger] 建议手动启动门禁（未达自动激活阈值）');
+      console.error(plan.prompt);
+      return { triggered: true, result, plan, autoTrigger: false };
+    }
+
+    // ---- 自动激活：执行激活计划中参数完整的步骤 ----
+    const executed = [];
+    for (const step of plan.steps) {
+      if (!step.auto) continue;
+
+      // 安全约束：会话已有卡片时，不自动开卡（避免覆盖用户已有任务）
+      if (step.tool === 'flow_submit_requirement') {
+        const st = await callMCP('tools/call', { name: 'flow_status', arguments: { sessionId } });
+        const statusText = st.result?.content?.[0]?.text || '';
+        let hasCard = false;
+        try { hasCard = JSON.parse(statusText).has_card === true; } catch {}
+        if (hasCard) {
+          console.error('[Carlos Trigger] 会话已有任务卡，跳过自动开卡（不覆盖已有任务）');
+          break;
+        }
+      }
+
+      try {
+        const r = await callMCP('tools/call', { name: step.tool, arguments: step.args });
+        const isErr = r.result?.isError === true;
+        const txt = r.result?.content?.[0]?.text || '';
+        if (isErr) {
+          console.error(`[Carlos Trigger] 激活步骤 ${step.tool} 失败：${txt.split('\n')[0]}`);
+        } else {
+          executed.push(step.tool);
+          console.error(`[Carlos Trigger] 已执行激活步骤：${step.tool}（${step.reason}）`);
+        }
+      } catch (e) {
+        console.error(`[Carlos Trigger] 激活步骤 ${step.tool} 异常：${e.message}`);
       }
     }
 
-    return { triggered: false };
+    console.error('');
+    console.error(plan.prompt);
+    console.error('');
+
+    return { triggered: true, result, plan, autoTrigger: true, executed };
   } catch (e) {
     console.error('[Carlos Trigger] 触发检查失败:', e.message);
     return { triggered: false, error: e.message };
@@ -253,11 +301,14 @@ async function main() {
     }
   }
 
-  // 智能触发检查
-  const message = toolName + ' ' + argsJson;
-  const triggerResult = await checkTrigger(message);
+  // 智能触发检查：真实输入来源优先取显式传入的用户原话
+  //   node carlos.js flow_status '{"sessionId":"x","triggerMessage":"把登录接口加上参数校验"}'
+  //   或环境变量 CARLOS_TRIGGER_MESSAGE
+  const triggerMessage = args.triggerMessage || process.env.CARLOS_TRIGGER_MESSAGE || (toolName + ' ' + argsJson);
+  delete args.triggerMessage; // triggerMessage 是客户端专用字段，不透传给 MCP 工具
+  const triggerResult = await checkTrigger(triggerMessage);
   if (triggerResult.autoTrigger) {
-    console.error('[Carlos Trigger] 触发引擎已自动处理工作流，继续调用本工具...');
+    console.error('[Carlos Trigger] 工作流已激活（会话进入已留痕状态），继续执行本次工具调用...');
   }
 
   // Call tool

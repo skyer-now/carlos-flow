@@ -11,7 +11,21 @@ const TRIGGER_HOME = process.env.CARLOS_FLOW_HOME
   ? process.env.CARLOS_FLOW_HOME
   : (process.env.CARLOS_FLOW_ROOT || join(os.homedir(), '.carlos-flow'));
 const CONFIG_PATH = join(TRIGGER_HOME, 'trigger-config.json');
-const STATE_PATH = join(TRIGGER_HOME, 'trigger-state.json');
+const STATE_DIR = join(TRIGGER_HOME, 'trigger-state');
+const DEFAULT_STATE_PATH = join(TRIGGER_HOME, 'trigger-state.json');
+
+// 按会话隔离状态文件：不同会话的触发历史 / 限流状态互不影响。
+// sessionId 会被清洗成安全的文件名，避免路径穿越。
+function sanitizeSessionId(sessionId) {
+  const raw = String(sessionId || 'default');
+  const safe = raw.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80);
+  return safe || 'default';
+}
+
+function statePathFor(sessionId) {
+  if (!sessionId || sessionId === 'default') return DEFAULT_STATE_PATH;
+  return join(STATE_DIR, sanitizeSessionId(sessionId) + '.json');
+}
 
 // 确保目录存在（FLOW_HOME 可能尚未创建）
 function ensureHome() {
@@ -60,6 +74,43 @@ if (existsSync(CONFIG_PATH)) {
   }
 }
 
+// ============ 激活动作辅助 ============
+
+/**
+ * 从用户原话与命中关键词推导一个粗粒度目标。
+ * 引擎无法知道真实目标，因此这只是**占位推断**，必须由 Agent 确认或改写。
+ */
+function deriveGoal(message, matchedKeywords = []) {
+  const text = String(message || '').trim();
+  const head = text.split(/[\n\r。.;；!?！？]/)[0].trim();
+  const kw = matchedKeywords.length ? `（命中：${matchedKeywords.join(', ')}）` : '';
+  const base = head ? head.slice(0, 60) : '待补充目标';
+  return `执行 Carlos 工作流任务：${base}${kw}`;
+}
+
+/**
+ * 生成给 Agent 的补全指令（激活后的第一件事）。
+ */
+function buildActivationPrompt(result, goal, matchedKeywords) {
+  return [
+    '【Carlos 触发引擎已激活工作流】',
+    '',
+    `判定：${result.decision}（评分 ${result.score} / 置信度 ${result.confidence}）`,
+    `命中关键词：${matchedKeywords.length ? matchedKeywords.join(', ') : '（无直接关键词命中）'}`,
+    `推断目标（占位，需确认或改写）：${goal}`,
+    '',
+    '已完成：用户原话已留痕，占位任务卡已提交，会话已进入门禁状态。',
+    '',
+    '接下来请：',
+    '1. 与用户确认上面的目标描述是否准确；',
+    '2. 补齐 scope（只准改动的文件）、acceptance（可判定的验收标准）、verify.cmd（验证命令）；',
+    '3. 重新调用 flow_submit_requirement 提交完整任务卡（会替换占位卡）；',
+    '4. 再调用 flow_claim / flow_dispatch 派发。',
+    '',
+    '注意：在 scope / acceptance / verify.cmd 补齐之前，flow_claim 与 flow_dispatch 会拒绝派发。',
+  ].join('\n');
+}
+
 // ============ 状态管理 ============
 class TriggerState {
   constructor(sessionId = 'default') {
@@ -76,13 +127,16 @@ class TriggerState {
 
   save() {
     ensureHome();
-    writeFileSync(STATE_PATH, JSON.stringify(this, null, 2));
+    const target = statePathFor(this.sessionId);
+    try { mkdirSync(dirname(target), { recursive: true }); } catch { /* 目录已存在 */ }
+    writeFileSync(target, JSON.stringify(this, null, 2));
   }
 
   static load(sessionId = 'default') {
-    if (existsSync(STATE_PATH)) {
+    const target = statePathFor(sessionId);
+    if (existsSync(target)) {
       try {
-        const loaded = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+        const loaded = JSON.parse(readFileSync(target, 'utf8'));
         const state = new TriggerState(sessionId);
         Object.assign(state, loaded);
         // sessionId 由调用方决定，不允许被持久化文件覆盖
@@ -390,7 +444,7 @@ class TriggerDecisionEngine {
     // 2. 检查是否可以触发（上限和时间间隔）
     const canTrigger = this.triggerManager.canTrigger();
     if (!canTrigger.can) {
-      return {
+      const throttled = {
         shouldTrigger: false,
         reason: canTrigger.reason,
         score,
@@ -399,6 +453,9 @@ class TriggerDecisionEngine {
         decision: 'throttled',
         action: null,
       };
+      // 被限流时不激活（决策不是 trigger）
+      throttled.activationPlan = this.buildActivationPlan(throttled, message, sessionId);
+      return throttled;
     }
 
     // 3. 决策逻辑
@@ -427,7 +484,7 @@ class TriggerDecisionEngine {
       });
     }
 
-    return {
+    const outcome = {
       shouldTrigger: decision === 'trigger',
       decision,
       score,
@@ -436,6 +493,9 @@ class TriggerDecisionEngine {
       breakdown: impulseResult.breakdown,
       reason: decision === 'trigger' ? '触发评分达标' : `评分${score}低于阈值${threshold}`
     };
+    // 决策 → 激活：把判定翻译成可执行的 MCP 动作序列
+    outcome.activationPlan = this.buildActivationPlan(outcome, message, sessionId);
+    return outcome;
   }
 
   /**
@@ -450,6 +510,79 @@ class TriggerDecisionEngine {
       triggeredBy: breakdown.keyword.matchedKeywords.join(', '),
       confidence: impulseResult.confidence,
       recommendedAction: score >= config.autoTriggerThreshold ? 'auto' : 'manual'
+    };
+  }
+
+  /**
+   * 构建激活计划（动态决策 → 判断 → 激活 的最后一跳）
+   *
+   * 判断层已经决定了「要不要触发」，这一层把决定翻译成**可执行的 MCP 动作序列**：
+   *   - 自动步骤（auto: true）：参数完整，可直接执行
+   *   - 引导步骤（auto: false）：需要 Agent 补齐字段后再执行
+   *
+   * 激活后不会直接放开派发：占位卡会被标记 activation_pending，
+   * 在 scope / acceptance / verify.cmd 补齐之前，flow_claim / flow_dispatch 一律拒绝。
+   */
+  buildActivationPlan(result, message, sessionId = 'default') {
+    if (!result || result.decision !== 'trigger') {
+      return { activated: false, reason: '决策不是 trigger，不激活' };
+    }
+
+    const matched = (result.breakdown && result.breakdown.keyword &&
+      result.breakdown.keyword.matchedKeywords) || [];
+    const goal = deriveGoal(message, matched);
+
+    // 自动步骤 1：写入用户原话（quote 锚点的唯一数据源，必须先于开卡）
+    const steps = [
+      {
+        tool: 'flow_add_user_msg',
+        auto: true,
+        reason: '写入用户原话，作为任务卡 quote 锚点校验的数据源',
+        args: { sessionId, text: String(message || '') },
+      },
+      // 自动步骤 2：提交 read_only 占位卡 —— 会话进入「已留痕」门禁态
+      {
+        tool: 'flow_submit_requirement',
+        auto: true,
+        reason: '开卡：将会话置为已留痕状态，审计链记录 activation 事件',
+        args: {
+          sessionId,
+          goal,
+          quote: String(message || ''),
+          scope: [],
+          acceptance: [],
+          confirmed: false,
+          activation: true,
+        },
+      },
+      // 引导步骤：Agent 补齐后重新提交完整卡
+      {
+        tool: 'flow_submit_requirement',
+        auto: false,
+        reason: '补齐字段后重新提交完整任务卡，替换占位卡',
+        needsFill: ['scope', 'acceptance', 'verify.cmd'],
+        args: {
+          sessionId,
+          goal,
+          quote: String(message || ''),
+          scope: ['<只准改动的文件>'],
+          acceptance: ['<可判定的验收标准>'],
+          verify: { cmd: '<验证命令>' },
+          confirmed: false,
+        },
+      },
+    ];
+
+    return {
+      activated: true,
+      decision: result.decision,
+      score: result.score,
+      confidence: result.confidence,
+      matchedKeywords: matched,
+      goal,
+      steps,
+      pendingFields: ['scope', 'acceptance', 'verify.cmd'],
+      prompt: buildActivationPrompt(result, goal, matched),
     };
   }
 

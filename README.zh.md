@@ -26,6 +26,23 @@
 - 🧠 **反馈学习**：记录你接受 / 拒绝的触发，动态调整正负反馈权重
 - 📦 **零外部依赖**：纯 JavaScript，不新增任何 npm 包
 
+#### 🔁 动态决策 → 判断 → 激活（本次最关键的一环）
+过去的实现只会在命中时**打一行日志**，并没有真的启动工作流。现在这一环补齐了：
+
+| 阶段 | 动作 | 实际效果 |
+|------|------|---------|
+| **判断** | L1 上限 → L2 评分 → L3 四档决策 | 得到 `decision` + `score` + `confidence` + `breakdown` |
+| **翻译** | `buildActivationPlan()` | 判定转成**可执行的 MCP 动作序列**（带 `auto` 标记） |
+| **激活 ①** | `flow_add_user_msg` | 用户原话入库，成为任务卡 `quote` 的锚点数据源 |
+| **激活 ②** | `flow_submit_requirement`（`activation: true`） | 提交 `read_only` 占位卡，**会话进入已留痕门禁态** |
+| **闸门** | `activation_pending` | 字段补齐前，`flow_claim` / `flow_dispatch` **一律拒绝派发** |
+| **放行** | 重新提交完整卡 | 补齐后 `activation_pending` 清空 → 正常派发 |
+
+> 安全约束：会话**已有任务卡**时自动激活会跳过开卡（不覆盖用户已有任务）；
+> 自动激活只负责「留痕 + 进入门禁」，**绝不代替 Agent 决定改哪些文件**。
+>
+> 顺带修复：**触发状态原先所有会话共用一个文件**，会话之间互相限流 —— 现在按 session 分文件存放。
+
 ### 🐛 修复 7 项真实缺陷
 > 这些都是能复现的实际问题，不是"可能的隐患"。
 
@@ -103,8 +120,40 @@ npm run test:e2e          # 16 项端到端用例
 ---
 ## 🌟 核心能力
 #### 🆕 智能触发引擎 — `src/trigger.js`
-> **三层智能感知**：在工作流启动前自动判断"现在是不是该走门禁"，并给出可解释的评分依据。
+> **动态决策 → 判断 → 激活** 的完整闭环：自动判断"现在是不是该走门禁"，并把判断转成**真实执行**的门禁动作。
 
+##### 🔁 决策与激活全流程
+```mermaid
+flowchart LR
+    U[用户输入] --> L1{"L1 动态上限<br/>还能触发吗？"}
+    L1 -->|"已限流"| T["throttled<br/>如实返回评分<br/>不动作"]
+    L1 -->|"可以"| L2{"L2 三维评分<br/>关键词+上下文+意图"}
+    L2 -->|"< 10"| I["ignore<br/>忽略"]
+    L2 -->|"10 ~ 15"| R["review<br/>建议手动启动"]
+    L2 -->|"≥ 15"| L3{"≥ 25 且<br/>置信度 ≥ 0.8？"}
+    L3 -->|"否"| M["manual<br/>给建议<br/>不自动执行"]
+    L3 -->|"是"| A["✅ 激活"]
+    A --> A1["flow_add_user_msg<br/>留痕用户原话"]
+    A1 --> A2["flow_submit_requirement<br/>提交 read_only 占位卡"]
+    A2 --> G{"闸门<br/>scope/acceptance/verify.cmd<br/>补齐了吗？"}
+    G -->|"没补齐"| B["flow_claim / flow_dispatch<br/>拒绝派发"]
+    G -->|"补齐了"| C["正常派发<br/>executor → auditor"]
+```
+
+##### 激活做了什么（不是只打一行日志）
+| 阶段 | 动作 | 效果 |
+|------|------|------|
+| **判断** | L1 上限 → L2 评分 → L3 四档决策 | 得到 `decision` + `score` + `confidence` + `breakdown` |
+| **翻译** | `buildActivationPlan()` | 判定转成**可执行的 MCP 动作序列**（带 `auto` 标记） |
+| **激活 ①** | `flow_add_user_msg` | 用户原话入库，成为任务卡 `quote` 的锚点数据源 |
+| **激活 ②** | `flow_submit_requirement`（`activation: true`） | 提交 `read_only` 占位卡，**会话进入已留痕门禁态**，审计链记录激活事件 |
+| **闸门** | `activation_pending` | 在 `scope` / `acceptance` / `verify.cmd` 补齐前，`flow_claim` 与 `flow_dispatch` **一律拒绝派发** |
+| **放行** | 重新提交完整卡 | 补齐字段后重新提交 → `activation_pending` 清空 → 正常派发 |
+
+> 💡 **安全约束**：会话**已有任务卡**时自动激活会跳过开卡（不覆盖用户已有任务）；
+> 自动激活只负责"留痕 + 进入门禁"，**绝不代替 Agent 决定改哪些文件**。
+
+##### 代码用法
 ```javascript
 import TriggerEngine from './src/trigger.js';
 
@@ -117,13 +166,38 @@ const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 }
 //   score: 37,                  // 0~38 加权总分
 //   confidence: 0.9,
 //   breakdown: { keyword: {...}, context: {...}, intent: {...} },
-//   action: { type: 'workflow_trigger', recommendedAction: 'auto' }
+//   action: { type: 'workflow_trigger', recommendedAction: 'auto' },
+//   activationPlan: {           // ← 判断 → 激活 的翻译结果
+//     activated: true,
+//     steps: [
+//       { tool: 'flow_add_user_msg',      auto: true  },
+//       { tool: 'flow_submit_requirement', auto: true  },
+//       { tool: 'flow_submit_requirement', auto: false, needsFill: ['scope','acceptance','verify.cmd'] }
+//     ],
+//     pendingFields: ['scope', 'acceptance', 'verify.cmd'],
+//     prompt: '【Carlos 触发引擎已激活工作流】…'
+//   }
 // }
 ```
 
+##### CLI 一键激活
+```bash
+# triggerMessage 传入真实用户原话（也可用环境变量 CARLOS_TRIGGER_MESSAGE）
+node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"把登录接口加上参数校验"}'
+```
+输出（stderr）：
+```
+[Carlos Trigger] 判定触发：评分 37 · 置信度 0.9
+[Carlos Trigger] 已执行激活步骤：flow_add_user_msg（写入用户原话…）
+[Carlos Trigger] 已执行激活步骤：flow_submit_requirement（开卡：会话置为已留痕状态…）
+【Carlos 触发引擎已激活工作流】…请补齐 scope / acceptance / verify.cmd 后重新提交…
+```
+
+##### 引擎要点
 - **L1 动态上限** — `5 + 会话时长×0.5 + 复杂度×2 − 窗口内已触发×0.3`，封顶 15
 - **L2 触发评分** — 关键词（0~50，权重 0.5）+ 上下文（0~30，权重 0.3）+ 意图（0~20，权重 0.2），加权满分 **38**
 - **L3 决策引擎** — 四档：`trigger`（达标触发）/ `review`（临界待确认）/ `ignore`（低于 10 分忽略）/ `throttled`（限流）
+- **会话隔离** — 触发历史与限流状态**按 session 分文件存放**，多会话互不干扰
 - **阈值可配** — `triggerThreshold: 15`、`autoTriggerThreshold: 25`、`lowConfidenceThreshold: 10`
 - **零外部依赖** — 纯 JavaScript，不新增任何 npm 包
 - **用户反馈学习** — 记录接受 / 拒绝，动态调整正负反馈权重

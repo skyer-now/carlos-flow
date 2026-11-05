@@ -78,6 +78,7 @@ const TOOLS = [
         cwd: { type: "string", description: "工作目录，默认 process.cwd()" },
         userMessages: { type: "array", items: { type: "string" }, description: "用户原话列表（可选，会与自动读取的结果合并）" },
         cardText: { type: "string", description: "完整任务卡文本，含 FLOW_CARD: 前缀；提供时优先于结构化参数" },
+        activation: { type: "boolean", description: "true = 这是智能触发引擎自动开的占位卡；在 scope/acceptance/verify.cmd 补齐前会阻止派发" },
       },
     },
     handler: async (args) => {
@@ -137,6 +138,11 @@ const TOOLS = [
         card.env = { git_head: gitHead(cwd), project: cwd };
 
         const prev = loadState(sessionId);
+        // 激活占位卡：记录待补齐字段，闸门未解除前不允许派发。
+        // 重新提交完整卡（不带 activation）即视为补齐，清空待办。
+        const activationPending = a.activation === true
+          ? ["scope", "acceptance", "verify.cmd"]
+          : [];
         const state = {
           ...defaultState(),
           ...prev,
@@ -152,6 +158,7 @@ const TOOLS = [
           verdict: null,
           completed_ok: false,
           stale: false,
+          activation_pending: activationPending,
         };
         saveState(sessionId, state);
 
@@ -203,6 +210,11 @@ const TOOLS = [
         }
         if (state.dispatch_count >= MAX_DISPATCH) {
           return fail("派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。");
+        }
+        // 激活占位卡闸门：占位卡未补齐字段时不允许领取派发名额
+        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
+          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "）。请先补齐后重新调用 flow_submit_requirement，再来领取派发名额。");
         }
 
         // Phase 1-1: 不在 claim 时增加 dispatch_count，改在 dispatch 时增加
@@ -264,6 +276,11 @@ const TOOLS = [
         if (!state.card) return fail("没有留痕，不允许派发。");
         if (isStale(state)) return fail("留痕已过期（stale），请重新提交任务卡。");
         if (state.dispatch_count >= MAX_DISPATCH) return fail("派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。");
+        // 激活占位卡闸门：占位卡未补齐字段时不允许派发
+        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
+          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "）。请先补齐后重新调用 flow_submit_requirement，再来派发。");
+        }
         // 必须先 flow_claim 领取派发名额（claimed 标记由 claim 设置）
         if (state.claimed !== true) return fail("未 claim，请先 flow_claim 领取派发名额。");
 
@@ -389,6 +406,7 @@ const TOOLS = [
           bypass: !!state.bypass,
           card: state.card,
           card_ts: state.card_ts,
+          activation_pending: Array.isArray(state.activation_pending) ? state.activation_pending : [],
         };
         if (state.card && !state.verdict) result.unreviewed = true;
         return ok(result);
