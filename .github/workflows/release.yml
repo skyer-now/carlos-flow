@@ -24,7 +24,20 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - run: npm ci
-      - run: npm test
+      # 发布前跑**完整**测试套件，而不是只跑 smoke。
+      # test:all = smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency
+      # （含跨进程并发回归——它曾抓出真实的激活闸门竞态绕过，不可省）
+      - run: npm run test:all
+      # tag 与 package.json 版本必须一致，否则发出去的包版本对不上
+      - name: 校验 tag 与 package.json 版本一致
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          PKG_VER="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "✗ tag ${GITHUB_REF_NAME} 与 package.json 版本 ${PKG_VER} 不一致"
+            exit 1
+          fi
+          echo "✓ tag ${GITHUB_REF_NAME} == package.json ${PKG_VER}"
       - run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
