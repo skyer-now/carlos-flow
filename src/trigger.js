@@ -16,6 +16,10 @@ const DEFAULT_STATE_PATH = join(TRIGGER_HOME, 'trigger-state.json');
 
 // 按会话隔离状态文件：不同会话的触发历史 / 限流状态互不影响。
 // sessionId 会被清洗成安全的文件名，避免路径穿越。
+// Windows 保留设备名（CON / PRN / AUX / NUL / COM1-9 / LPT1-9 …）
+// 即便带扩展名（CON.json）在 NTFS 上也无法创建，必须避开。
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 function sanitizeSessionId(sessionId) {
   const raw = String(sessionId || 'default');
   // 1) 清洗路径分隔符与非法字符（斜杠、背杠、冒号等）
@@ -23,6 +27,8 @@ function sanitizeSessionId(sessionId) {
   // 2) 不允许以点开头（避免 "." / ".." 语义）
   safe = safe.replace(/^\.+/, '_');
   if (!safe) safe = 'default';
+  // 3) 避开 Windows 保留设备名
+  if (WINDOWS_RESERVED.test(safe)) safe = '_' + safe;
   // 3) 追加原始 id 的短哈希：清洗后可能撞名（"a/b" 与 "a_b" 都会变成 "a_b"），
   //    用哈希保证不同 session 不会共用同一份状态文件
   let h = 0;
@@ -48,8 +54,7 @@ const DEFAULT_CONFIG = {
   maxTriggerLimit: 15,              // 最大触发上限
   sessionLengthCoeff: 0.5,          // 会话时长系数（每小时增加 0.5 个）
   complexityCoeff: 2,               // 任务复杂度系数
-  historyCoeff: 0.3,                // 历史触发频率系数
-  decayRate: 0.98,                  // 历史触发衰减率
+  historyCoeff: 0.3,                // 历史触发频率系数（惩罚项）
 
   // 评分参数
   keywordWeights: {
@@ -105,23 +110,34 @@ function deriveGoal(message, matchedKeywords = []) {
 /**
  * 生成给 Agent 的补全指令（激活后的第一件事）。
  */
-function buildActivationPrompt(result, goal, matchedKeywords) {
+function buildActivationPrompt(result, goal, matchedKeywords, mode = 'auto') {
+  const isAuto = mode === 'auto';
   return [
-    '【Carlos 触发引擎已激活工作流】',
+    isAuto ? '【Carlos 触发引擎已激活工作流】' : '【Carlos 触发引擎建议手动启动门禁】',
     '',
     `判定：${result.decision}（评分 ${result.score} / 置信度 ${result.confidence}）`,
     `命中关键词：${matchedKeywords.length ? matchedKeywords.join(', ') : '（无直接关键词命中）'}`,
     `推断目标（占位，需确认或改写）：${goal}`,
     '',
-    '已完成：用户原话已留痕，占位任务卡已提交，会话已进入门禁状态。',
+    isAuto
+      ? '已完成：用户原话已留痕，占位任务卡已提交，会话已进入门禁状态。'
+      : '尚未执行任何动作（未留痕、未开卡）—— 本次评分未达自动激活条件，请自行决定是否启动门禁。',
     '',
     '接下来请：',
     '1. 与用户确认上面的目标描述是否准确；',
-    '2. 补齐 scope（只准改动的文件）、acceptance（可判定的验收标准）、verify.cmd（验证命令）；',
-    '3. 重新调用 flow_submit_requirement 提交完整任务卡（会替换占位卡）；',
-    '4. 再调用 flow_claim / flow_dispatch 派发。',
+    isAuto
+      ? '2. 补齐 scope（只准改动的文件）、acceptance（可判定的验收标准）、verify.cmd（验证命令）；'
+      : '2. 若决定启动门禁：先 flow_add_user_msg 留痕，再 flow_submit_requirement 提交任务卡（需含 scope / acceptance / verify.cmd）；',
+    isAuto
+      ? '3. 重新调用 flow_submit_requirement 提交完整任务卡（会替换占位卡）；'
+      : '3. 再调用 flow_claim / flow_dispatch 派发。',
+    isAuto
+      ? '4. 再调用 flow_claim / flow_dispatch 派发。'
+      : '',
     '',
-    '注意：在 scope / acceptance / verify.cmd 补齐之前，flow_claim 与 flow_dispatch 会拒绝派发。',
+    isAuto
+      ? '注意：在 scope / acceptance / verify.cmd 补齐之前，flow_claim 与 flow_dispatch 会拒绝派发。'
+      : '注意：本次建议不会自动提交任何卡片。',
   ].join('\n');
 }
 
@@ -143,8 +159,19 @@ class TriggerState {
   save() {
     ensureHome();
     const target = statePathFor(this.sessionId);
-    try { mkdirSync(dirname(target), { recursive: true }); } catch { /* 目录已存在 */ }
-    writeFileSync(target, JSON.stringify(this, null, 2));
+    try {
+      mkdirSync(dirname(target), { recursive: true });
+    } catch { /* 目录已存在或不可写 */ }
+    try {
+      writeFileSync(target, JSON.stringify(this, null, 2));
+    } catch (e) {
+      // 状态落盘失败（如保留设备名、权限不足、磁盘满）不能让引擎整体崩掉：
+      // 降级为「本次不持久化」，主流程继续。
+      try {
+        process.stderr.write(`[carlos-trigger] 状态保存失败（${this.sessionId}）：${e && e.message ? e.message : e}
+`);
+      } catch { /* stderr 不可写 */ }
+    }
   }
 
   static load(sessionId = 'default') {
@@ -182,7 +209,6 @@ class DynamicTriggerManager {
    */
   calculateDynamicLimit(sessionComplexity = 1.0) {
     const sessionAge = this.state.getSessionAgeHours();
-    const historyFactor = this.calculateHistoryFactor();
     const recentCount = this.countTriggersInWindow();
 
     // 上限 = 基础 + 会话时长增益 + 复杂度增益 - 近期频繁触发惩罚
@@ -203,31 +229,6 @@ class DynamicTriggerManager {
   countTriggersInWindow() {
     const windowStart = Date.now() - (config.triggerWindowMinutes * 60 * 1000);
     return this.state.triggerHistory.filter(t => t.timestamp > windowStart).length;
-  }
-
-  /**
-   * 计算历史触发频率因子（衰减加权计数，用于动态上限微调）
-   * 注意：返回的是加权“次数”而非平均值，量级与上限可比。
-   */
-  calculateHistoryFactor() {
-    const now = Date.now();
-    const windowStart = now - (config.triggerWindowMinutes * 60 * 1000);
-    
-    // 过滤窗口内的触发记录
-    const recentTriggers = this.state.triggerHistory.filter(t => t.timestamp > windowStart);
-    
-    if (recentTriggers.length === 0) return 0;
-    
-    // 应用时间衰减后累加（次数量级，与上限可比）
-    let weightedSum = 0;
-    
-    recentTriggers.forEach(trigger => {
-      const age = now - trigger.timestamp;
-      const decay = Math.pow(config.decayRate, age / (60 * 1000)); // 按分钟衰减
-      weightedSum += decay;
-    });
-    
-    return weightedSum;
   }
 
   /**
@@ -263,7 +264,7 @@ class DynamicTriggerManager {
   /**
    * 检查是否可以触发
    */
-  canTrigger() {
+  canTrigger(sessionComplexity = 1.0) {
     // 检查最小时间间隔
     const timeSinceLastTrigger = Date.now() - this.state.lastTriggerTime;
     if (timeSinceLastTrigger < config.minTriggerIntervalSeconds * 1000) {
@@ -271,7 +272,7 @@ class DynamicTriggerManager {
     }
 
     // 检查动态上限：用窗口内的实际触发次数与上限比较
-    const currentLimit = this.calculateDynamicLimit();
+    const currentLimit = this.calculateDynamicLimit(sessionComplexity);
     const triggerCountInWindow = this.countTriggersInWindow();
     
     if (triggerCountInWindow >= currentLimit) {
@@ -475,7 +476,8 @@ class TriggerDecisionEngine {
     const score = impulseResult.score;
 
     // 2. 检查是否可以触发（上限和时间间隔）
-    const canTrigger = this.triggerManager.canTrigger();
+    const complexity = Number(context.complexity) || 1.0;
+    const canTrigger = this.triggerManager.canTrigger(complexity);
     if (!canTrigger.can) {
       const throttled = {
         shouldTrigger: false,
@@ -547,7 +549,8 @@ class TriggerDecisionEngine {
       score,
       triggeredBy: breakdown.keyword.matchedKeywords.join(', '),
       confidence: impulseResult.confidence,
-      recommendedAction: score >= config.autoTriggerThreshold ? 'auto' : 'manual'
+      // 自动档需要「分数达标」且「置信度足够」两道条件
+      recommendedAction: (score >= config.autoTriggerThreshold && impulseResult.confidence >= 0.8) ? 'auto' : 'manual'
     };
   }
 
@@ -620,7 +623,10 @@ class TriggerDecisionEngine {
       goal,
       steps,
       pendingFields: ['scope', 'acceptance', 'verify.cmd'],
-      prompt: buildActivationPrompt(result, goal, matched),
+      prompt: buildActivationPrompt(
+        result, goal, matched,
+        (result.action && result.action.recommendedAction) === 'auto' ? 'auto' : 'manual'
+      ),
     };
   }
 

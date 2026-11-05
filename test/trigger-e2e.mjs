@@ -363,9 +363,11 @@ const testCases = [
   {
     name: '回归: 清洗后同形的 sessionId 不共用状态文件',
     test: () => {
-      // "col/a" 与 "col_a" 清洗后都变成 "col_a"——若不加哈希后缀会撞名
-      const p = 'col/' + Date.now();
-      const q = 'col_' + Date.now();
+      // "col/a" 与 "col_a" 清洗后都变成 "col_<同一时间戳>"——
+      // 必须用**同一个**时间戳，否则两次 Date.now() 相差 1ms 就不是同形，测试会假绿。
+      const stamp = Date.now();
+      const p = 'col/' + stamp;
+      const q = 'col_' + stamp;
       const engineP = TriggerEngine.create(p);
       engineP.shouldTrigger('run dispatch workflow', { sessionId: p }, p);
       const engineQ = TriggerEngine.create(q);
@@ -380,6 +382,25 @@ const testCases = [
       console.log(`  [DEBUG] Q decision=${resultQ.decision}, col_前缀文件数=${pFiles.length}`);
       // 两个同形 id 必须落在不同文件上，且互不干扰
       return distinct && resultQ.decision === 'trigger';
+    }
+  },
+  {
+    name: '回归: Windows 保留设备名不会导致状态保存异常',
+    test: () => {
+      // CON / NUL / AUX / COM1 在 NTFS 上即使带扩展名也无法创建；
+      // 旧实现会让 writeFileSync 抛异常 → 引擎静默失效。
+      const names = ['CON', 'NUL', 'aux', 'COM1'];
+      const results = names.map((n) => {
+        try {
+          const eng = TriggerEngine.create(n + '-' + Date.now());
+          eng.triggerManager.state.save();
+          return true;
+        } catch (e) {
+          return false;
+        }
+      });
+      console.log(`  [DEBUG] 保留名保存结果=${results.join(',')}`);
+      return results.every(Boolean);
     }
   },
   {

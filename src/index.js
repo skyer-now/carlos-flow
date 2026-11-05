@@ -153,16 +153,48 @@ const TOOLS = [
         const stillMissing = prevPending.filter((f) => !filled[f]);
 
         let activationPending;
+
+        // 计算当前卡片在提交时的缺失字段（服务端派生）
+        const currentMissing = [
+          ...(!card.scope || card.scope.length === 0 ? ["scope"] : []),
+          ...(!card.acceptance || card.acceptance.length === 0 ? ["acceptance"] : []),
+          ...(!card.verify || typeof card.verify.cmd !== "string" || card.verify.cmd.trim() === "" ? ["verify.cmd"] : []),
+        ];
+
         if (a.activation === true) {
-          activationPending = ["scope", "acceptance", "verify.cmd"];
-        } else if (prevPending.length > 0 && stillMissing.length > 0) {
-          // 半补齐不算补齐：例如只补了 scope、acceptance 仍空、verify.cmd 仍缺，
-          // 此时必须继续拦住派发与裁定，否则会出现「未写验收标准、未跑验证命令就完成」。
-          activationPending = stillMissing;
+          // 显式占位卡激活，使用当前缺失字段
+          activationPending = currentMissing;
           audit("decision", sessionId, {
-            kind: "activation_gate_held",
-            reason: "字段尚未补齐，激活闸门继续保持",
-            pending: stillMissing,
+            kind: "activation_gate_activated",
+            reason: "智能触发占位卡激活",
+            pending: activationPending,
+          });
+        } else if (prevPending.length > 0) {
+          // 检查补齐状态
+          const stillMissing = prevPending.filter((f) => !currentMissing.includes(f));
+          if (stillMissing.length > 0) {
+            // 半补齐不算补齐：例如只补了 scope、acceptance 仍空、verify.cmd 仍缺，
+            // 此时必须继续拦住派发与裁定，否则会出现「未写验收标准、未跑验证命令就完成」。
+            activationPending = stillMissing;
+            audit("decision", sessionId, {
+              kind: "activation_gate_held",
+              reason: "字段尚未补齐，激活闸门继续保持",
+              pending: stillMissing,
+            });
+          } else {
+            activationPending = [];
+            audit("decision", sessionId, {
+              kind: "activation_gate_unlocked",
+              reason: "字段已补齐，激活闸门解除",
+            });
+          }
+        } else if (currentMissing.length > 0) {
+          // 服务端派生审批 pending：如果没有 prior 状态但当前卡片不完整，则激活门
+          activationPending = currentMissing;
+          audit("decision", sessionId, {
+            kind: "activation_gate_activated",
+            reason: "服务端从卡片内容派生激活",
+            pending: currentMissing,
           });
         } else {
           activationPending = [];

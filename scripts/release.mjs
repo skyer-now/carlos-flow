@@ -3,6 +3,12 @@
 //
 // 用法：
 //   node scripts/release.mjs --version 2.5.5
+//   node scripts/release.mjs --version 2.5.5 --include-opencode
+//   node scripts/release.mjs --version 2.5.5 --dry-run
+//   node scripts/release.mjs --version 2.5.5 --include-opencode --dry-run
+//
+// 用法：
+//   node scripts/release.mjs --version 2.5.5
 //   node scripts/release.mjs --version 2.5.5 --dry-run
 //
 // 前置条件（需已具备）：
@@ -24,6 +30,7 @@ const version = (() => {
   return i > 0 ? process.argv[i + 1] : null;
 })();
 const dryRun = process.argv.includes("--dry-run");
+const includeOpencode = process.argv.includes("--include-opencode");
 
 if (!version) {
   console.error("用法: node scripts/release.mjs --version <x.y.z> [--dry-run]");
@@ -131,3 +138,29 @@ ok(`${tag} 已推送（release workflow 将自动创建 GitHub Release 并发布
 step("完成");
 console.log(`  GitHub Release + npm 发布由 .github/workflows/release.yml 在 tag 推送后自动执行。`);
 console.log(`  关注 CI：https://github.com/${pkg.repository.url.split("github.com/")[1]?.replace(".git", "") || "skyer-now/carlos-flow-" + pkg.name.split("-").pop()}/actions`);
+
+// 8. 发布 opencode（如需要）
+if (includeOpencode) {
+  const opencodePath = resolve(root, '..', 'carlos-flow-opencode');
+  if (!existsSync(opencodePath)) {
+    console.error(`  ✗ 未找到 opencode 仓库: ${opencodePath}`);
+    process.exit(1);
+  }
+  step(`发布 opencode v${version}`);
+  try {
+    run("git", ["push", "origin", "main"], { cwd: opencodePath });
+    ok("opencode main 已推送");
+  } catch (e) {
+    console.error("  ✗ opencode 推送失败：", e.stderr ? e.stderr.toString().trim() : e.message);
+    process.exit(1);
+  }
+  const tag = `v${version}`;
+  try {
+    run("git", ["tag", tag], { cwd: opencodePath });
+    ok(`opencode 已打 tag ${tag}`);
+  } catch (e) {
+    console.log(`  · opencode tag ${tag} 已存在，跳过`);
+  }
+  run("git", ["push", "origin", tag], { cwd: opencodePath });
+  ok(`${tag} 已推送 opencode`);
+}

@@ -69,4 +69,30 @@ if (!existsSync(EN)) {
   }
 }
 
+// ---- 3. TRIGGER_GUIDE.md ----
+const TRIGGER_GUIDE = path.join(root, "TRIGGER_GUIDE.md");
+if (!existsSync(TRIGGER_GUIDE)) {
+  log(false, "TRIGGER_GUIDE.md is missing");
+} else {
+  const guide = readFileSync(TRIGGER_GUIDE, "utf8");
+  log(true, "TRIGGER_GUIDE.md exists");
+
+  // 3.1 检查版本号与 package.json 一致
+  const pkgVersion = (() => {
+    try {
+      const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+      return pkg.version;
+    } catch (e) {
+      return null;
+    }
+  })();
+  const versionMatch = guide.match(/^##\s*\[(\d+\.\d+\.\d+)\]/m);
+  const versionInGuide = versionMatch ? versionMatch[1] : null;
+  if (pkgVersion && versionInGuide) {
+    log(versionInGuide === pkgVersion, `TRIGGER_GUIDE.md version is ${versionInGuide} vs package.json ${pkgVersion}`);
+  } else if (!pkgVersion || !versionInGuide) {
+    log(false, "Could not extract version for comparison in TRIGGER_GUIDE.md or package.json");
+  }
+}
+
 process.exit(failed ? 1 : 0);
