@@ -383,22 +383,25 @@ class TriggerDecisionEngine {
    * 基于评分和动态上限决定是否触发
    */
   shouldTrigger(message, context = {}, sessionId = 'default') {
-    // 1. 检查是否可以触发（上限和时间间隔）
+    // 1. 先计算触发评分（即使被限流，评分与置信度也要如实返回，不能丢成 0/undefined）
+    const impulseResult = this.scorer.calculateImpulseScore(message, context, sessionId);
+    const score = impulseResult.score;
+
+    // 2. 检查是否可以触发（上限和时间间隔）
     const canTrigger = this.triggerManager.canTrigger();
     if (!canTrigger.can) {
-      return { 
-        shouldTrigger: false, 
-        reason: canTrigger.reason, 
-        score: 0,
-        decision: 'throttled'
+      return {
+        shouldTrigger: false,
+        reason: canTrigger.reason,
+        score,
+        confidence: impulseResult.confidence,
+        breakdown: impulseResult.breakdown,
+        decision: 'throttled',
+        action: null,
       };
     }
 
-    // 2. 计算触发评分
-    const impulseResult = this.scorer.calculateImpulseScore(message, context, sessionId);
-    
     // 3. 决策逻辑
-    const score = impulseResult.score;
     const threshold = score >= config.autoTriggerThreshold && impulseResult.confidence >= 0.8 
       ? config.autoTriggerThreshold 
       : config.triggerThreshold;

@@ -5,6 +5,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -20,7 +21,8 @@ const STATE_DIR = process.env.CARLOS_FLOW_HOME
   ? process.env.CARLOS_FLOW_HOME
   : join(REPO_ROOT, '.carlos-flow');
 const STATE_FILE = join(STATE_DIR, 'trigger-state.json');
-const REPORT_FILE = join(__dirname, 'trigger-e2e-results.json');
+// 报告路径：写入临时目录，不污染发布目录（发布目录应保持干净）
+const REPORT_FILE = join(tmpdir(), 'carlos-flow-trigger-e2e-results.json');
 
 // 清理状态文件
 function clearState() {
@@ -349,7 +351,6 @@ async function runTests() {
 
   // 保存报告
   try {
-    mkdirSync(STATE_DIR, { recursive: true });
     writeFileSync(REPORT_FILE, JSON.stringify(results, null, 2));
     console.log(`\n📁 详细结果已保存至: ${REPORT_FILE}`);
   } catch (e) {
