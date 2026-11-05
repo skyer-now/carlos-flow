@@ -71,9 +71,10 @@ const verifyRepo = (repoRoot, label) => {
     process.exit(1);
   }
   const lockPath = resolve(repoRoot, "package-lock.json");
+  let lockVer = null;
   if (existsSync(lockPath)) {
     const lock = JSON.parse(readFileSync(lockPath, "utf8"));
-    const lockVer = lock.version || (lock.packages && lock.packages[""] && lock.packages[""].version);
+    lockVer = lock.version || (lock.packages && lock.packages[""] && lock.packages[""].version);
     if (lockVer !== rPkg.version) {
       console.error(`  ✗ ${label}: package-lock.json 版本是 ${lockVer}，与 package.json ${rPkg.version} 不一致`);
       console.error(`    （release.yml 的 \`npm ci\` 会因此失败，请先同步 lock 文件版本）`);
