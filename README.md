@@ -3,7 +3,7 @@
 > **面向 AI 编码 Agent 的机械门禁**：留痕 → 派发 → 验证 → 裁定 → 审计 → 还原
 > 把"相信 Agent"变成"验证 Agent"——机器级 scope 限制、真实命令执行、防篡改审计链。
 **语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🎯 为什么选择 Carlos Flow？
@@ -31,7 +31,7 @@ Carlos Flow 是**机械性的**。约束写在代码里，不写在散文里。
 | **独立复核** | ✅ 内置 `auditor` 角色 | ❌ 无 | ❌ 可选 |
 | **快照 + 还原** | ✅ 自动、原子计划 | ❌ 无 | ❌ 手动 `git revert` |
 | **守护进程生命周期** | ✅ 全自动（Cindy 版） | ❌ 手动 | ❌ 手动 |**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🚀 30 秒快速开始
@@ -49,10 +49,19 @@ cp .env.example .env      # 编辑：CARLOS_FLOW_MCP_ROOT、CARLOS_FLOW_HOME
 npm test                  # 冒烟测试（完全隔离）
 npm run test:e2e          # 16 项端到端用例
 ```**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🌟 核心能力
+#### 🔥 v2.5.5 新增：智能触发引擎
+> **三层智能触发系统**：在工作流集中之前自动感知场景意图，减少不必要的手动启动。
+- **L1 动态上限** - 基于会话时长、任务复杂度和历史触发频率动态调整触发上限
+- **L2 触发评分** - 对每个消息评分 (0-100)：关键词 50 分 + 上下文 30 分 + 意图 20 分
+- **L3 决策引擎** - 基于评分和动态上限决定触发 (`trigger`/`review`/`ignore`)
+- **零外部依赖** - 纯 JavaScript 实现，无需 npm 包
+- **用户反馈学习** - 记录接受/拒绝，持续优化触发
+> 详细文档：[TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
+
 ### 1️⃣ 真实验证 — `flow_run_verify`
 ```typescript
 const result = await runVerifyCommand(card.verify.cmd, cwd);
@@ -87,7 +96,7 @@ const result = verifyAuditChain({ sinceIndex: 0 });
 - 独立的四段合同，强制自行取证
 - Auditor 必须自己跑 `git status --porcelain` / `git diff`
 - 裁定枚举严格：`PASS` / `DIRECTION` / `LOCAL`**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 📖 典型场景
@@ -120,7 +129,7 @@ flowchart LR
 - 同一套流程，由 CI 驱动
 - 裁定结果可阻断合并
 - 审计日志归档以备合规**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🏗️ 架构
@@ -148,7 +157,7 @@ flowchart TB
 | 密钥存储 | **Cindy 加密保险库**，代码零明文 | 明文配置（用户自行管理） |
 | rea 集成 | 另行注册 rea MCP server（需 `REA_MCP_ROOT`/`GHIDRA_HOME`） | 另行注册 rea MCP server |
 | 适用场景 | Cindy App 用户 | OpenCode 2.2.2+ 用户 |**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🛠️ 14 个工具
@@ -181,7 +190,7 @@ flowchart TB
 |------|------|----------|
 | `flow_bypass` | 免检开关（需 `confirmed`） | `sessionId`, `bypass`, `confirmed` |
 > 完整工具参考：运行时调用 `flow_protocol`，它是权威的机器可读规范。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## ⚙️ 环境变量
@@ -195,7 +204,7 @@ flowchart TB
 | `JAVA_HOME` | ❌ | JDK 21 安装目录 | `D:/dev-env/jdk-21.0.12.1+1` |
 | `NODE_PATH` | ❌ | Node.js 可执行文件路径（默认 `node`） | `node` |
 > **提示**：插件设置页修改后需**完全退出 Cindy 重启**生效。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🧪 测试
@@ -205,7 +214,7 @@ npm run test:e2e  # 16 项端到端用例
 npm run test:rea  # 8 项 rea Ghidra 真实分析
 ```
 CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request 运行。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 📋 变更日志
@@ -223,7 +232,7 @@ CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request
 | 🐛 修复 | 免检状态在新派发时自动清零 |
 | 🐛 修复 | 过期卡 / 配额 / 裁定枚举 / 参数校验 |
 > ⚠️ **v2.5.1 存在 18 项 P0 缺陷**，请升级到 **v2.5.2 或更高版本**。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## ❓ 常见问题
@@ -234,17 +243,17 @@ CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request
 | 审计链校验失败 | 检查 `CARLOS_FLOW_HOME` 权限，或删除 `audit/` 重建 |
 | 验证命令超时 | `verify.cmd` 超过 60s 会被熔断，建议拆成快速命令 |
 | scope 越界误报 | `scope` 用相对路径，`git diff --name-only` 需一致 |**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 📄 许可证
 MIT —— 见 [LICENSE](LICENSE)**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🤝 贡献
 欢迎 PR！请先跑通 `npm test` 和 `npm run test:e2e`。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.3 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 **用 OpenCode？** → [carlos-flow-opencode](https://github.com/skyer-now/carlos-flow-opencode) —— 纯 stdio，无 Bridge，配置走 `.mcprc` / `opencode.json`。

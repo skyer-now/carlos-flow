@@ -1,7 +1,7 @@
 // Carlos Flow - 端到端冒烟测试（Node ESM，零外部依赖）
 // 运行: node scripts/smoke.js
 //
-// 隔离：CARLOS_FLOW_HOME 指向临时目录，绝不碰真实的 D:/opencode-backups。
+// 隔离：CARLOS_FLOW_HOME 指向临时目录，绝不碰真实的用户目录。
 
 import fs from 'node:fs';
 import os from 'node:os';

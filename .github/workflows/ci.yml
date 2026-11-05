@@ -19,6 +19,20 @@ jobs:
         run: node --version && npm --version
       - run: npm install
       - run: npm test
+      - name: E2E (Carlos workflow)
+        run: npm run test:e2e
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home
+      - name: P0 gates
+        run: npm run test:p0
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home
+      - name: Trigger engine E2E
+        run: npm run test:trigger
+        env:
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home
       - name: Security audit
         run: npm audit --audit-level=high || true
       - name: Build check (no build step for ESM)

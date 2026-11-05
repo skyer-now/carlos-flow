@@ -5,6 +5,76 @@
 
 ---
 
+## [2.5.5] - 2026-11-05 — 智能触发引擎正式发布 + 5 项缺陷修复
+
+### ✨ 新增 | Added
+
+**智能触发引擎**：三层智能触发系统（零外部依赖，纯 JavaScript）
+
+| 层级 | 组件 | 说明 |
+|------|------|------|
+| L1 | `DynamicTriggerManager` | 动态触发上限：会话时长、任务复杂度、近期触发频率 |
+| L2 | `TriggerScorer` | 触发评分：关键词 (0-50) + 上下文 (0-30) + 意图 (0-20) = 0-100 |
+| L3 | `TriggerDecisionEngine` | 决策引擎：`trigger` / `review` / `ignore` / `throttled` |
+
+- **配置系统**：`trigger-config.json` 可覆盖全部阈值与权重
+- **状态持久化**：触发历史落在 `CARLOS_FLOW_HOME`，不污染仓库目录
+- **用户反馈学习**：接受/拒绝行为驱动权重调整
+- **详细文档**：[TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
+
+**测试套件**
+
+- `test/trigger-e2e.mjs`：15 项触发引擎用例（含 4 项回归用例）
+- `npm run test:all`：串联 smoke + e2e-carlos + p0-gates + trigger-e2e
+
+### 🐛 修复 | Fixed
+
+> 以下 5 项均为**真实可复现的缺陷**，在本次发布前由独立验证发现并修复。
+
+| # | 问题 | 影响 | 修复 |
+|---|------|------|------|
+| T-1 | `client/carlos.js` 是 ESM 模块却使用 `require()` 加载触发引擎 | 异常被 catch 吞掉，**触发引擎集成完全失效（死代码）** | 改用 `await import(pathToFileURL(...))` |
+| T-2 | `canTrigger()` 用 `calculateHistoryFactor()`（返回 0~1 加权均值）与上限 5~15 比较 | **上限检查永远不触发**，限流形同虚设 | 新增 `countTriggersInWindow()` 返回窗口内实际次数 |
+| T-3 | 动态上限公式中历史因子为**加项** | 触发越多上限越高，**封顶逻辑自我抵消** | 改为惩罚项：近期触发越频繁，上限越低 |
+| T-4 | `processUserMessage()` 硬编码 `sessionId='default'`，忽略 `context.sessionId` | 多会话场景状态串扰 | 按 `context.sessionId` 创建引擎并透传 |
+| T-5 | `src/trigger.js` 的 CLI 入口用 `import.meta.url.endsWith(process.argv[1])` | `file:///` 前缀导致永不匹配，**独立测试模式从未运行过** | 改用 `fileURLToPath` + `resolve` 路径比较 |
+
+### 🔒 安全 | Security
+
+| # | 问题 | 修复 |
+|---|------|------|
+| S-1 | `.gitignore` 末行为 `*.tar.gz.npmrc.local`（粘连），导致 `.npmrc.local`（含 npm token）**未被忽略** | 拆分为独立规则，并补充 `.npmrc.*.local` |
+| S-2 | 一次性修复脚本（`fix_*.mjs`、`debug_*.mjs` 等 42 个）与 `.b64`、`secret.json` 等临时文件混入仓库 | 加入 `.gitignore` 忽略规则 |
+| S-3 | 触发器状态文件默认写入当前工作目录 | 改为与 `state.js` 一致的 `CARLOS_FLOW_HOME` 约定 |
+
+### 🔧 变更 | Changed
+
+- 触发引擎 E2E 测试迁入 `test/trigger-e2e.mjs`，纳入 npm scripts
+- README / CHANGELOG / package.json 版本号统一为 **2.5.5**
+- `carlos-flow-cindy` 与 `carlos-flow-opencode` 的 `src/` 保持逐文件一致
+
+### ✅ 验证 | Verification
+
+| 套件 | 结果 |
+|------|------|
+| `npm test`（smoke） | SMOKE_OK |
+| `npm run test:e2e`（e2e-carlos） | **16/16 通过** |
+| `npm run test:p0`（p0-gates） | **10/10 通过** |
+| `npm run test:trigger`（trigger-e2e） | **15/15 通过** |
+
+---
+
+## [2.5.4] - 2026-11-04 — 智能绑定图标修复与文档标准化
+
+### 🎨 界面修复 | UI Fixes
+
+- **README 徽章**：移除 Shield.IO 图像，改用纯文本标签，解决乱码/方框显示问题
+- **多语言导航**：添加 [中文](README.zh.md) / [English](README.en.md) 语言栏
+
+> 🚨 **注意**：v2.5.2 及更早版本存在 5 处致命语法错误（MCP Server 无法启动），**强烈建议升级到 2.5.3+**。
+
+---
+
 ## [2.5.3] - 2026-11-04 — 致命语法错误修复 + 门禁真验证
 
 ### 🚨 致命修复 | Critical Fixes
@@ -113,6 +183,13 @@
 
 ## 升级指南 | Upgrade Guide
 
+### 从 2.5.4 → 2.5.5
+
+1. **更新包**：`npm install -g carlos-flow-cindy@2.5.5`
+2. **新特性**：智能触发引擎自动加载，配置 `trigger-config.json` 可调阈值
+3. **零破坏性**：完全向后兼容；配置文件不存在时使用默认参数
+4. **行为变更**：触发上限现在会随近期触发频率收紧（之前形同虚设）
+
 ### 从 2.5.1 → 2.5.2
 
 1. **更新包**：`npm install -g carlos-flow-cindy@2.5.2`
@@ -128,10 +205,12 @@
 
 ## 版本对照表 | Version Cross-reference
 
-| 版本 | npm | GitHub Release | 核心状态 |
-|------|-----|----------------|----------|
-| 2.5.3 | carlos-flow-opencode | v2.5.3 | 同步 2.5.2 全部修复 |
-| 2.5.2 | carlos-flow-cindy | v2.5.2 | **Phase 1 P0 完整修复** |
-| 2.5.1 | 双包 | v2.5.1 | 基础版（含已知 P0 缺陷） |
+| 版本 | npm (Cindy) | npm (OpenCode) | GitHub Release | 核心状态 |
+|------|-------------|----------------|----------------|----------|
+| 2.5.5 | carlos-flow-cindy@2.5.5 | carlos-flow-opencode@2.5.5 | v2.5.5 | **智能触发引擎 + 5 项缺陷修复** |
+| 2.5.4 | - | carlos-flow-opencode@2.5.4 | v2.5.4 | 文档标准化 + UI 修复 |
+| 2.5.3 | carlos-flow-cindy@2.5.3 | carlos-flow-opencode@2.5.3 | v2.5.3 | **致命语法修复 + 门禁真验证** |
+| 2.5.2 | carlos-flow-cindy@2.5.2 | carlos-flow-opencode@2.5.2 | v2.5.2 | Phase 1 P0 全修复 |
+| 2.5.1 | 双包 | 双包 | v2.5.1 | 基础版（含已知 P0 缺陷） |
 
-> **注意**：2.5.1 版本存在上述 18 项 P0 缺陷，**强烈建议升级到 2.5.2+**
+> **注意**：2.5.1 版本存在 18 项 P0 缺陷，2.5.2 存在 5 处致命语法错误，**强烈建议升级到 2.5.5**。

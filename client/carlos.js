@@ -5,8 +5,12 @@
 import { createConnection, createServer } from "node:net";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import os from "node:os";
+
+// 状态/审计根目录默认值：与 src/state.js 的 FLOW_HOME 保持一致（跨平台）
+const DEFAULT_FLOW_HOME = join(os.homedir(), ".carlos-flow");
 
 const BRIDGE_PORT = parseInt(process.env.BRIDGE_PORT || "19099", 10);
 const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || ".";
@@ -17,8 +21,19 @@ const BRIDGE_SCRIPT = [
   ROOT_ABS + "/mcp-bridge.js",
 ].find((p) => existsSync(p)) || ROOT_ABS + "/bridge/mcp-bridge.js";
 const MCP_SERVER = ROOT_ABS + "/src/index.js";
-const PID_FILE = ROOT_ABS + "/bridge.pid";
+// PID 文件按端口区分：多 Bridge 并存（测试用独立端口）时不会互相覆盖
+const PID_FILE = ROOT_ABS + "/bridge-" + BRIDGE_PORT + ".pid";
 const BRIDGE_TOKEN = process.env.CARLOS_BRIDGE_TOKEN || "carlos-local-token-2026";
+
+// 智能触发引擎（本文件是 ESM，必须用动态 import；require 在 ESM 中不存在）
+// 加载失败时降级为「不触发」，不影响主流程
+let TriggerEngine = null;
+try {
+  const triggerMod = await import(pathToFileURL(join(ROOT_ABS, "src", "trigger.js")).href);
+  TriggerEngine = triggerMod.TriggerEngine || null;
+} catch (e) {
+  TriggerEngine = null;
+}
 
 const toolName = process.argv[2];
 const argsJson = process.argv[3] || "{}";
@@ -31,6 +46,40 @@ if (!toolName) {
 
 let args;
 try { args = JSON.parse(argsJson); } catch (e) { console.error("JSON 解析失败:", e.message); process.exit(1); }
+
+/**
+ * 智能触发检查
+ * 在调用 MCP 之前，检查是否应该触发工作流
+ */
+async function checkTrigger(message = '') {
+  if (!TriggerEngine) {
+    return { triggered: false, reason: '触发引擎未加载' };
+  }
+
+  try {
+    const result = TriggerEngine.processUserMessage(message, { 
+      sessionId: args.sessionId || 'default',
+      complexity: args.complexity || 1.0 
+    });
+
+    if (result.shouldTrigger) {
+      console.error('[Carlos Trigger] 检测到工作流触发意图!');
+      console.error(`评分: ${result.score}, 置信度: ${result.confidence}`);
+      
+      // 如果是自动触发，直接调用 dispatch 工具
+      if (result.action && result.action.recommendedAction === 'auto') {
+        console.error('[Carlos Trigger] 自动触发工作流...');
+        // 这里可以添加自动调用 flow_dispatch 的逻辑
+        return { triggered: true, result, autoTrigger: true };
+      }
+    }
+
+    return { triggered: false };
+  } catch (e) {
+    console.error('[Carlos Trigger] 触发检查失败:', e.message);
+    return { triggered: false, error: e.message };
+  }
+}
 
 // 检查 bridge 是否已在运行（先读 PID，再 TCP 探测）
 function isBridgeRunning() {
@@ -83,7 +132,7 @@ function startBridge() {
         // Bridge 需要用它定位 MCP server 与 pid 文件；未设置时 bridge 会拼出 undefined/src/index.js
         CARLOS_FLOW_MCP_ROOT: ROOT_ABS,
         // 状态/审计根目录：注入后由 bridge → MCP server 逐级继承
-        CARLOS_FLOW_HOME: process.env.CARLOS_FLOW_HOME || "D:\\opencode-backups",
+        CARLOS_FLOW_HOME: process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME,
       },
     });
     child.unref();
@@ -202,6 +251,13 @@ async function main() {
       if (attempt === 2) { console.error("❌ 初始化失败:", e.message); process.exit(1); }
       await new Promise(r => setTimeout(r, 1000));
     }
+  }
+
+  // 智能触发检查
+  const message = toolName + ' ' + argsJson;
+  const triggerResult = await checkTrigger(message);
+  if (triggerResult.autoTrigger) {
+    console.error('[Carlos Trigger] 触发引擎已自动处理工作流，继续调用本工具...');
   }
 
   // Call tool

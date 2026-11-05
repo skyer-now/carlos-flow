@@ -1,6 +1,6 @@
 {
   "name": "carlos-flow-cindy",
-  "version": "2.5.3",
+  "version": "2.5.5",
   "description": "Carlos 工作流 MCP - Cindy 适配版（自动管理 Bridge，内置密钥库集成）",
   "type": "module",
   "main": "src/index.js",
@@ -10,6 +10,9 @@
   "scripts": {
     "test": "node test/smoke.js",
     "test:e2e": "node test/e2e-carlos.mjs",
+    "test:p0": "node test/p0-gates.mjs",
+    "test:trigger": "node test/trigger-e2e.mjs",
+    "test:all": "npm run test && npm run test:e2e && npm run test:p0 && npm run test:trigger",
     "sync:readme": "node scripts/sync-readme.mjs",
     "check:readme": "node scripts/sync-readme.mjs --check",
     "prepublishOnly": "npm run check:readme",
@@ -52,6 +55,7 @@
     "README.md",
     "README.en.md",
     "README.zh.md",
-    "LICENSE"
+    "LICENSE",
+    "TRIGGER_GUIDE.md"
   ]
 }
