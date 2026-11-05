@@ -195,9 +195,22 @@ export async function runVerifyCommand(cmd, cwd) {
 
 // Phase 1-1: scope 机器校验 - 对比 diff 与 card.scope
 export function enforceScope(scope, diffFiles) {
-  if (!Array.isArray(scope) || scope.length === 0) return { ok: true };
-  if (!Array.isArray(diffFiles)) return { ok: true };
-  
+  // 没有任何变更 → 无需判定
+  if (!Array.isArray(diffFiles) || diffFiles.length === 0) {
+    return { ok: true, violations: [] };
+  }
+
+  // 空 scope = 白名单为空 = **不允许改动任何文件**。
+  // 早期实现直接 return { ok: true }，等于「白名单为空 → 随便改」，
+  // 是 fail-open 漏洞；这里改为 fail-closed：所有变更都算越界。
+  if (!Array.isArray(scope) || scope.length === 0) {
+    return {
+      ok: false,
+      violations: diffFiles.slice(),
+      message: `越界改动（卡片 scope 为空，不允许修改任何文件）：${diffFiles.join(", ")}`,
+    };
+  }
+
   const scopeSet = new Set(scope.map(p => path.normalize(p)));
   const violations = [];
   

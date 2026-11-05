@@ -23,7 +23,7 @@ No more manually saying "run the gate" every time. The engine reads your input, 
 - 🛡️ **Non-intrusive**: 5-minute minimum interval per session; the more you trigger, the **lower** the cap (a penalty, not a bonus)
 - 📊 **Transparent scoring**: returns the full `breakdown` (matched keywords / context words / intent type)
 - ⚖️ **Honest under throttling**: even when throttled it returns the real score and confidence — it never pretends "0 points"
-- 🧠 **Learns from feedback**: records accepted / rejected triggers and adjusts positive-negative weights
+- 🧠 **Learns from feedback**: accepted / rejected triggers are persisted; when negative feedback dominates, the **trigger threshold is raised automatically** (more conservative)
 - 📦 **Zero external dependencies**: plain JavaScript, no new npm packages
 
 #### 🔁 Decision → Judgment → Activation (the piece that matters most here)
@@ -39,6 +39,17 @@ The earlier implementation only printed a log line when it hit — it never actu
 | **Release** | Resubmit the complete card | `activation_pending` clears → normal dispatch proceeds |
 
 > Safety constraint: when the session **already has a card**, auto-activation skips card creation (it never overwrites an existing task). Auto-activation only handles "record + enter the gate" — it **never decides which files may change** on the agent's behalf.
+
+##### 🔐 Four gate defenses (hardened after independent QA audit)
+| Defense | What it blocks | Outcome |
+|---|---|---|
+| **Field-by-field verification** | Submitting with only `scope` filled while `acceptance` / `verify.cmd` are still empty | The gate **keeps holding** (`activation_pending` lists exactly what is still missing) |
+| **No PASS without dispatch** | `verdict=PASS` on a card that was just submitted and never dispatched | Rejected; `completed_ok` stays `false` (`DIRECTION` / `LOCAL` are unaffected — rework notes are not blocked) |
+| **Empty scope fails closed** | Modifying any file while the card's `scope` is empty | `flow_check_scope` reports **every** path as out-of-scope (the early implementation failed *open*, i.e. "empty whitelist → change anything") |
+| **Dedicated audit events** | Asking afterwards "was this a placeholder card? was it ever released?" | `activation` / `activation_gate_held` / `activation_released` / `verdict_denied` are all queryable |
+
+> Every one of these defenses has a matching **mutation test** (inject the regression → confirm the suite fails). 8 injected regressions, **all 8 caught**.
+
 >
 > Also fixed: trigger state was previously kept in **one shared file for all sessions**, so one session could throttle another — it is now stored per session.
 
@@ -65,7 +76,8 @@ The earlier implementation only printed a log line when it hit — it never actu
 - 🔑 **GitHub Actions OIDC publishing**: no npm token stored in the repository any more
 - 🧩 **`scripts/release.mjs`**: version checks / bilingual consistency / tests / build / publish in one command
 - 🛡️ **`npm run check:readme`**: prepublish hook keeps the three README files from drifting apart
-- 📋 **Independent QA report**: [`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md) — 8/8 suites green across both repos
+- 📋 **Independent QA report**: [`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md) — third-party read-only acceptance before release
+- 🧬 **Mutation report**: [`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md) — 8 injected regressions, **all 8 caught**
 
 ### 📚 Documentation readability
 - Removed the repeated **language bar / version line noise** that was injected throughout the READMEs (24–26 occurrences per file → consolidated to 1 at the top); tables are no longer truncated
@@ -161,7 +173,7 @@ const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 }
 // {
 //   shouldTrigger: true,
 //   decision: 'trigger',        // trigger | review | ignore | throttled
-//   score: 37,                  // weighted total, 0~38
+//   score: 38,                  // weighted total, 0~38
 //   confidence: 0.9,
 //   breakdown: { keyword: {...}, context: {...}, intent: {...} },
 //   action: { type: 'workflow_trigger', recommendedAction: 'auto' },
@@ -181,7 +193,7 @@ const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 }
 ##### One-line activation from the CLI
 ```bash
 # pass the real user text via triggerMessage (or the CARLOS_TRIGGER_MESSAGE env var)
-node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"add parameter validation to the login endpoint"}'
+node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run dispatch workflow"}'
 ```
 
 ##### Engine highlights
@@ -191,7 +203,7 @@ node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"add 
 - **Per-session isolation** — trigger history and throttling state are stored **per session file**, so sessions never throttle each other
 - **Tunable thresholds** — `triggerThreshold: 15`, `autoTriggerThreshold: 25`, `lowConfidenceThreshold: 10`
 - **Zero external dependencies** — plain JavaScript, no new npm packages
-- **Learns from feedback** — records accepted / rejected triggers and adjusts positive-negative weights
+- **Learns from feedback** — records accepted / rejected triggers (persisted); when negative feedback dominates, the **trigger threshold is raised automatically**
 
 > Full configuration and usage: [TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
 

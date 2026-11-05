@@ -88,7 +88,7 @@ Carlos Flow 智能触发引擎是一个三层智能系统，能够自动感知�
   "positiveFeedbackWeight": 1.5,
   "negativeFeedbackWeight": 0.7,
   
-  "triggerWindowMinutes": 15,
+  "triggerWindowMinutes": 60,
   "minTriggerIntervalSeconds": 300
 }
 ```
@@ -165,7 +165,7 @@ node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run 
 
 stderr 输出：
 ```
-[Carlos Trigger] 判定触发：评分 37 · 置信度 0.9
+[Carlos Trigger] 判定触发：评分 38 · 置信度 0.9
 [Carlos Trigger] 已执行激活步骤：flow_add_user_msg（写入用户原话，作为任务卡 quote 锚点校验的数据源）
 [Carlos Trigger] 已执行激活步骤：flow_submit_requirement（开卡：将会话置为已留痕状态，审计链记录 activation 事件）
 
@@ -173,8 +173,15 @@ stderr 输出：
 …
 ```
 
-> `triggerMessage` 是**客户端专用字段**，不会被透传给 MCP 工具。
-> 不传时退化为用「工具名 + 参数」作为弱信号，只用于演示，不建议生产依赖。
+> ⚠️ **`triggerMessage` 必须显式传入，否则完全不启用自动触发。**
+>
+> - `triggerMessage` 是**客户端专用字段**，不会被透传给 MCP 工具（`complexity` 同样剥离）；
+> - 默认词表是**英文**：`work` / `flow` / `carlos` / `dispatch` / `trigger` / `start` / `run` / `execute`
+>   （上下文表另有 `executor` / `auditor`；意图表另有 `auto` / `process` / `monitor` 等）。
+>   中文场景请通过 `trigger-config.json` 扩展 `keywordWeights`；
+> - 早先版本的兜底项是「工具名 + 参数 JSON」，会造成**自伤**（参数含触发词 → 自己开占位卡 →
+>   同一次调用的 `flow_dispatch` 反被闸门拒绝）与**锚点污染**（写入的「用户原话」是命令行文本 →
+>   Agent 用真实原话重提卡时 quote 锚点校验失败 → 补齐流程卡死）。现已改为**不传即不触发**。
 
 > **当前定位**：触发引擎是**库级能力**（`src/trigger.js`），由客户端集成调用；
 > 它**尚未**作为独立的 MCP 工具暴露给宿主 Agent。如果你需要 `flow_trigger_check` 之类的
@@ -197,23 +204,55 @@ stderr 输出：
 | 用户意图识别 | 0-20 | 0.2 | 4 |
 | **总计** | - | - | **38** |
 
-### 决策逻辑
+### 决策逻辑（与 `src/trigger.js` 实现逐行对应）
 
 ```javascript
-if (score >= autoTriggerThreshold && confidence >= 0.8) {
-  // ✅ 自动触发（进入激活流程）
-  decision = 'trigger';
-} else if (score >= triggerThreshold) {
-  // ⚠️ 需人工确认
-  decision = 'review';
-} else if (score < lowConfidenceThreshold) {
-  // ❌ 忽略
-  decision = 'ignore';
+// 1) 先算评分（即使随后被限流，评分与置信度也要如实返回）
+const score = scorer.calculateImpulseScore(message, context, historyCount).score;
+
+// 2) 动态上限 / 最短间隔检查
+if (!canTrigger().can) {
+  return { decision: 'throttled', score, confidence, breakdown };  // 限流
 }
+
+// 3) 阈值选择：高置信度时用自动阈值，否则用普通阈值
+const threshold = (score >= autoTriggerThreshold && confidence >= 0.8)
+  ? autoTriggerThreshold
+  : triggerThreshold;
+
+// 4) 叠加反馈学习偏移（负反馈多 → 更保守）
+const effectiveThreshold = Math.max(1, threshold + feedbackAdjustment);
+
+// 5) 判定
+if (score >= effectiveThreshold)      decision = 'trigger';   // ✅ 达标，进入激活流程
+else if (score < lowConfidenceThreshold) decision = 'ignore';  // ❌ 低于 10 分，忽略
+else                                   decision = 'review';   // ⚠️ 临界，建议手动启动
 ```
 
-另外还有一档：**`throttled`**——决策本来是 `trigger`，但被动态上限或最短间隔拦下。
-**限流时依然返回真实的 `score` / `confidence` / `breakdown`**，不会丢成 0，也不会假装“未评分”。
+| 决策 | 含义 | 是否动作 |
+|------|------|---------|
+| `trigger` | 评分达标 | **进入激活流程**（自动档：评分 ≥ 25 且置信度 ≥ 0.8） |
+| `review` | 临界区间 | 只输出建议与补全指引，**不执行任何 MCP 动作** |
+| `ignore` | 低于 `lowConfidenceThreshold` | 无动作 |
+| `throttled` | 被动态上限或最短间隔拦下 | 无动作，但**如实返回真实评分与置信度** |
+
+> ⚠️ 限流时依然返回真实的 `score` / `confidence` / `breakdown`，不会丢成 0，也不会假装“未评分”。
+
+### 置信度口径
+
+`confidence` 由**命中项数量**决定（`calculateConfidence()`）：
+
+| 命中项数 | confidence | 含义 |
+|---------|-----------|------|
+| 0 | **0.3** | 没命中任何词/意图 —— 低置信度 |
+| 1 ~ 2 | **0.6** | 中等置信度 |
+| ≥ 3 | **0.9** | 高置信度（可走自动档） |
+
+命中项 = 命中的关键词数 + 命中的上下文词数 + 意图类型是否非 `generic`。
+
+> 📌 已知口径特性：关键词表与上下文表有重叠（`work` / `flow` / `dispatch` 同时出现在两张表里），
+> 同一个词会被计入两次，因此 `confidence` 偏乐观。这是**已知并接受的现状**，
+> 真正决定是否触发的是**加权总分**，不是 confidence。
 
 ---
 
@@ -237,7 +276,7 @@ const result = engine.shouldTrigger('run dispatch workflow', { sessionId: 'my-ta
 result.activationPlan = {
   activated: true,
   decision: 'trigger',
-  score: 37,
+  score: 38,
   confidence: 0.9,
   matchedKeywords: ['work', 'flow', 'dispatch', 'run'],
   goal: '执行 Carlos 工作流任务：run dispatch workflow（命中：work, flow, dispatch, run）',
@@ -333,12 +372,18 @@ for (const step of plan.steps) {
 if (窗口内触发次数 >= 动态上限) → 拒绝触发
 ```
 
-> 注：判定用的是**原始次数**，不是衰减加权均值。衰减加权值（`calculateHistoryFactor()`）
-> 仅用于上限微调，量级与上限不可比。
+> 注：判定用的是**原始次数**（`countTriggersInWindow()`），不是衰减加权均值。
+> 上限公式里的历史项同样用原始次数×`historyCoeff`（惩罚项，触发越多上限越低）。
+
+> ⚠️ **窗口长度必须与最短间隔匹配**：`minTriggerIntervalSeconds = 300`（5 分钟）时，
+> 若 `triggerWindowMinutes` 只有 15 分钟，窗口内最多只能触发 3 次，
+> 而上限至少是 5+1=6 → 「次数达上限」分支**永远不可达**，实际只有 5 分钟冷却在起作用。
+> 因此默认 `triggerWindowMinutes` 已改为 **60 分钟**（1 小时内最多 12 次，上限 6~15 才有意义）。
 
 ## 📈 用户反馈学习
 
-系统记录用户反馈并及时调整权重：
+系统**持久化**记录用户反馈（存在会话状态文件里，进程退出也不丢），
+并让反馈**真正影响触发阈值**：
 
 ```javascript
 // 用户接受触发
@@ -346,12 +391,23 @@ engine.recordFeedback('positive');
 
 // 用户拒绝触发
 engine.recordFeedback('negative');
-
-// 自动调整权重
-engine.updateFeedbackWeights();
+// → { ok: true, feedback: { positive: 0, negative: 1 }, thresholdAdjustment: 1 }
 ```
 
-学习周期：每 10 次反馈后更新参数，避免过度拟合。
+| 机制 | 说明 |
+|------|------|
+| **即时调整** | `getFeedbackThresholdAdjustment()` 按当前会话正/负反馈比例算出阈值偏移，负反馈越多偏移越大（更保守） |
+| **持久学习** | 每累积 `feedbackLearningCycle`（默认 10）条反馈自动调用 `updateFeedbackWeights()`，把学习结果写入 `trigger-config.json` 的 `feedbackThresholdOffset` |
+| **生效位置** | 偏移量加在决策阈值上：`effectiveThreshold = threshold + 即时偏移 + 持久偏移`，最低为 1 |
+
+```javascript
+// 手动触发一次学习（可选，recordFeedback 已会自动按周期触发）
+engine.updateFeedbackWeights();
+// → { ok: true, thresholdOffset: 1, positive: 0, negative: 10 }
+```
+
+> ⚠️ 早期版本的反馈只写在**进程内 Map** 里、`updateFeedbackWeights()` 也**没有任何调用点**，
+> 属于「文档写了但功能不存在」。现在已改为持久化 + 自动触发 + 真正影响阈值。
 
 ## 🎯 最佳实践
 
@@ -472,7 +528,20 @@ node client/carlos.js flow_status '{"sessionId":"my-task"}'
 # → "activation_pending": ["scope", "acceptance", "verify.cmd"]
 ```
 
-### 问题 6: 一个会话的触发影响了另一个会话
+### 问题 6: 激活了但派发一直被拒，且提示「待补：scope、acceptance、verify.cmd」
+
+**症状**: `ERROR: 激活占位卡尚未补齐（待补：scope、acceptance、verify.cmd）`
+
+**这是闸门在正常工作**，不是故障。必须**三项都补齐**才能解闸：
+
+- `scope` —— 只准改动的文件（非空）
+- `acceptance` —— 可判定的验收标准（非空）
+- `verify.cmd` —— 验证命令（非空）
+
+只补其中一项**不解闸**（`activation_pending` 会精确告诉你还缺哪几项）。
+补齐后**重新调用 `flow_submit_requirement`**（不带 `activation` 参数）即解除。
+
+### 问题 7: 一个会话的触发影响了另一个会话
 
 **症状**: 明明是新会话，却提示“时间间隔不足”
 

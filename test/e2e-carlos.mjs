@@ -274,6 +274,109 @@ async function main() {
   const cliGate = r.ok === false && /占位卡/.test(r.error || "");
   check("17c. 客户端激活后闸门生效", cliGate, r.ok ? "未被拒绝（异常）" : "已拒绝");
 
+  // 18. 不传 triggerMessage → 不启用自动触发（防自伤）
+  // 早先的兜底项是「工具名 + 参数 JSON」，参数里含触发词时会自己给自己开占位卡，
+  // 导致同一次调用的 flow_dispatch 反被闸门拒绝（自伤）。
+  const NO_TRIG_SID = SID + "-notrig";
+  const noTrig = await runClient("flow_status", {
+    sessionId: NO_TRIG_SID,
+    message: "run the dispatch workflow",   // 参数里故意含触发词
+  });
+  const noTrigLogged = /已执行激活步骤/.test(noTrig.stderr || "");
+  check("18a. 未传 triggerMessage 时不自动激活", !noTrigLogged,
+    noTrigLogged ? "意外激活了（自伤）" : "未激活");
+
+  r = await call("flow_status", { sessionId: NO_TRIG_SID });
+  const noTrigCard = r.ok && r.data?.has_card !== true;
+  check("18b. 未传 triggerMessage 时服务端无任务卡", noTrigCard,
+    r.ok ? `has_card=${r.data?.has_card}` : r.error);
+
+  // 18c. 该会话仍可正常走完整流程（没有被自伤污染）
+  r = await call("flow_add_user_msg", { sessionId: NO_TRIG_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: NO_TRIG_SID, goal: "正常流程不受影响",
+    quote: QUOTE, scope: [ROOT + "/README.md"],
+    acceptance: ["能正常提交"], confirmed: true,
+  });
+  check("18c. 同一会话仍可正常提交完整卡", r.ok && r.data?.ok === true, r.ok ? "" : r.error);
+
+  // 19. 半补齐不算补齐（独立 QA 审计发现的绕过路径）
+  // activation_pending 宣称待补 scope/acceptance/verify.cmd，
+  // 但早期释放判据只看 scope 非空 → 只补 scope 就能解闸 → PASS → completed_ok=true。
+  const HALF_SID = SID + "-half";
+  await call("flow_add_user_msg", { sessionId: HALF_SID, text: "run dispatch workflow" });
+  await call("flow_submit_requirement", {
+    sessionId: HALF_SID, goal: "占位", quote: "run dispatch workflow",
+    scope: [], acceptance: [], confirmed: false, activation: true,
+  });
+  // 只补 scope，acceptance 与 verify.cmd 仍缺
+  r = await call("flow_submit_requirement", {
+    sessionId: HALF_SID, goal: "只补了 scope", quote: "run dispatch workflow",
+    scope: [ROOT + "/README.md"], acceptance: [], confirmed: true,
+  });
+  r = await call("flow_status", { sessionId: HALF_SID });
+  const halfPending = r.ok && Array.isArray(r.data?.activation_pending) &&
+    r.data.activation_pending.length > 0 && !r.data.activation_pending.includes("scope");
+  check("19a. 只补 scope 不足以解除闸门", halfPending,
+    r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
+
+  r = await call("flow_claim", { sessionId: HALF_SID, role: "executor" });
+  check("19b. 半补齐后 claim 仍被拒", r.ok === false && /占位卡/.test(r.error || ""),
+    r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  r = await call("flow_verdict", { sessionId: HALF_SID, verdict: "PASS" });
+  check("19c. 半补齐后 verdict 仍被拒", r.ok === false, r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  // 19d. 三项补齐后才真正解闸
+  r = await call("flow_submit_requirement", {
+    sessionId: HALF_SID, goal: "三项齐全", quote: "run dispatch workflow",
+    scope: [ROOT + "/README.md"], acceptance: ["补齐验收标准"],
+    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
+  });
+  r = await call("flow_status", { sessionId: HALF_SID });
+  const fullyCleared = r.ok && Array.isArray(r.data?.activation_pending) && r.data.activation_pending.length === 0;
+  check("19d. 三项补齐后闸门解除", fullyCleared,
+    r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
+
+  // 20. 未派发就记 PASS 裁定 → 必须被拒（防假闭环之二）
+  const NO_DISPATCH_SID = SID + "-nodispatch";
+  await call("flow_add_user_msg", { sessionId: NO_DISPATCH_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: NO_DISPATCH_SID, goal: "只提交不派发", quote: QUOTE,
+    scope: [ROOT + "/README.md"], acceptance: ["x"],
+    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
+  });
+  r = await call("flow_verdict", { sessionId: NO_DISPATCH_SID, verdict: "PASS", notes: "没派发就想通过" });
+  const noDispatchBlocked = r.ok === false && /尚未派发/.test(r.error || "");
+  check("20a. 未派发直接 PASS 被拒", noDispatchBlocked, r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  // 20b. 未派发时 DIRECTION / LOCAL 仍可记录（返工意见不要求已完成派发）
+  r = await call("flow_verdict", { sessionId: NO_DISPATCH_SID, verdict: "DIRECTION", notes: "方向需要调整" });
+  check("20b. 未派发时 DIRECTION 可记录（不误伤）", r.ok && r.data?.verdict === "DIRECTION", r.ok ? "" : r.error);
+
+  r = await call("flow_status", { sessionId: NO_DISPATCH_SID });
+  check("20b. 未派发时 completed_ok 保持 false", r.ok && r.data?.completed_ok !== true,
+    r.ok ? `completed_ok=${r.data?.completed_ok}` : r.error);
+
+  // 21. 空 scope 的卡：任何改动都算越界（fail-closed）
+  const EMPTY_SCOPE_SID = SID + "-emptyscope";
+  await call("flow_add_user_msg", { sessionId: EMPTY_SCOPE_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: EMPTY_SCOPE_SID, goal: "空 scope", quote: QUOTE,
+    scope: [], acceptance: ["x"], confirmed: true,
+  });
+  r = await call("flow_check_scope", { sessionId: EMPTY_SCOPE_SID, paths: [ROOT + "/README.md", ROOT + "/src/index.js"] });
+  const emptyScopeClosed = r.ok && r.data?.ok === false && (r.data?.violations || []).length === 2;
+  check("21. 空 scope 对任意改动都判越界（fail-closed）", emptyScopeClosed,
+    r.ok ? `ok=${r.data?.ok} violations=${JSON.stringify(r.data?.violations)}` : r.error);
+
+  // 22. 审计链可追溯：激活建立 / 闸门解除都有专属事件
+  r = await call("flow_audit", { sessionId: HALF_SID, limit: 100 });
+  const actKinds = r.ok ? (r.data?.by_kind || {}) : {};
+  const traceable = actKinds.activation >= 1 && actKinds.activation_released >= 1 && actKinds.activation_gate_held >= 1;
+  check("22. 审计链含 activation / activation_released / activation_gate_held", traceable,
+    r.ok ? `kinds=${Object.keys(actKinds).join(",")}` : r.error);
+
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
   console.log(`sessionId=${SID}`);

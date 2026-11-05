@@ -35,11 +35,9 @@ const MUTANTS = [
   },
   {
     id: "M3-verdict闸门失效",
-    desc: "移除 flow_verdict 的 activation_pending 闸门（假闭环）",
+    desc: "移除 flow_verdict 的 activation_pending 闸门（占位卡可记 PASS）",
     file: "src/index.js",
-    from: `        // 激活占位卡尚未补齐时不允许裁定：
-        // 否则会出现「未派发、未验证、却直接 PASS」的假闭环。
-        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
+    from: `        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
           audit("decision", sessionId, {
             kind: "verdict_denied",
             reason: "激活占位卡未补齐",
@@ -58,20 +56,40 @@ const MUTANTS = [
     to: `  return safe; // MUTANT: 无哈希后缀`,
   },
   {
-    id: "M5-空scope绕过闸门",
-    desc: "移除「空 scope 提交不能解除激活闸门」的防护",
+    id: "M5-scope不算补齐项",
+    desc: "把 filled.scope 硬置 true（scope 未补也算补齐）",
     file: "src/index.js",
-    from: `        } else if (prevPending.length > 0 && newScope.length === 0) {
-          // 防绕过：不能靠提交一张「空 scope 的普通卡」把闸门清掉。
-          // 空 scope 意味着「不许改任何文件」，这种卡不足以代表「已补齐」。
-          activationPending = prevPending;
-          audit("decision", sessionId, {
-            kind: "activation_gate_held",
-            reason: "空 scope 的提交不能解除激活闸门",
-            pending: prevPending,
-          });
-        } else {`,
-    to: `        } else { // MUTANT: 空 scope 也能清闸门`,
+    from: `          "scope": newScope.length > 0,`,
+    to: `          "scope": true, // MUTANT: scope 未补也算补齐`,
+  },
+  {
+    id: "M6-半补齐绕过闸门",
+    desc: "移除「三项字段全补齐才解闸」的逐项判定",
+    file: "src/index.js",
+    from: `        const stillMissing = prevPending.filter((f) => !filled[f]);`,
+    to: `        const stillMissing = []; // MUTANT: 只要提交就解闸`,
+  },
+  {
+    id: "M7-空scope fail-open",
+    desc: "enforceScope 在空 scope 时直接返回 ok:true（任意路径都算未越界）",
+    file: "src/dispatch.js",
+    from: `  if (!Array.isArray(scope) || scope.length === 0) {
+    return {
+      ok: false,
+      violations: diffFiles.slice(),
+      message: \`越界改动（卡片 scope 为空，不允许修改任何文件）：\${diffFiles.join(", ")}\`,
+    };
+  }`,
+    to: `  if (!Array.isArray(scope) || scope.length === 0) {
+    return { ok: true, violations: [] }; // MUTANT: fail-open
+  }`,
+  },
+  {
+    id: "M8-未派发可记PASS",
+    desc: "移除 flow_verdict 的 dispatch_count 检查（未派发也能记 PASS）",
+    file: "src/index.js",
+    from: `        if (verdict === "PASS" && !(Number(state.dispatch_count) > 0)) {`,
+    to: `        if (false) { // MUTANT: 允许未派发就记 PASS`,
   },
 ];
 

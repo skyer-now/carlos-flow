@@ -1,7 +1,7 @@
 // Carlos 工作流智能触发引擎
 // 三层智能触发系统：动态上限、评分系统、决策引擎
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -66,11 +66,14 @@ const DEFAULT_CONFIG = {
 
   // 用户反馈学习
   feedbackLearningRate: 0.1,
+  feedbackLearningCycle: 10,        // 每累积多少条反馈重新学习一次
+  feedbackThresholdOffset: 0,       // 学习结果：负反馈多 → 抬高触发阈值
   positiveFeedbackWeight: 1.5,
   negativeFeedbackWeight: 0.7,
 
   // 触发窗口
-  triggerWindowMinutes: 15,         // 触发窗口期（分钟）
+  triggerWindowMinutes: 60,         // 触发窗口期（分钟）——需 ≥ 最长间隔×窗口倍数，
+                                     // 否则「窗口内次数达上限」分支永远不可达
   minTriggerIntervalSeconds: 300    // 最少触发间隔（秒）
 };
 
@@ -130,6 +133,7 @@ class TriggerState {
     this.sessionStartTime = Date.now();
     this.lastTriggerTime = 0;
     this.impressionCount = 0; // 关联 impressionId
+    this.feedback = { positive: 0, negative: 0 }; // 用户反馈（持久化）
   }
 
   getSessionAgeHours() {
@@ -360,8 +364,12 @@ class TriggerScorer {
 
   /**
    * 计算用户意图分数
+   *
+   * @param {string} message 用户输入
+   * @param {number} historyCount 当前会话的触发历史条数（由 L3 传入）
+   *        —— 评分层不再自己去磁盘读状态，避免与 L1 读到不同会话
    */
-  calculateUserIntent(message, sessionId = 'default') {
+  calculateUserIntent(message, historyCount = 0) {
     // 简单实现：基于用户行为模式
     const userIntentCandidates = {
       'workflow': ['dispatch', 'run', 'execute', 'trigger', 'start'],
@@ -381,9 +389,8 @@ class TriggerScorer {
       }
     });
 
-    // 基于会话历史调整
-    const state = TriggerState.load(sessionId);
-    if (state.triggerHistory.length > 10) {
+    // 基于会话历史调整（活跃用户意图分上浮）
+    if (historyCount > 10) {
       intentScore *= 1.2; // 活跃用户
     }
 
@@ -399,11 +406,15 @@ class TriggerScorer {
 
   /**
    * 综合评分
+   *
+   * @param {string} message 用户输入
+   * @param {object} context 上下文（complexity 等）
+   * @param {number} historyCount 当前会话触发历史条数（由 L3 传入，保证与 L1 同会话）
    */
-  calculateImpulseScore(message, context = {}, sessionId = 'default') {
+  calculateImpulseScore(message, context = {}, historyCount = 0) {
     const keywordResult = this.calculateKeywordScore(message);
     const contextResult = this.calculateContextRelevance(message, context);
-    const intentResult = this.calculateUserIntent(message, sessionId);
+    const intentResult = this.calculateUserIntent(message, historyCount);
 
     const totalScore = 
       keywordResult.score * (1 - config.contextRelevanceWeight - config.userIntentWeight) +
@@ -437,19 +448,30 @@ class TriggerScorer {
 
 // ============ L3: TriggerDecisionEngine ============
 class TriggerDecisionEngine {
-  constructor(triggerManager = null, scorer = null) {
+  constructor(triggerManager = null, scorer = null, sessionId = null) {
     this.triggerManager = triggerManager || new DynamicTriggerManager();
     this.scorer = scorer || new TriggerScorer();
-    this.feedbackCache = new Map();
+    // 会话维度：L1（上限/历史）与 L2（评分）必须读同一个会话，
+    // 否则会出现「上限算的是 A 会话、历史算的是 B 会话」的串扰。
+    this.sessionId = sessionId || (this.triggerManager && this.triggerManager.state && this.triggerManager.state.sessionId) || 'default';
   }
 
   /**
    * 主触发决策
    * 基于评分和动态上限决定是否触发
+   *
+   * @param {string} message 用户输入
+   * @param {object} context 上下文
+   * @param {string} [sessionId] 会话 ID；省略时使用引擎实例自己的会话
    */
-  shouldTrigger(message, context = {}, sessionId = 'default') {
+  shouldTrigger(message, context = {}, sessionId = null) {
+    // 会话统一到一处：显式传入 > 引擎实例会话 > default
+    const sid = sessionId || this.sessionId;
     // 1. 先计算触发评分（即使被限流，评分与置信度也要如实返回，不能丢成 0/undefined）
-    const impulseResult = this.scorer.calculateImpulseScore(message, context, sessionId);
+    const historyCount = Array.isArray(this.triggerManager.state.triggerHistory)
+      ? this.triggerManager.state.triggerHistory.length
+      : 0;
+    const impulseResult = this.scorer.calculateImpulseScore(message, context, historyCount);
     const score = impulseResult.score;
 
     // 2. 检查是否可以触发（上限和时间间隔）
@@ -465,19 +487,24 @@ class TriggerDecisionEngine {
         action: null,
       };
       // 被限流时不激活（决策不是 trigger）
-      throttled.activationPlan = this.buildActivationPlan(throttled, message, sessionId);
+      throttled.activationPlan = this.buildActivationPlan(throttled, message, sid);
       return throttled;
     }
 
     // 3. 决策逻辑
-    const threshold = score >= config.autoTriggerThreshold && impulseResult.confidence >= 0.8 
-      ? config.autoTriggerThreshold 
+    const threshold = score >= config.autoTriggerThreshold && impulseResult.confidence >= 0.8
+      ? config.autoTriggerThreshold
       : config.triggerThreshold;
 
-    let decision = 'none';
+    // 反馈学习：负反馈多 → 抬高触发阈值（更保守）；正反馈多 → 降低阈值（更灵敏）
+    // 两个来源：当前会话的即时反馈 + 持久化的历史学习结果
+    const feedbackAdj = this.getFeedbackThresholdAdjustment() + (Number(config.feedbackThresholdOffset) || 0);
+    const effectiveThreshold = Math.max(1, threshold + feedbackAdj);
+
+    let decision;
     let action = null;
 
-    if (score >= threshold) {
+    if (score >= effectiveThreshold) {
       decision = 'trigger';
       action = this.buildTriggerAction(impulseResult);
     } else if (score < config.lowConfidenceThreshold) {
@@ -505,7 +532,7 @@ class TriggerDecisionEngine {
       reason: decision === 'trigger' ? '触发评分达标' : `评分${score}低于阈值${threshold}`
     };
     // 决策 → 激活：把判定翻译成可执行的 MCP 动作序列
-    outcome.activationPlan = this.buildActivationPlan(outcome, message, sessionId);
+    outcome.activationPlan = this.buildActivationPlan(outcome, message, sid);
     return outcome;
   }
 
@@ -598,33 +625,58 @@ class TriggerDecisionEngine {
   }
 
   /**
-   * 记录用户反馈
+   * 记录用户反馈（持久化到会话状态，进程退出也不丢）
+   *
+   * feedbackType: 'positive'（用户接受了这次触发）/ 'negative'（拒绝了）
    */
   recordFeedback(feedbackType) {
-    // feedbackType: 'positive' 或 'negative'
-    this.triggerManager.state.save();
-    this.feedbackCache.set(Date.now(), feedbackType);
+    const type = feedbackType === 'positive' ? 'positive' : 'negative';
+    const state = this.triggerManager.state;
+    if (!state.feedback) state.feedback = { positive: 0, negative: 0 };
+    state.feedback[type] = (Number(state.feedback[type]) || 0) + 1;
+    state.save();
+
+    // 达到一个学习周期就自动更新阈值（之前是无调用点的死代码）
+    const total = state.feedback.positive + state.feedback.negative;
+    if (total >= config.feedbackLearningCycle) {
+      this.updateFeedbackWeights();
+    }
+    return { ok: true, feedback: { ...state.feedback }, thresholdAdjustment: this.getFeedbackThresholdAdjustment() };
   }
 
   /**
-   * 更新用户反馈权重
+   * 根据正/负反馈计算触发阈值的调整量
+   * 负反馈多 → 抬高阈值（更保守）；正反馈多 → 降低阈值（更灵敏）
+   */
+  getFeedbackThresholdAdjustment() {
+    const fb = this.triggerManager.state.feedback || { positive: 0, negative: 0 };
+    const positive = Number(fb.positive) || 0;
+    const negative = Number(fb.negative) || 0;
+    const total = positive + negative;
+    if (total === 0) return 0;
+    // 净负反馈比例 → 调整量（范围约 [-learningRate*10, +learningRate*10]）
+    const negativeRatio = negative / total;
+    const adj = Math.round((negativeRatio - 0.5) * 2 * config.feedbackLearningRate * 10);
+    return adj;
+  }
+
+  /**
+   * 更新反馈学习结果：把正/负反馈比写回配置里的阈值偏移
    */
   updateFeedbackWeights() {
-    const feedbacks = Array.from(this.feedbackCache.values());
-    if (feedbacks.length === 0) return;
+    const fb = this.triggerManager.state.feedback || { positive: 0, negative: 0 };
+    const total = (Number(fb.positive) || 0) + (Number(fb.negative) || 0);
+    if (total === 0) return { ok: false, reason: '尚无反馈记录' };
 
-    const positiveCount = feedbacks.filter(f => f === 'positive').length;
-    const negativeCount = feedbacks.filter(f => f === 'negative').length;
-    const total = feedbacks.length;
+    const negativeRatio = (Number(fb.negative) || 0) / total;
+    // 持久化的学习结果：负反馈占多数 → 提高触发阈值
+    const learned = Math.max(0, Math.round((negativeRatio - 0.5) * 2 * config.feedbackLearningRate * 10));
+    config.feedbackThresholdOffset = learned;
+    config.positiveFeedbackWeight = Number((1 + (1 - negativeRatio)).toFixed(3));
+    config.negativeFeedbackWeight = Number((1 + negativeRatio).toFixed(3));
 
-    if (total > 0) {
-      const positiveRatio = positiveCount / total;
-      // 调整权重
-      config.positiveFeedbackWeight = Math.max(1.0, config.positiveFeedbackWeight + (positiveRatio - 0.5) * config.feedbackLearningRate);
-      config.negativeFeedbackWeight = Math.max(0.5, config.negativeFeedbackWeight + (0.5 - positiveRatio) * config.feedbackLearningRate);
-      
-      this.saveConfig();
-    }
+    this.saveConfig();
+    return { ok: true, thresholdOffset: learned, positive: fb.positive, negative: fb.negative };
   }
 
   saveConfig() {
@@ -653,7 +705,8 @@ export const TriggerEngine = {
     const state = TriggerState.load(sessionId);
     return new TriggerDecisionEngine(
       new DynamicTriggerManager(state),
-      new TriggerScorer()
+      new TriggerScorer(),
+      sessionId
     );
   },
 
@@ -676,9 +729,26 @@ export const TriggerEngine = {
 
   /**
    * 重置引擎状态
+   * 默认只重置 'default' 会话；传 sessionId 可重置指定会话；
+   * 传 '*' 重置全部会话（包含 trigger-state/ 目录下的所有会话文件）。
    */
-  reset() {
-    TriggerState.load().reset();
+  reset(sessionId = 'default') {
+    if (sessionId === '*') {
+      // 清空所有会话文件（默认会话 + trigger-state/ 目录）
+      try { rmSync(DEFAULT_STATE_PATH, { force: true }); } catch { /* 不存在 */ }
+      try {
+        if (existsSync(STATE_DIR)) {
+          for (const f of readdirSync(STATE_DIR)) {
+            if (f.endsWith('.json')) {
+              try { rmSync(join(STATE_DIR, f), { force: true }); } catch { /* 忽略 */ }
+            }
+          }
+        }
+      } catch { /* 目录不存在 */ }
+      return { ok: true, scope: 'all' };
+    }
+    TriggerState.load(sessionId).reset();
+    return { ok: true, scope: sessionId };
   },
 
   /**

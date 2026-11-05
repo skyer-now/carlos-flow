@@ -23,7 +23,7 @@
 - 🛡️ **不打扰**：同会话最短间隔 5 分钟；触发越多上限**越低**（惩罚项，不是奖励项）
 - 📊 **评分透明**：返回完整 `breakdown`（命中的关键词 / 上下文词 / 意图类型）
 - ⚖️ **限流也如实**：被限流时照样返回真实评分与置信度，不假装"0 分"
-- 🧠 **反馈学习**：记录你接受 / 拒绝的触发，动态调整正负反馈权重
+- 🧠 **反馈学习**：记录你接受 / 拒绝的触发（持久化到会话状态）；**负反馈占多数时自动抬高触发阈值**，更保守
 - 📦 **零外部依赖**：纯 JavaScript，不新增任何 npm 包
 
 #### 🔁 动态决策 → 判断 → 激活（本次最关键的一环）
@@ -40,6 +40,16 @@
 
 > 安全约束：会话**已有任务卡**时自动激活会跳过开卡（不覆盖用户已有任务）；
 > 自动激活只负责「留痕 + 进入门禁」，**绝不代替 Agent 决定改哪些文件**。
+
+##### 🔐 门禁侧的四道防线（独立 QA 审计后加固）
+| 防线 | 拦截什么 | 结果 |
+|------|---------|------|
+| **逐字段核验** | 只补了 `scope`、`acceptance`/`verify.cmd` 仍缺就提交 | 闸门**继续拦住**（`activation_pending` 精确列出还缺哪几项） |
+| **未派发不许记 PASS** | 卡片刚提交、什么都没跑就想 `verdict=PASS` | 拒绝；`completed_ok` 保持 `false`（`DIRECTION`/`LOCAL` 不受影响，不误伤返工意见） |
+| **空 scope fail-closed** | 卡片 `scope` 为空时改动任何文件 | `flow_check_scope` 判**全部越界**（早期实现是 fail-open，等于「白名单为空→随便改」） |
+| **审计链专属事件** | 事后追问「这是不是占位卡？解闸过没有？」 | `activation` / `activation_gate_held` / `activation_released` / `verdict_denied` 四类事件可查 |
+
+> 以上四道防线都有对应的**变异测试**（注入退化 → 确认测试会失败），共 8 类退化 **8/8 全部被抓住**。
 >
 > 顺带修复：**触发状态原先所有会话共用一个文件**，会话之间互相限流 —— 现在按 session 分文件存放。
 
@@ -66,7 +76,8 @@
 - 🔑 **GitHub Actions OIDC 发布**：不再需要在仓库里存 npm token
 - 🧩 **`scripts/release.mjs`**：一条命令跑完版本校验 / 双语一致性 / 测试 / 构建 / 发布
 - 🛡️ **`npm run check:readme`**：prepublish 钩子自动校验 README 三份文件不漂移
-- 📋 **独立 QA 验收报告**：[`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md)（两仓库 × 四套件 = 8/8 全绿）
+- 📋 **独立 QA 验收报告**：[`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md)（发布前第三方只读验收）
+- 🧬 **变异测试报告**：[`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md)（8 类退化 **8/8 全部被抓住**）
 
 ### 📚 文档可读性
 - 清理了 README 中被重复注入的**语言栏 / 版本行噪音**（每份 24~26 处 → 收敛到顶部 1 处），表格不再被截断
@@ -163,7 +174,7 @@ const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 }
 // {
 //   shouldTrigger: true,
 //   decision: 'trigger',        // trigger | review | ignore | throttled
-//   score: 37,                  // 0~38 加权总分
+//   score: 38,                  // 0~38 加权总分
 //   confidence: 0.9,
 //   breakdown: { keyword: {...}, context: {...}, intent: {...} },
 //   action: { type: 'workflow_trigger', recommendedAction: 'auto' },
@@ -183,11 +194,14 @@ const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 }
 ##### CLI 一键激活
 ```bash
 # triggerMessage 传入真实用户原话（也可用环境变量 CARLOS_TRIGGER_MESSAGE）
-node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"把登录接口加上参数校验"}'
+node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run dispatch workflow"}'
 ```
+> ⚠️ `triggerMessage` **必须显式传入**，且默认词表是英文（`work` / `flow` / `carlos` / `dispatch` / `trigger` / `start` / `run` / `execute`）；
+> 不传则**完全不启用自动触发**。中文场景请通过 `trigger-config.json` 扩展 `keywordWeights`。
+
 输出（stderr）：
 ```
-[Carlos Trigger] 判定触发：评分 37 · 置信度 0.9
+[Carlos Trigger] 判定触发：评分 38 · 置信度 0.9
 [Carlos Trigger] 已执行激活步骤：flow_add_user_msg（写入用户原话…）
 [Carlos Trigger] 已执行激活步骤：flow_submit_requirement（开卡：会话置为已留痕状态…）
 【Carlos 触发引擎已激活工作流】…请补齐 scope / acceptance / verify.cmd 后重新提交…
@@ -200,7 +214,7 @@ node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"把�
 - **会话隔离** — 触发历史与限流状态**按 session 分文件存放**，多会话互不干扰
 - **阈值可配** — `triggerThreshold: 15`、`autoTriggerThreshold: 25`、`lowConfidenceThreshold: 10`
 - **零外部依赖** — 纯 JavaScript，不新增任何 npm 包
-- **用户反馈学习** — 记录接受 / 拒绝，动态调整正负反馈权重
+- **用户反馈学习** — 记录接受 / 拒绝（持久化）；负反馈占多数时**自动抬高触发阈值**（更保守），正反馈多则更灵敏
 
 > 完整配置项与用法：[TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
 

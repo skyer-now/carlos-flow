@@ -382,6 +382,49 @@ const testCases = [
       return distinct && resultQ.decision === 'trigger';
     }
   },
+  {
+    name: '回归: create 与 shouldTrigger 必须是同一个会话',
+    test: () => {
+      // 旧实现：L1 读 create(sessionId) 的状态，L2 却读 shouldTrigger 第三参的会话，
+      // 不传第三参时 L2 会去读 'default'，造成跨会话历史污染。
+      const sid = 'unify-' + Date.now();
+      const engine = TriggerEngine.create(sid);
+      const r = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 });
+      console.log(`  [DEBUG] engine.sessionId=${engine.sessionId}, score=${r.score}`);
+      return engine.sessionId === sid && r.score === 38;
+    }
+  },
+  {
+    name: '回归: 反馈学习真正影响触发阈值',
+    test: () => {
+      const sid = 'fb-' + Date.now();
+      const engine = TriggerEngine.create(sid);
+      // 先触发一次（占掉最短间隔），再验证反馈调整确实抬高阈值
+      const first = engine.shouldTrigger('run dispatch workflow', { sessionId: sid }, sid);
+      const fb = engine.recordFeedback('negative');
+      const adj = fb.thresholdAdjustment;
+      console.log(`  [DEBUG] first=${first.decision}, feedbackAdj=${adj}, fb=${JSON.stringify(fb.feedback)}`);
+      // 负反馈 → 阈值上调（adj > 0）
+      return first.decision === 'trigger' && adj > 0 &&
+        engine.triggerManager.state.feedback.negative === 1;
+    }
+  },
+  {
+    name: '回归: reset("*") 可重置全部会话状态',
+    test: () => {
+      const sid = 'rst-' + Date.now();
+      TriggerEngine.create(sid).shouldTrigger('run dispatch workflow', { sessionId: sid }, sid);
+      const dir = join(
+        process.env.CARLOS_FLOW_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.carlos-flow'),
+        'trigger-state'
+      );
+      const before = existsSync(dir) ? readdirSync(dir).length : 0;
+      TriggerEngine.reset('*');
+      const after = existsSync(dir) ? readdirSync(dir).length : 0;
+      console.log(`  [DEBUG] reset 前=${before} 文件, 后=${after} 文件`);
+      return after < before || after === 0;
+    }
+  },
 ];
 
 // 运行测试

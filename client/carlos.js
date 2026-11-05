@@ -56,6 +56,11 @@ async function checkTrigger(message = '') {
     return { triggered: false, reason: '触发引擎未加载' };
   }
 
+  // 没有显式传入用户原话 → 不启用触发（不评分、不动作）
+  if (!message || String(message).trim() === '') {
+    return { triggered: false, reason: '未提供 triggerMessage，不启用自动触发' };
+  }
+
   const sessionId = args.sessionId || 'default';
 
   try {
@@ -301,11 +306,21 @@ async function main() {
     }
   }
 
-  // 智能触发检查：真实输入来源优先取显式传入的用户原话
-  //   node carlos.js flow_status '{"sessionId":"x","triggerMessage":"把登录接口加上参数校验"}'
+  // 智能触发检查：真实输入必须显式传入
+  //   node carlos.js flow_status '{"sessionId":"x","triggerMessage":"run dispatch workflow"}'
   //   或环境变量 CARLOS_TRIGGER_MESSAGE
-  const triggerMessage = args.triggerMessage || process.env.CARLOS_TRIGGER_MESSAGE || (toolName + ' ' + argsJson);
-  delete args.triggerMessage; // triggerMessage 是客户端专用字段，不透传给 MCP 工具
+  //
+  // 不传时**不启用自动触发**（空串 = 不触发）。
+  // 早先的兜底项（工具名 + 参数 JSON）会造成两个真实故障：
+  //   ① 自伤：参数里含触发词 → 自己给自己开占位卡 → 同一次调用的
+  //      flow_dispatch 反被 activation_pending 闸门拒绝；
+  //   ② 锚点污染：写入的“用户原话”是命令行文本 → Agent 用真实原话重提卡时
+  //      quote 锚点校验失败 → 补齐流程被自己的兜底串卡死。
+  const triggerMessage = args.triggerMessage || process.env.CARLOS_TRIGGER_MESSAGE || "";
+  // 客户端专用字段不透传给 MCP 工具（用副本，避免改到调用方对象）
+  const toolArgs = { ...args };
+  delete toolArgs.triggerMessage;
+  delete toolArgs.complexity;
   const triggerResult = await checkTrigger(triggerMessage);
   if (triggerResult.autoTrigger) {
     console.error('[Carlos Trigger] 工作流已激活（会话进入已留痕状态），继续执行本次工具调用...');
@@ -314,7 +329,7 @@ async function main() {
   // Call tool
   let resp;
   try {
-    resp = await callMCP("tools/call", { name: toolName, arguments: args });
+    resp = await callMCP("tools/call", { name: toolName, arguments: toolArgs });
   } catch (e) {
     console.error("❌ 工具调用失败:", e.message);
     process.exit(1);
