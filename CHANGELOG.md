@@ -18,8 +18,8 @@
 | **翻译** | `buildActivationPlan()` | 判定转成**可执行的 MCP 动作序列**（每步带 `auto` 标记） |
 | **激活 ①** | `flow_add_user_msg` | 用户原话入库，成为任务卡 `quote` 的锚点数据源 |
 | **激活 ②** | `flow_submit_requirement`（`activation: true`） | 提交 `read_only` 占位卡，**会话进入已留痕门禁态** |
-| **闸门** | `activation_pending` | 字段补齐前，`flow_claim` / `flow_dispatch` **一律拒绝派发** |
-| **放行** | 重新提交完整卡（不带 `activation`） | `activation_pending` 清空 → 正常派发 |
+| **闸门** | `activation_pending` | 字段补齐前，`flow_claim` / `flow_dispatch` / `flow_verdict` **一律拒绝派发** |
+| **放行** | 重新提交完整卡（不带 `activation`） | 三项**全部补齐**才清空 `activation_pending`（只补一项不解闸）→ 正常派发 |
 
 **安全约束**：会话已有任务卡时跳过自动开卡（不覆盖已有任务）；自动激活不决定改哪些文件；
 推断出的 `goal` 标记为占位需确认；`manual` 档只给建议不执行任何动作。
@@ -46,8 +46,8 @@
 
 **测试套件**
 
-- `test/trigger-e2e.mjs`：15 项触发引擎用例（含 4 项回归用例）
-- `npm run test:all`：串联 smoke + e2e-carlos + p0-gates + trigger-e2e
+- `test/trigger-e2e.mjs`：25 项触发引擎用例（含 10 项回归用例）
+- `npm run test:all`：串联 smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency
 - 测试脚本在缺少 `CARLOS_FLOW_MCP_ROOT` 时自动回退到仓库根目录，**本地无需额外配置环境变量**
 
 ### 🐛 修复 | Fixed
@@ -92,7 +92,7 @@
 | D-6 | 「免检」被暗示为能跳过检查 | `isBypassed()` 全仓无调用点，免检只是**标志位 + 派发后自动清零** | 文档措辞按实际语义修正 |
 | D-7 | 「反馈学习」被描述为已实现 | 当时是死代码 | 随 T-18 一并实现，文档改为真实行为 |
 
-### 🔬 变异测试扩展 | Mutation Testing（8 类退化）
+### 🔬 变异测试扩展 | Mutation Testing（13 类变异体）
 
 | 变异 | 注入内容 | 结果 |
 |------|---------|------|
@@ -105,7 +105,7 @@
 | M7 | `enforceScope` 空 scope 改回 fail-open | **CAUGHT** — 空 scope 用例失败 |
 | M8 | 移除 `verdict` 的 `dispatch_count` 检查 | **CAUGHT** — 未派发用例失败 |
 
-> 两仓库（cindy / opencode）各跑一遍，**8/8 全部被抓住**。报告：[`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md)
+> 两仓库（cindy / opencode）各跑一遍，**13/13 全部被抓住**。报告：[`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md)
 
 ### 🧪 测试增强 | Test Hardening
 
@@ -132,7 +132,7 @@
 | M4 | 去掉 `sanitizeSessionId` 的哈希后缀（会话撞名） | **CAUGHT** — 会话隔离用例失败 |
 | M5 | 移除「空 scope 提交不能解除激活闸门」的防护 | **CAUGHT** — `16d/16e` 失败 |
 
-> 两仓库（cindy / opencode）各跑一遍，**8/8 全部被抓住**。报告由 `npm run test:mutation` 自动生成。
+> 两仓库（cindy / opencode）各跑一遍，**13/13 全部被抓住**。报告由 `npm run test:mutation` 自动生成。
 
 ### 🧪 测试增强 | Test Hardening
 
@@ -160,7 +160,7 @@
 | **OIDC 发布** | GitHub Actions 使用 OIDC 身份发布到 npm，**仓库不再需要存放 npm token** |
 | **`scripts/release.mjs`** | 一条命令跑完版本校验 / 双语一致性 / 测试 / 构建 / 发布 |
 | **`npm run check:readme`** | `prepublishOnly` 钩子自动校验 README.md / README.zh.md / README.en.md 三份文件不漂移 |
-| **独立 QA 验收** | [`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md)：两仓库 × 四套件 = **8/8 全绿** |
+| **独立 QA 验收** | [`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md)：两仓库 × 五套件 = **全绿** |
 
 ### 📚 文档 | Documentation
 
@@ -185,7 +185,7 @@
 | `npm run test:e2e`（e2e-carlos） | **42/42 通过**（激活闸门 + 客户端真实激活路径 + 四道门禁防线） |
 | `npm run test:p0`（p0-gates） | **15/15 通过**（新增激活闸门与 fail-closed 断言） |
 | `npm run test:trigger`（trigger-e2e） | **23/23 通过**（激活计划 + 会话一致 + 反馈学习 + 撞名回归） |
-| `npm run test:mutation`（变异测试） | **8/8 变异全部被抓住** |
+| `npm run test:mutation`（变异测试） | **13/13 变异全部被抓住** |
 
 ---
 

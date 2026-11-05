@@ -1,189 +1,102 @@
-# Carlos Flow 发布前独立 QA 验收报告
+# Carlos Flow 发布前独立 QA 验收报告（v2.5.5）
 
-- **验收对象**：`carlos-flow-cindy`、`carlos-flow-opencode` 两个工作副本（验收时位于本机 `publish-output/` 目录下，下文路径已改写为占位符 `<REPO>`）
-- **验收方式**：只读验证（未修改 `publish-output` 下任何源码；仅运行测试套件，套件自身会写出 `test/trigger-e2e-results.json`）
-- **环境**：Windows / Git Bash / Node v22.23.4 / npm 10.9.9
-- **验收快照时间**：2026-11-05 16:13:30（最后一次全量复跑 16:12:50 ~ 16:13:02）
-- **执行者**：Orca Worker `mka57g3utqtzsm6g1grg1zkg`（只读验证角色）
-
----
-
-## 附：验收后追加的两项修复（均已提交并复跑全绿）
-
-| 编号 | 级别 | 问题 | 修复 | 提交 |
-|------|------|------|------|------|
-| F-3 | P2 | `shouldTrigger()` 限流分支提前返回，score 丢成 0 且无 confidence | 先算评分再判限流，throttled 分支也返回真实 score/confidence/breakdown | `0a105b1` |
-| F-4 | P2 | `test:trigger` 把结果写进发布目录 | 改为写入系统临时目录，保持发布目录干净 | `0a105b1` |
-
-修复后两仓库 `npm run test:all` 复跑全绿（smoke + 16 + 10 + 15），工作区干净。
+- **验收对象**：`carlos-flow-cindy`、`carlos-flow-opencode` 两个工作副本（路径已改写为占位符 `<REPO>`）
+- **验收方式**：多角色独立复核 + 真实进程端到端 + 变异测试 + 红队绕过猎捕
+- **环境**：Windows / Node v22.23.4 / npm 10.9.9
+- **验收快照时间**：2026-11-06（本轮为第二轮验收，第一轮结论为 FAIL，修复后复验）
 
 ---
 
 ## 一、验收结论
 
-**通过（PASS）**。两仓库、四个套件全部全绿，退出码全为 0，无功能性失败。
+**通过（PASS）**，但带 3 项**已记录的已知边界**（见 §六）。
 
-最终一轮全量复跑（16:12:50 ~ 16:13:02）发生在两仓库最新提交之后，工作区与 HEAD 差异为 0 行，**本次结论对应已提交的代码**：
+本轮验收由 5 个独立角色分头完成，结论互相印证：
 
-| 仓库 | 验收对应 commit | 提交时间 |
-|------|----------------|----------|
-| carlos-flow-cindy | `8502b9c feat(trigger): 智能触发引擎 + 修复 5 项真实缺陷` | 2026-11-05 16:12:32 |
-| carlos-flow-opencode | `6a400f3 feat(trigger): 智能触发引擎 + 纯 stdio 客户端重构` | 2026-11-05 16:12:51 |
-
-仍需发布前收口的 3 项（见第六节）：**验收期间仓库被并发修改、结论需与 commit 绑定**、**`node src/trigger.js` CLI 有全局状态**、**测试套件会向发布目录写入结果文件**。
-
----
-
-## 二、验收矩阵（两仓库 × 四套件）
-
-| 仓库 | 套件 | 命令 | 通过 / 失败 | 退出码 | 结论 |
-|------|------|------|--------------|--------|------|
-| carlos-flow-cindy | smoke | `npm test` | 4 步全 OK（`SMOKE_OK`） | 0 | ✅ PASS |
-| carlos-flow-cindy | e2e | `CARLOS_FLOW_MCP_ROOT=... npm run test:e2e` | **16 / 0** | 0 | ✅ PASS |
-| carlos-flow-cindy | p0 | `CARLOS_FLOW_MCP_ROOT=... npm run test:p0` | **10 / 0** | 0 | ✅ PASS |
-| carlos-flow-cindy | trigger | `CARLOS_FLOW_MCP_ROOT=... npm run test:trigger` | **15 / 0**（100%） | 0 | ✅ PASS |
-| carlos-flow-opencode | smoke | `npm test` | 4 步全 OK（`SMOKE_OK`） | 0 | ✅ PASS |
-| carlos-flow-opencode | e2e | `CARLOS_FLOW_MCP_ROOT=... npm run test:e2e` | **16 / 0** | 0 | ✅ PASS |
-| carlos-flow-opencode | p0 | `CARLOS_FLOW_MCP_ROOT=... npm run test:p0` | **10 / 0** | 0 | ✅ PASS |
-| carlos-flow-opencode | trigger | `CARLOS_FLOW_MCP_ROOT=... npm run test:trigger` | **15 / 0**（100%） | 0 | ✅ PASS |
-
-合计：**8 / 8 套件通过，0 失败**；断言总数 cindy 41 / opencode 41（smoke 4 + e2e 16 + p0 10 + trigger 15，smoke 按 4 步计）。
+| 角色 | 任务 | 结论 |
+|---|---|---|
+| 黑盒测试员 | 真实 MCP server 端到端复验 A–F | PASS（16/16）|
+| 变异测试员 | 变异体有效性（M1–M13） | PASS（13/13 全部被抓住）|
+| 独立审计员 | 文档-代码一致性 Q1–Q8 | 首轮 FAIL → 修复后逐项复核 |
+| 红队 | 激活闸门绕过猎捕 A1–A10 | 首轮 FAIL（4 条绕过）→ 修复后全部堵住 |
+| 开发者 | 双仓一致性 + 发布链路 | PASS（release.mjs dry-run 可跑通）|
 
 ---
 
-## 三、关键输出行
+## 二、测试套件实测结果
 
-### 3.1 carlos-flow-cindy
+两仓库**逐字一致**执行同一套件：
 
-```
-npm test            → step 1 parseCard OK / step 2 validateCard OK / step 3 saveState + audit OK
-                       step 4 loadState OK  卡片往返一致 → SMOKE_OK
-npm run test:e2e    → sessionId: e2e-1793866371685   FLOW_HOME: C:\Users\EDY\.carlos-flow
-                       ✓ 1 flow_protocol … ✓ 13 终态 completed_ok
-                       ✓ 14. 状态落盘到 FLOW_HOME  C:\Users\EDY\.carlos-flow\gate-state\runs\e2e-1793866371685
-                       ════ 结果: 16 通过 / 0 失败 ════
-npm run test:p0     → ✓ 0 留痕成功 tier=single_file … ✓ 9 flow_protocol 可用
-                       ════ 结果: 10 通过 / 0 失败 ════
-npm run test:trigger→ 总测试数: 15  ✅ 通过: 15  ❌ 失败: 0  ⚠️ 警告: 0  📈 通过率: 100.0%
-```
-
-### 3.2 carlos-flow-opencode
-
-```
-npm test            → step 1 parseCard OK / step 2 validateCard OK / step 3 saveState + audit OK
-                       step 4 loadState OK  卡片往返一致 → SMOKE_OK
-npm run test:e2e    → sessionId: e2e-1793866383527   FLOW_HOME: C:\Users\EDY\.carlos-flow
-                       ✓ 1 flow_protocol … ✓ 14. 状态落盘到 FLOW_HOME C:\Users\EDY\.carlos-flow\gate-state\runs\e2e-1793866383527
-                       ════ 结果: 16 通过 / 0 失败 ════
-npm run test:p0     → ✓ 0 留痕成功 tier=single_file … ✓ 9 flow_protocol 可用
-                       ════ 结果: 10 通过 / 0 失败 ════
-npm run test:trigger→ 总测试数: 15  ✅ 通过: 15  ❌ 失败: 0  ⚠️ 警告: 0  📈 通过率: 100.0%
-```
-
-### 3.3 关键门禁断言（两仓库一致）
-
-| 断言 | 实测输出 |
-|------|----------|
-| 非法 role 被拒 | `ERROR: 字段 role 值非法，可选：executor, auditor` |
-| 未 claim 直接 dispatch 被拒 | `ERROR: 未 claim，请先 flow_claim 领取派发名额。` |
-| verify.cmd 失败如实上报 | `ok=false exitCode=3` |
-| scope 外文件标违规 | `violations=[".../src/index.js"]` |
-| 非法 verdict 被拒 | `ERROR: 字段 verdict 值非法，可选：PASS, DIRECTION, LOCAL` |
-| 未确认免检被拒 | `ERROR: 开启免检需要显式确认：用户必须明确授权后，传入 confirmed=true。` |
-| 审计链完整性 | `total=10 kinds=record,accepted,card_finding,blocked,claimed,snapshot,agent_result,verdict`（含 hash 链） |
+| 套件 | 命令 | 用例数 | 结果 |
+|---|---|---|---|
+| 冒烟 | `npm test` | — | PASS |
+| 端到端 | `npm run test:e2e` | 45 | **45 通过 / 0 失败** |
+| 门禁专项 | `npm run test:p0` | 15 | **15 通过 / 0 失败** |
+| 触发引擎 | `npm run test:trigger` | 25（含 10 回归）| **25 通过 / 0 失败** |
+| 跨进程并发 | `npm run test:concurrency` | 3（3 组 × 40 轮 = 120 轮）| **3 通过 / 0 失败** |
+| 串联 | `npm run test:all` | 88 | 全绿，退出码 0 |
 
 ---
 
-## 四、逐项检查清单
+## 三、变异测试：13 类变异体 13/13 全部被抓住
 
-| # | 检查项 | carlos-flow-cindy | carlos-flow-opencode |
-|---|--------|-------------------|----------------------|
-| 1 | `npm test` | ✅ SMOKE_OK | ✅ SMOKE_OK |
-| 2 | `npm run test:e2e`（带 `CARLOS_FLOW_MCP_ROOT`） | ✅ 16/16 | ✅ 16/16 |
-| 3 | `npm run test:p0`（带 `CARLOS_FLOW_MCP_ROOT`） | ✅ 10/10 | ✅ 10/10 |
-| 4 | `npm run test:trigger`（带 `CARLOS_FLOW_MCP_ROOT`） | ✅ 15/15 | ✅ 15/15 |
-| 5 | `node src/trigger.js "run dispatch workflow"` / `"hello"` | ✅ 见 4.1 | ✅ 见 4.1（行为一致） |
-| 6 | `package.json` version ↔ `CHANGELOG.md` 顶部版本 | ✅ 2.5.5 = 2.5.5（CHANGELOG 第 8 行） | ✅ 2.5.5 = 2.5.5（CHANGELOG 第 8 行） |
-| 7 | `grep -n "require(" client/carlos.js` 无残留 | ✅ 0 命中 | ✅ 0 命中 |
+变异体全部在**临时副本**上注入，源仓只读。关键结论：
 
-补充核查（超出要求，但属发布前必要项）：
+- **M12（跨进程锁失效）** 被新增的 concurrency 套件抓住 —— 该变异体正是红队发现的「跨进程竞态绕过」的技术根因
+- **M11（占位卡硬编码三项）** 曾逃逸 → 补 `19e` 用例后被抓住（这是「服务端派生」逻辑第一次真正被验证）
+- 竞态检出率实测：M12 注入后 **5/5 次全部检出**；正常代码与无关变异（M7）**零误报**
 
-- `grep -rn "require(" src/ test/ client/` → **两仓库均为 0 命中**，ESM 改造彻底，无 CommonJS 残留。
-- `src/` 逐文件比对：**6 个文件全部逐字节一致**（`card.js` / `dispatch.js` / `index.js` / `protocol.js` / `state.js` / `trigger.js`），与 CHANGELOG「core src/ 与 carlos-flow-cindy@2.5.5 逐文件一致」的声明相符。
-- `test/`：`smoke.js`、`trigger-e2e.mjs` 一致；`e2e-carlos.mjs` / `p0-gates.mjs` 仅在 **Bridge 端口隔离** 相关代码上有差异（opencode 版无 Bridge，纯 stdio，不需要）——属合理差异，非功能分叉。
-
-### 4.1 触发引擎 CLI 行为
-
-命令：`node src/trigger.js "<消息>"`（两仓库 `src/trigger.js` 一致，行为相同）
-
-| 输入 | 干净 `CARLOS_FLOW_HOME` 下结果 | 共享 HOME 下结果 |
-|------|---------------------------|-----------------|
-| `run dispatch workflow` | **触发**：`decision=trigger` 评分 38 置信度 0.9 理由「触发评分达标」，动作 `workflow_trigger / auto` | `decision=throttled` 理由「时间间隔不足」 |
-| `hello` | **不触发**：`decision=ignore` 评分 0 置信度 0.3 理由「评分0低于阈值15」 | `decision=throttled` 理由「时间间隔不足」 |
-
-> 说明：`src/trigger.js` 的 CLI 复用 `~/.carlos-flow/trigger-state.json` 做限流（`TRIGGER_HOME` 可用 `CARLOS_FLOW_HOME` 覆盖）。因此在**同一 HOME 内连续执行两次**，第二次必然被判定为 `throttled`——这是限流设计的正常表现，不是缺陷；但对使用者是误导性输出（`评分: 0` / `置信度: undefined`），建议 CLI 在命中限流时仍输出真实评分。
+报告：[`docs/MUTATION_REPORT_v2.5.5.md`](MUTATION_REPORT_v2.5.5.md)
 
 ---
 
-## 五、验收期间的时间线（重要）
+## 四、红队绕过猎捕：4 条绕过已全部堵住
 
-验收窗口内 `publish-output` 工作区被**并发修改**，本次验收对象是**未提交的工作区**，而非某个 commit：
+红队在**真实运行的 MCP server** 上实测发现 4 条可利用绕过，全部已修复并用复用其利用链的脚本复验通过：
 
-| 时间 | 事件 |
-|------|------|
-| 16:07:03 | cindy `test:e2e` 首跑（旧代码）：**15 通过 / 1 失败**，失败项 `#14 状态落盘到 FLOW_HOME` |
-| 16:07:47 | `package.json`（两仓库）被修改 |
-| 16:08–16:10 | 定位 `#14` 根因：本机 19099 端口已有常驻 Bridge（PID 69624），其 `CARLOS_FLOW_HOME` 与测试传入值不同 → 状态落到别处；测试复用既有 Bridge 导致传入的 `CARLOS_FLOW_HOME` 被忽略 |
-| 16:09:48 | `client/carlos.js` 被修改：PID 文件按端口区分（`bridge-<PORT>.pid`），默认 `FLOW_HOME` 改为 `~/.carlos-flow` |
-| 16:09:52 | `test/e2e-carlos.mjs` 被修改：改用独立 `BRIDGE_PORT`（19100+pid%400）并新增 `cleanupBridge()` |
-| 16:10:41 | `test/p0-gates.mjs` 被修改：同样加入独立 `BRIDGE_PORT`（19500+pid%400）与清理逻辑 |
-| 16:09:59 | cindy `test:e2e` 隔离复跑：**16 / 0**（证实根因为 Bridge 复用，非产品逻辑缺陷） |
-| 16:11:24 / 16:11:47 | cindy / opencode `test:e2e`（新代码、默认端口）：**均 16 / 0** |
-| 16:12:32 | cindy 仓库提交 `8502b9c`（工作区清空） |
-| 16:12:50–16:13:02 | 两仓库四套件最终全量复跑（均在提交之后，工作区 == HEAD）：**全部 PASS，退出码全 0** |
-| 16:12:51 | opencode 仓库提交 `6a400f3`（工作区清空） |
+| # | 绕过 | 修复 | 复验 |
+|---|---|---|---|
+| ① | 跨进程竞态：并发提交 → 卡片字段全空却 `pending=[]` → 全部放行 | `withStateLock` 跨进程排他锁 + pending 幂等派生 | 40 轮 0 泄漏 |
+| ② | `acceptance=[""]` / `[null]` 被算作已补齐 | 改为内容判定 | 三种输入全被拒 |
+| ③ | `cardText` 路径忽略卡片内 `activation` 标记 | 两条路径统一识别 | 已拒 |
+| ④ | `scope=["."]` 通过校验（边界放大到整个 cwd）| `validateCard` 拒绝 `.`/`..` | 已拒 |
+
+附带修复：只读调研意图不再进入工作流门禁（占位卡恒为 read_only 档，其待补项对只读任务永远无法满足 → 原本会永久锁死会话）。
+
+复验日志：`D:/cindy/.qa-logs/fixverify/fix-verify.log`
 
 ---
 
-## 六、发现的问题与建议
+## 五、发布链路
 
-| 编号 | 级别 | 问题 | 证据 | 建议 |
-|------|------|------|------|------|
-| F-1 | **P1（已缓解，需流程化）** | 验收对象在验收窗口内**被并发修改**：Bridge 隔离、按端口 PID 文件、触发引擎接入等修复是在验收过程中陆续落到工作区的 | 时间线见第五节；两仓库现已提交（`8502b9c` / `6a400f3`），最终复跑与提交内容一致 | 已满足（结论绑定 commit）。建议固化流程：**合并后以 commit 为准重跑 `npm run test:all` 并把日志作为发布凭据**，禁止在验收中途改动被测目录 |
-| F-2 | **P1（已修复并提交）** | `test:e2e` / `test:p0` 原实现**复用本机 19099 常驻 Bridge**，测试传入的 `CARLOS_FLOW_HOME` 被忽略 → 状态落到 Bridge 启动时的 FLOW_HOME，断言 `#14` 失败 | 16:07 首跑 `#14` 失败；诊断确认状态落到了 Bridge 自身的 FLOW_HOME | 修复已随 `8502b9c` 提交（独立 `BRIDGE_PORT` + `cleanupBridge()` + 按端口 PID 文件），复跑 16/16 通过。建议 CI 同样保留端口隔离，避免 CI 机器上残留 Bridge 时误报 |
-| F-3 | P2 | `node src/trigger.js` CLI 有全局状态，同一 HOME 连续两次调用第二次必为 `throttled`，且此时 `评分: 0` / `置信度: undefined` 输出失真 | 4.1 节实测 | CLI 命中限流时仍输出真实评分/置信度；或在 `TRIGGER_GUIDE.md` 明确说明 CLI 行为与状态文件位置 |
-| F-4 | P2 | 测试套件会向 `publish-output` 内写入 `test/trigger-e2e-results.json`（`test:trigger` 副作用） | 两个仓库 `npm run test:trigger` 输出均提示写入该路径 | 确认该文件应纳入 `.gitignore` 或改为写入临时目录，保持发布目录干净 |
-| F-5 | P3 | Cindy 版依赖**常驻 Bridge + 固定端口 19099**，默认端口单例，第三方/多实例并行时有争用风险 | `bridge/mcp-bridge.js` 默认端口、`client/carlos.js` 默认 `BRIDGE_PORT=19099` | 当前按端口隔离 PID 文件已缓解；建议后续支持端口自动避让 |
-| F-6 | P3 | OpenCode 版**无 Bridge、纯 stdio、单次调用**，天然隔离，测试稳定性更好 | `client/carlos.js`（opencode）每次调用直接 spawn MCP Server | 无需处理；可在文档中说明两者差异 |
-
-**已确认无问题的项**：版本号一致性（2.5.5 ↔ CHANGELOG 2.5.5）、`require(` 残留（0 命中）、`src/` 双仓一致性（6/6 逐字节相同）、审计链 hash 完整性、免检/verdict/role/claim 四类门禁拒绝行为。
+- `scripts/release.mjs --version 2.5.5 --include-opencode --dry-run` 可跑通；失败时给出**可读错误**（命令名 + 输出末段）而非 Node 原始堆栈
+- **所有校验前置、所有推送 opencode 先行** → 消除「cindy 已打 tag 而 opencode 失败」的半发布
+- `package-lock.json` 版本与 `package.json` 对齐（否则 release.yml 的 `npm ci` 必失败）
+- `release.yml` 发布前跑**完整 `test:all`**，并校验 tag 与 `package.json` 版本一致
+- `check:readme` 已纳入 `TRIGGER_GUIDE.md` 的存在性与版本号断言
 
 ---
 
-## 七、复现命令
+## 六、已知边界（未修，如实记录）
 
-```bash
-# carlos-flow-cindy
-cd <REPO>
-npm test
-CARLOS_FLOW_MCP_ROOT="<REPO>" npm run test:e2e
-CARLOS_FLOW_MCP_ROOT="<REPO>" npm run test:p0
-CARLOS_FLOW_MCP_ROOT="<REPO>" npm run test:trigger
-node src/trigger.js "run dispatch workflow"
-node src/trigger.js "hello"
-grep -n "require(" client/carlos.js        # 期望：无输出
-grep -m1 -E "^## \[[0-9]+\.[0-9]+\.[0-9]+\]" CHANGELOG.md   # 期望：## [2.5.5]
-
-# carlos-flow-opencode（把 CARLOS_FLOW_MCP_ROOT 换成 opencode 目录，其余同）
-```
-
-原始日志留存：`D:/cindy/.qa-logs/`（`final-cindy-*.log`、`final-oc-*.log` 为最终复跑日志；`cindy-e2e.log` 为 16:07 的失败现场）。
+1. **`state.json` 未纳入审计哈希链** —— 拥有本地文件系统写权限者可直接改写状态文件开闸，且审计链无篡改痕迹。风险边界在**本地文件系统权限**，不在 MCP 工具面（红队 A7 明确标注）。彻底解决需给状态文件加签名，属独立工作项。
+2. **`state.js` 与 `trigger.js` 是两套独立的 sessionId 清洗规则** —— 触发引擎侧用哈希后缀防撞名，状态层用 `sanitizeId`。两者不会互相污染，但口径不统一。
+3. **会话 id 哈希是 32 位非加密滚动哈希** —— 用途仅是防撞名，不提供抗碰撞性保证（短 id 下碰撞概率极低，但非密码学安全）。
 
 ---
 
-## 八、环境清理说明
+## 七、本轮修复清单（按提交顺序）
 
-- 本次验收**未修改** `publish-output` 下任何源码/配置/文档。
-- 诊断过程中我在 Cindy 版上以 `BRIDGE_PORT=19098` 临时拉起过一个 Bridge 做隔离对照，已**结束该进程并删除 `bridge-19098.pid`**；端口 19098 已释放。
-- 原有常驻 Bridge（PID 69624 / 端口 19099 / `bridge.pid`）**保持原样未动**。
-- 测试在 `C:\Users\EDY\.carlos-flow` 与临时目录下产生的状态文件为套件正常行为，未清理。
+| 提交 | 内容 |
+|---|---|
+| `69bfa21` | 修正 activation 闸门派生语义（服务端派生 + 交集判定）|
+| `19f1234` | 补 `19e` 用例，堵住「派生 vs 硬编码」不可区分的变异盲区 |
+| `ec0f92b` | 修复变异脚本失效锚点，固化 M9/M10/M11 |
+| `fc9ee70` | 堵住红队 4 条绕过 + 新增跨进程并发回归测试 |
+| `fd68056` | 修 `release.mjs` 的 `lockVer` 作用域错误 |
+| `8dfa138` | 发布检查失败时给出可读错误 |
+| `d883f1a` | release.yml 跑完整 `test:all` + tag 版本校验 |
+| — | 消除 concurrency 测试 flaky + 竞态检出率提到 100% |
+| — | 文档一致性修复（A–H）+ 归档报告同步当前数据 |
+
+> ⚠️ 以上提交**仍在本地**，尚未推送到 GitHub —— 验收环境无法完成 GitHub 认证（`/dev/tty` 缺失 + PAT 无法交互输入）。推送需在具备凭据的环境执行。

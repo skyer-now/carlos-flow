@@ -552,7 +552,7 @@ node client/carlos.js flow_status '{"sessionId":"my-task"}'
 
 ## 📚 相关资源
 
-- [测试脚本](test/trigger-e2e.mjs) - E2E 测试套件（24 项，含 6 项回归用例）
+- [测试脚本](test/trigger-e2e.mjs) - E2E 测试套件（25 项，含 10 项回归用例）
 - [变异测试](scripts/mutation-check.mjs) - 注入退化验证测试套件真的能抓住（4 类变异）
 - [核心代码](src/trigger.js) - 触发引擎实现
 - [集成示例](client/carlos.js) - 客户端集成代码

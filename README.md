@@ -40,6 +40,8 @@
 
 > 安全约束：会话**已有任务卡**时自动激活会跳过开卡（不覆盖用户已有任务）；
 > 自动激活只负责「留痕 + 进入门禁」，**绝不代替 Agent 决定改哪些文件**。
+>
+> **规则③：普通卡不上闸门** —— 提交**未标 `activation` 且该会话从未被激活过**的普通卡片时，**不会进入激活闸门**（`activation_pending` 保持为空）。档位必填项已由 `validateCard` 按 `tier` 强制（`read_only` 只需 `goal` + `quote`），此处再加闸门会误伤 T1 只读调研场景。
 
 ##### 🔐 门禁侧的四道防线（独立 QA 审计后加固）
 | 防线 | 拦截什么 | 结果 |
@@ -47,9 +49,9 @@
 | **逐字段核验** | 只补了 `scope`、`acceptance`/`verify.cmd` 仍缺就提交 | 闸门**继续拦住**（`activation_pending` 精确列出还缺哪几项） |
 | **未派发不许记 PASS** | 卡片刚提交、什么都没跑就想 `verdict=PASS` | 拒绝；`completed_ok` 保持 `false`（`DIRECTION`/`LOCAL` 不受影响，不误伤返工意见） |
 | **空 scope fail-closed** | 卡片 `scope` 为空时改动任何文件 | `flow_check_scope` 判**全部越界**（早期实现是 fail-open，等于「白名单为空→随便改」） |
-| **审计链专属事件** | 事后追问「这是不是占位卡？解闸过没有？」 | `activation` / `activation_gate_held` / `activation_released` / `verdict_denied` 四类事件可查 |
+| **审计链专属事件** | 事后追问「这是不是占位卡？解闸过没有？」 | `activation` / `activation_gate_activated` / `activation_gate_held` / `activation_gate_unlocked` / `activation_released` / `verdict_denied` 六类事件可查 |
 
-> 以上四道防线都有对应的**变异测试**（注入退化 → 确认测试会失败），共 8 类退化 **8/8 全部被抓住**。
+> 以上四道防线都有对应的**变异测试**（注入退化 → 确认测试会失败），共 13 类变异体 **13/13 全部被抓住**。
 >
 > 顺带修复：**触发状态原先所有会话共用一个文件**，会话之间互相限流 —— 现在按 session 分文件存放。
 
@@ -77,7 +79,7 @@
 - 🧩 **`scripts/release.mjs`**：一条命令跑完版本校验 / 双语一致性 / 测试 / 构建 / 发布
 - 🛡️ **`npm run check:readme`**：prepublish 钩子自动校验 README 三份文件不漂移
 - 📋 **独立 QA 验收报告**：[`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md)（发布前第三方只读验收）
-- 🧬 **变异测试报告**：[`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md)（8 类退化 **8/8 全部被抓住**）
+- 🧬 **变异测试报告**：[`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md)（13 类变异体 **13/13 全部被抓住**）
 
 ### 📚 文档可读性
 - 清理了 README 中被重复注入的**语言栏 / 版本行噪音**（每份 24~26 处 → 收敛到顶部 1 处），表格不再被截断
@@ -125,7 +127,7 @@ cd carlos-flow-cindy
 npm install
 cp .env.example .env      # 编辑：CARLOS_FLOW_MCP_ROOT、CARLOS_FLOW_HOME
 npm test                  # 冒烟测试（完全隔离）
-npm run test:e2e          # 16 项端到端用例
+npm run test:e2e          # 45 项端到端用例
 ```
 
 ---
@@ -158,7 +160,7 @@ flowchart LR
 | **翻译** | `buildActivationPlan()` | 判定转成**可执行的 MCP 动作序列**（带 `auto` 标记） |
 | **激活 ①** | `flow_add_user_msg` | 用户原话入库，成为任务卡 `quote` 的锚点数据源 |
 | **激活 ②** | `flow_submit_requirement`（`activation: true`） | 提交 `read_only` 占位卡，**会话进入已留痕门禁态**，审计链记录激活事件 |
-| **闸门** | `activation_pending` | 在 `scope` / `acceptance` / `verify.cmd` 补齐前，`flow_claim` 与 `flow_dispatch` **一律拒绝派发** |
+| **闸门** | `activation_pending` | 在 `scope` / `acceptance` / `verify.cmd` 补齐前，`flow_claim` / `flow_dispatch` / `flow_verdict` **一律拒绝派发** |
 | **放行** | 重新提交完整卡 | 补齐字段后重新提交 → `activation_pending` 清空 → 正常派发 |
 
 > 💡 **安全约束**：会话**已有任务卡**时自动激活会跳过开卡（不覆盖用户已有任务）；
@@ -361,13 +363,14 @@ flowchart TB
 ---
 ## 🧪 测试
 ```bash
-npm test              # 冒烟测试——隔离临时目录，< 10s
-npm run test:e2e      # 16 项端到端用例
-npm run test:p0       # 10 项门禁专项（role 白名单 / 越界 / 免检确认 …）
-npm run test:trigger  # 15 项触发引擎用例（含 4 项回归）
-npm run test:all      # 四个套件串联，一次跑完
+npm test                   # 冒烟测试——隔离临时目录，< 10s
+npm run test:e2e           # 45 项端到端用例
+npm run test:p0            # 15 项门禁专项（role 白名单 / 越界 / 免检确认 …）
+npm run test:trigger       # 25 项触发引擎用例（含 10 项回归）
+npm run test:concurrency   # 3 项跨进程并发回归
+npm run test:all           # 五个套件串联，一次跑完
 ```
-> 本地运行无需额外配置环境变量（测试脚本会自动回退到仓库根目录）；CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request 运行全部四个套件。
+> 本地运行无需额外配置环境变量（测试脚本会自动回退到仓库根目录）；CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request 运行全部五个套件。
 
 ---
 ## 📋 变更日志
@@ -377,9 +380,9 @@ npm run test:all      # 四个套件串联，一次跑完
 |------|------|
 | ✨ 新增 | 智能触发引擎（`src/trigger.js`）：L1 动态上限 / L2 三维评分 / L3 四档决策 |
 | ✨ 新增 | `TRIGGER_GUIDE.md` 完整使用指南（配置、评分公式、故障排查） |
-| ✨ 新增 | `test/trigger-e2e.mjs` 15 项用例（含 4 项回归）+ `npm run test:all` 串联四套件 |
+| ✨ 新增 | `test/trigger-e2e.mjs` 25 项用例（含 10 项回归）+ `npm run test:all` 串联五套件 |
 | ✨ 新增 | `scripts/release.mjs` 发布脚本 + `npm run check:readme` 双语一致性钩子 |
-| ✨ 新增 | `docs/QA_REPORT_v2.5.5.md` 独立 QA 验收报告（8/8 套件全绿） |
+| ✨ 新增 | `docs/QA_REPORT_v2.5.5.md` 独立 QA 验收报告（5 套件全绿） |
 | 🐛 修复 | 触发引擎在 ESM 客户端中被 `require()` 静默吞掉 → 改用动态 `import()` |
 | 🐛 修复 | 触发上限检查用 0~1 均值比 5~15 → 永不触发 → 改用原始次数 |
 | 🐛 修复 | 动态上限历史因子为加项（触发越多上限越高）→ 改为惩罚项 |
@@ -418,7 +421,7 @@ npm run test:all      # 四个套件串联，一次跑完
 | 验证命令超时 | `verify.cmd` 超过 60s 会被熔断，建议拆成快速命令 |
 | scope 越界误报 | `scope` 用相对路径，`git diff --name-only` 需一致 |
 | 触发引擎一直不触发 | 检查输入是否命中 `keywordWeights` 关键词；中文场景需自行扩展词表（默认词表为英文） |
-| 触发太频繁 | 调高 `triggerThreshold`、调大 `minTriggerIntervalSeconds`，或调低 `historyCoeff` |
+| 触发太频繁 | 调高 `triggerThreshold`、调大 `minTriggerIntervalSeconds`、或调高 `historyCoeff`（它是惩罚项，调高会更快收紧上限） |
 | 触发引擎状态文件在哪 | 统一在 `CARLOS_FLOW_HOME`（默认 `~/.carlos-flow`），不再写当前工作目录 |
 
 ---

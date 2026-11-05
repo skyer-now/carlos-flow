@@ -46,9 +46,9 @@ The earlier implementation only printed a log line when it hit — it never actu
 | **Field-by-field verification** | Submitting with only `scope` filled while `acceptance` / `verify.cmd` are still empty | The gate **keeps holding** (`activation_pending` lists exactly what is still missing) |
 | **No PASS without dispatch** | `verdict=PASS` on a card that was just submitted and never dispatched | Rejected; `completed_ok` stays `false` (`DIRECTION` / `LOCAL` are unaffected — rework notes are not blocked) |
 | **Empty scope fails closed** | Modifying any file while the card's `scope` is empty | `flow_check_scope` reports **every** path as out-of-scope (the early implementation failed *open*, i.e. "empty whitelist → change anything") |
-| **Dedicated audit events** | Asking afterwards "was this a placeholder card? was it ever released?" | `activation` / `activation_gate_held` / `activation_released` / `verdict_denied` are all queryable |
+| **Dedicated audit events** | Asking afterwards "was this a placeholder card? was it ever released?" | `activation` / `activation_gate_activated` / `activation_gate_held` / `activation_gate_unlocked` / `activation_released` / `verdict_denied` are all queryable |
 
-> Every one of these defenses has a matching **mutation test** (inject the regression → confirm the suite fails). 8 injected regressions, **all 8 caught**.
+> Every one of these defenses has a matching **mutation test** (inject the regression → confirm the suite fails). 13 injected mutations, **all 13 caught**.
 
 >
 > Also fixed: trigger state was previously kept in **one shared file for all sessions**, so one session could throttle another — it is now stored per session.
@@ -77,7 +77,7 @@ The earlier implementation only printed a log line when it hit — it never actu
 - 🧩 **`scripts/release.mjs`**: version checks / bilingual consistency / tests / build / publish in one command
 - 🛡️ **`npm run check:readme`**: prepublish hook keeps the three README files from drifting apart
 - 📋 **Independent QA report**: [`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md) — third-party read-only acceptance before release
-- 🧬 **Mutation report**: [`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md) — 8 injected regressions, **all 8 caught**
+- 🧬 **Mutation report**: [`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md) — 13 injected mutations, **all 13 caught**
 
 ### 📚 Documentation readability
 - Removed the repeated **language bar / version line noise** that was injected throughout the READMEs (24–26 occurrences per file → consolidated to 1 at the top); tables are no longer truncated
@@ -352,7 +352,7 @@ flowchart TB
 npm test              # smoke test — isolated temp dir, < 10s
 npm run test:e2e      # 16-case end-to-end suite
 npm run test:p0       # 10-case gate suite (role whitelist / scope / bypass confirmation …)
-npm run test:trigger  # 15-case trigger engine suite (incl. 4 regression cases)
+npm run test:trigger  # 25-case trigger engine suite (incl. 10 regression cases)
 npm run test:all      # all four suites chained
 ```
 > No environment setup needed locally (the suites fall back to the repo root automatically). CI runs all four suites on **ubuntu-latest** and **windows-latest** for every push and pull request.
@@ -365,9 +365,9 @@ Full history → [CHANGELOG.md](CHANGELOG.md)
 |------|--------|
 | ✨ New | Smart trigger engine (`src/trigger.js`): L1 dynamic cap / L2 three-axis scoring / L3 four-way decision |
 | ✨ New | `TRIGGER_GUIDE.md` complete usage guide (config, scoring formula, troubleshooting) |
-| ✨ New | `test/trigger-e2e.mjs` — 15 cases incl. 4 regression cases; `npm run test:all` chains all four suites |
+| ✨ New | `test/trigger-e2e.mjs` — 25 cases incl. 10 regression cases; `npm run test:all` chains all five suites |
 | ✨ New | `scripts/release.mjs` release script + `npm run check:readme` bilingual consistency hook |
-| ✨ New | `docs/QA_REPORT_v2.5.5.md` independent QA acceptance report (8/8 suites green) |
+| ✨ New | `docs/QA_REPORT_v2.5.5.md` independent QA acceptance report (5 suites green) |
 | 🐛 Fixed | Trigger engine silently swallowed by `require()` in the ESM client → dynamic `import()` |
 | 🐛 Fixed | Trigger cap compared a 0–1 average against 5–15 → never fired → now uses the raw count |
 | 🐛 Fixed | History factor in the dynamic cap was additive (more triggers → higher cap) → now a penalty |

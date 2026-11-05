@@ -377,9 +377,11 @@ const testCases = [
         'trigger-state'
       );
       const files = existsSync(dir) ? readdirSync(dir) : [];
-      const pFiles = files.filter((f) => f.startsWith('col_'));
+      // 精确匹配本次生成的文件（用同一时间戳前缀），而不是 startsWith('col_') ——
+      // 后者会把历史遗留的 col_ 开头文件一并计入，可能造成「去掉哈希后缀时反而假绿」。
+      const pFiles = files.filter((f) => f.startsWith('col_' + stamp));
       const distinct = new Set(pFiles).size >= 2;
-      console.log(`  [DEBUG] Q decision=${resultQ.decision}, col_前缀文件数=${pFiles.length}`);
+      console.log(`  [DEBUG] Q decision=${resultQ.decision}, 本次col_文件数=${pFiles.length}, 目录内col_文件总数=${files.filter((f) => f.startsWith('col_')).length}`);
       // 两个同形 id 必须落在不同文件上，且互不干扰
       return distinct && resultQ.decision === 'trigger';
     }
