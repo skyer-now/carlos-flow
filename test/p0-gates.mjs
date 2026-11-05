@@ -3,13 +3,16 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 
 import os from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // 状态/审计根目录默认值：与 src/state.js 的 FLOW_HOME 保持一致（跨平台）
 const DEFAULT_FLOW_HOME = join(os.homedir(), '.carlos-flow');
 
-const ROOT = process.env.CARLOS_FLOW_MCP_ROOT;
+// 仓库根目录：优先环境变量，缺失时回退到本脚本所在目录的上一级（= 仓库根）
+const REPO_ROOT = dirname(fileURLToPath(import.meta.url)) + "/..";
+const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || REPO_ROOT;
 const CLIENT = [ROOT + "/client/carlos.js", ROOT + "/carlos.js"].find(p => fs.existsSync(p));
 const FLOW_HOME = process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME;
 // 独立 Bridge 端口：避免复用本机已有的 Bridge（它可能带旧的 FLOW_HOME）

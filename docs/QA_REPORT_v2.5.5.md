@@ -1,6 +1,6 @@
 # Carlos Flow 发布前独立 QA 验收报告
 
-- **验收对象**：`D:/cindy/publish-output/carlos-flow-cindy`、`D:/cindy/publish-output/carlos-flow-opencode`
+- **验收对象**：`carlos-flow-cindy`、`carlos-flow-opencode` 两个工作副本（验收时位于本机 `publish-output/` 目录下，下文路径已改写为占位符 `<REPO>`）
 - **验收方式**：只读验证（未修改 `publish-output` 下任何源码；仅运行测试套件，套件自身会写出 `test/trigger-e2e-results.json`）
 - **环境**：Windows / Git Bash / Node v22.23.4 / npm 10.9.9
 - **验收快照时间**：2026-11-05 16:13:30（最后一次全量复跑 16:12:50 ~ 16:13:02）
@@ -164,11 +164,11 @@ npm run test:trigger→ 总测试数: 15  ✅ 通过: 15  ❌ 失败: 0  ⚠️ 
 
 ```bash
 # carlos-flow-cindy
-cd /d/cindy/publish-output/carlos-flow-cindy
+cd <REPO>
 npm test
-CARLOS_FLOW_MCP_ROOT="D:/cindy/publish-output/carlos-flow-cindy" npm run test:e2e
-CARLOS_FLOW_MCP_ROOT="D:/cindy/publish-output/carlos-flow-cindy" npm run test:p0
-CARLOS_FLOW_MCP_ROOT="D:/cindy/publish-output/carlos-flow-cindy" npm run test:trigger
+CARLOS_FLOW_MCP_ROOT="<REPO>" npm run test:e2e
+CARLOS_FLOW_MCP_ROOT="<REPO>" npm run test:p0
+CARLOS_FLOW_MCP_ROOT="<REPO>" npm run test:trigger
 node src/trigger.js "run dispatch workflow"
 node src/trigger.js "hello"
 grep -n "require(" client/carlos.js        # 期望：无输出

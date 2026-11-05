@@ -5,7 +5,7 @@
 
 ---
 
-## [2.5.5] - 2026-11-05 — 智能触发引擎正式发布 + 5 项缺陷修复
+## [2.5.5] - 2026-11-05 — 智能触发引擎正式发布 + 7 项缺陷修复
 
 ### ✨ 新增 | Added
 
@@ -13,23 +13,26 @@
 
 | 层级 | 组件 | 说明 |
 |------|------|------|
-| L1 | `DynamicTriggerManager` | 动态触发上限：会话时长、任务复杂度、近期触发频率 |
-| L2 | `TriggerScorer` | 触发评分：关键词 (0-50) + 上下文 (0-30) + 意图 (0-20) = 0-100 |
+| L1 | `DynamicTriggerManager` | 动态触发上限：会话时长、任务复杂度、近期触发频率（惩罚项） |
+| L2 | `TriggerScorer` | 触发评分：关键词 (0-50, 权重 0.5) + 上下文 (0-30, 权重 0.3) + 意图 (0-20, 权重 0.2) = 加权满分 **38** |
 | L3 | `TriggerDecisionEngine` | 决策引擎：`trigger` / `review` / `ignore` / `throttled` |
 
-- **配置系统**：`trigger-config.json` 可覆盖全部阈值与权重
+- **配置系统**：`trigger-config.json` 可覆盖全部阈值与权重（`triggerThreshold: 15`、`autoTriggerThreshold: 25`、`lowConfidenceThreshold: 10`）
 - **状态持久化**：触发历史落在 `CARLOS_FLOW_HOME`，不污染仓库目录
 - **用户反馈学习**：接受/拒绝行为驱动权重调整
+- **评分可解释**：每次决策返回完整 `breakdown`（命中的关键词 / 上下文词 / 意图类型）
+- **限流也如实**：被限流时仍返回真实评分与置信度，不假装 0 分
 - **详细文档**：[TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
 
 **测试套件**
 
 - `test/trigger-e2e.mjs`：15 项触发引擎用例（含 4 项回归用例）
 - `npm run test:all`：串联 smoke + e2e-carlos + p0-gates + trigger-e2e
+- 测试脚本在缺少 `CARLOS_FLOW_MCP_ROOT` 时自动回退到仓库根目录，**本地无需额外配置环境变量**
 
 ### 🐛 修复 | Fixed
 
-> 以下 5 项均为**真实可复现的缺陷**，在本次发布前由独立验证发现并修复。
+> 以下 7 项均为**真实可复现的缺陷**，在本次发布前由独立验证发现并修复。
 
 | # | 问题 | 影响 | 修复 |
 |---|------|------|------|
@@ -38,6 +41,8 @@
 | T-3 | 动态上限公式中历史因子为**加项** | 触发越多上限越高，**封顶逻辑自我抵消** | 改为惩罚项：近期触发越频繁，上限越低 |
 | T-4 | `processUserMessage()` 硬编码 `sessionId='default'`，忽略 `context.sessionId` | 多会话场景状态串扰 | 按 `context.sessionId` 创建引擎并透传 |
 | T-5 | `src/trigger.js` 的 CLI 入口用 `import.meta.url.endsWith(process.argv[1])` | `file:///` 前缀导致永不匹配，**独立测试模式从未运行过** | 改用 `fileURLToPath` + `resolve` 路径比较 |
+| T-6 | `shouldTrigger()` 在限流分支提前 `return`，未先计算评分 | 评分丢成 `0`、置信度缺失，调用方无法判断真实意图强度 | 改为先算评分再判限流，`throttled` 分支也返回 `score` / `confidence` / `breakdown` |
+| T-7 | `test:trigger` 把结果文件写入发布目录 `test/trigger-e2e-results.json` | **污染 npm 发布内容** | 改为写入系统临时目录 |
 
 ### 🔒 安全 | Security
 
@@ -46,12 +51,31 @@
 | S-1 | `.gitignore` 末行为 `*.tar.gz.npmrc.local`（粘连），导致 `.npmrc.local`（含 npm token）**未被忽略** | 拆分为独立规则，并补充 `.npmrc.*.local` |
 | S-2 | 一次性修复脚本（`fix_*.mjs`、`debug_*.mjs` 等 42 个）与 `.b64`、`secret.json` 等临时文件混入仓库 | 加入 `.gitignore` 忽略规则 |
 | S-3 | 触发器状态文件默认写入当前工作目录 | 改为与 `state.js` 一致的 `CARLOS_FLOW_HOME` 约定 |
+| S-4 | 硬编码机器路径 `D:\opencode-backups` | 改为跨平台默认 `~/.carlos-flow` |
+
+### 🚀 发布工程 | Release Engineering
+
+| 项目 | 说明 |
+|------|------|
+| **OIDC 发布** | GitHub Actions 使用 OIDC 身份发布到 npm，**仓库不再需要存放 npm token** |
+| **`scripts/release.mjs`** | 一条命令跑完版本校验 / 双语一致性 / 测试 / 构建 / 发布 |
+| **`npm run check:readme`** | `prepublishOnly` 钩子自动校验 README.md / README.zh.md / README.en.md 三份文件不漂移 |
+| **独立 QA 验收** | [`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md)：两仓库 × 四套件 = **8/8 全绿** |
+
+### 📚 文档 | Documentation
+
+- **README 可读性**：清除了被重复注入的**语言栏 / 版本行噪音**（每份 24~26 处 → 收敛到顶部 1 处），原先粘在 Markdown 表格行尾导致表格被截断的问题已修复
+- **README 新增**：v2.5.5 更新速览区（三层触发架构表、7 项缺陷表、安全与发布工程、文档可读性说明）
+- **README 修正**：触发评分的真实满分（38 而非 100）、动态上限的惩罚项语义、决策引擎的四档输出
+- **FAQ 补充**：触发不生效 / 触发过频 / 状态文件位置 三条排查项
+- **测试命令**：`npm run test:p0`、`npm run test:trigger`、`npm run test:all` 全部写入 README
 
 ### 🔧 变更 | Changed
 
 - 触发引擎 E2E 测试迁入 `test/trigger-e2e.mjs`，纳入 npm scripts
 - README / CHANGELOG / package.json 版本号统一为 **2.5.5**
 - `carlos-flow-cindy` 与 `carlos-flow-opencode` 的 `src/` 保持逐文件一致
+- 清理 42 个一次性修复脚本与临时产物（净删 5325 行）
 
 ### ✅ 验证 | Verification
 
@@ -207,7 +231,7 @@
 
 | 版本 | npm (Cindy) | npm (OpenCode) | GitHub Release | 核心状态 |
 |------|-------------|----------------|----------------|----------|
-| 2.5.5 | carlos-flow-cindy@2.5.5 | carlos-flow-opencode@2.5.5 | v2.5.5 | **智能触发引擎 + 5 项缺陷修复** |
+| 2.5.5 | carlos-flow-cindy@2.5.5 | carlos-flow-opencode@2.5.5 | v2.5.5 | **智能触发引擎 + 7 项缺陷修复 + OIDC 发布** |
 | 2.5.4 | - | carlos-flow-opencode@2.5.4 | v2.5.4 | 文档标准化 + UI 修复 |
 | 2.5.3 | carlos-flow-cindy@2.5.3 | carlos-flow-opencode@2.5.3 | v2.5.3 | **致命语法修复 + 门禁真验证** |
 | 2.5.2 | carlos-flow-cindy@2.5.2 | carlos-flow-opencode@2.5.2 | v2.5.2 | Phase 1 P0 全修复 |

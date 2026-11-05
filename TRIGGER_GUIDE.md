@@ -7,8 +7,8 @@ Carlos Flow 智能触发引擎是一个三层智能系统，能够自动感知�
 ### 核心特性
 
 1. **动态上限控制** - 基于会话时长、任务复杂度和触发历史动态调整触发上限
-2. **评分系统** - 对每个用户输入进行 0-100 的触发评分
-3. **决策引擎** - 基于评分和动态上限决定是否触发工作流
+2. **评分系统** - 对每个用户输入评分：关键词 50 + 上下文 30 + 意图 20，加权后满分 **38**
+3. **决策引擎** - 基于评分和动态上限决定是否触发工作流（四档：`trigger` / `review` / `ignore` / `throttled`）
 4. **用户反馈学习** - 记录用户接受/拒绝，持续优化触发
 5. **零外部依赖** - 纯 JavaScript 实现，无需 npm 包
 
@@ -151,15 +151,18 @@ engine.recordFeedback('positive'); // 用户接受
 engine.recordFeedback('negative'); // 用户拒绝
 ```
 
-### 3. 通过 MCP 接口触发
+### 3. 通过 CLI 客户端集成
 
-使用公开工具接口：
+触发引擎已集成到 `client/carlos.js`：每次调用 MCP 工具前先做一次触发检查，命中时在 stderr 打印评分与置信度。
 
-```javascript
-// 需要实现触发工具暴露
-// flow_trigger_check - 检查是否应触发
-// flow_auto_trigger - 自动触发工作流
+```bash
+node client/carlos.js flow_dispatch '{"sessionId":"my-task","role":"executor"}'
+# stderr: [Carlos Trigger] 评分 37 · 置信度 0.9 · 命中 work, flow, dispatch
 ```
+
+> **当前定位**：触发引擎是**库级能力**（`src/trigger.js`），由客户端集成调用；
+> 它**尚未**作为独立的 MCP 工具暴露给宿主 Agent。如果你需要 `flow_trigger_check` 之类的
+> MCP 工具入口，请自行在 `src/index.js` 的 `TOOLS` 数组中注册一个包装工具。
 
 ## 📊 评分计算详解
 

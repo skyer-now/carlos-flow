@@ -6,6 +6,56 @@
 **版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
+## 🆕 v2.5.5 更新速览
+> 一句话：**工作流现在会自己认出该上场的时候。**
+
+### ✨ 智能触发引擎（全新）
+不再需要每次手动喊"走门禁"。引擎会读取你的输入，自动判断现在是否该启动 Carlos 工作流——并且**告诉你为什么**。
+
+| 层 | 组件 | 做什么 | 为什么需要它 |
+|----|------|--------|-------------|
+| **L1** | `DynamicTriggerManager` | 动态计算"本会话还允许触发几次" | 固定上限要么太吵、要么太严；会话越长、任务越复杂，上限自动放宽 |
+| **L2** | `TriggerScorer` | 给每条消息打分：关键词 50 + 上下文 30 + 意图 20，加权后满分 **38** | 触发与否必须**可解释**——每次都告诉你命中了哪些词、得了多少分 |
+| **L3** | `TriggerDecisionEngine` | 四档决策：`trigger` / `review` / `ignore` / `throttled` | 把"要不要触发"从模糊直觉变成明确规则 |
+
+**关键特性**
+- 🎚️ **动态上限**：`5 + 会话时长(小时)×0.5 + 复杂度×2 − 窗口内已触发×0.3`，封顶 15
+- 🛡️ **不打扰**：同会话最短间隔 5 分钟；触发越多上限**越低**（惩罚项，不是奖励项）
+- 📊 **评分透明**：返回完整 `breakdown`（命中的关键词 / 上下文词 / 意图类型）
+- ⚖️ **限流也如实**：被限流时照样返回真实评分与置信度，不假装"0 分"
+- 🧠 **反馈学习**：记录你接受 / 拒绝的触发，动态调整正负反馈权重
+- 📦 **零外部依赖**：纯 JavaScript，不新增任何 npm 包
+
+### 🐛 修复 7 项真实缺陷
+> 这些都是能复现的实际问题，不是"可能的隐患"。
+
+| # | 问题 | 影响 | 修复 |
+|---|------|------|------|
+| 1 | `client/carlos.js` 是 ESM 却用 `require()` 加载触发引擎，异常被 `catch` 吞掉 | **集成完全失效**，引擎从未真正运行 | 改用动态 `import()` |
+| 2 | `canTrigger()` 拿 0~1 的加权均值去和上限 5~15 比较 | 上限检查**永远不会触发** | 新增 `countTriggersInWindow()` 返回原始次数 |
+| 3 | 动态上限公式里历史因子是**加项** | 触发越多上限反而越高，封顶逻辑自我抵消 | 改为**惩罚项**（减法） |
+| 4 | `processUserMessage()` 硬编码 `sessionId='default'` | 忽略 `context.sessionId`，多会话互相串味 | 按上下文透传 |
+| 5 | `src/trigger.js` 用 `import.meta.url.endsWith(process.argv[1])` 判断 CLI 入口 | `file:///` 前缀导致**永不匹配**，CLI 形同虚设 | 改用 `fileURLToPath()` + `resolve()` |
+| 6 | `shouldTrigger()` 在限流分支提前 `return` | 评分丢成 `0`、置信度丢失，调用方无法判断 | 改为先算评分再判限流 |
+| 7 | `test:trigger` 把结果文件写进发布目录 | 污染 npm 包内容 | 改为写入系统临时目录 |
+
+### 🔒 安全与整洁
+- 🚨 **`.gitignore` 规则粘连**：末行 `*.tar.gz.npmrc.local` 让 `.npmrc.local`（**含 npm token**）根本没被忽略 → 已拆为独立规则
+- 🏠 **状态文件不再乱跑**：触发器状态统一落到 `CARLOS_FLOW_HOME`，不再写进当前工作目录
+- 🌐 **去掉硬编码机器路径**：`D:\opencode-backups` → `~/.carlos-flow`（跨平台默认）
+- 🧹 **清理 42 个一次性修复脚本**与临时产物（净删 5325 行）
+
+### 🚀 发布工程
+- 🔑 **GitHub Actions OIDC 发布**：不再需要在仓库里存 npm token
+- 🧩 **`scripts/release.mjs`**：一条命令跑完版本校验 / 双语一致性 / 测试 / 构建 / 发布
+- 🛡️ **`npm run check:readme`**：prepublish 钩子自动校验 README 三份文件不漂移
+- 📋 **独立 QA 验收报告**：[`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md)（两仓库 × 四套件 = 8/8 全绿）
+
+### 📚 文档可读性
+- 清理了 README 中被重复注入的**语言栏 / 版本行噪音**（每份 24~26 处 → 收敛到顶部 1 处），表格不再被截断
+- 新增 [`TRIGGER_GUIDE.md`](TRIGGER_GUIDE.md)：智能触发引擎完整使用指南
+
+---
 ## 🎯 为什么选择 Carlos Flow？
 绝大多数 AI 编码流程是**建议性的**。提示词写"只改这些文件"——Agent 客气地点头，然后把半个仓库重写了。提示词写"跑一下测试"——Agent 汇报"测试通过"，其实根本没跑。
 Carlos Flow 是**机械性的**。约束写在代码里，不写在散文里。
@@ -20,6 +70,7 @@ Carlos Flow 是**机械性的**。约束写在代码里，不写在散文里。
 | **忘记拉起守护进程** | "你启动服务了吗？" / 端口已被占用 | Bridge 首次调用自动拉起、健康检查、Token 认证、限流 |
 | **自证式复核** | 同一个 Agent 既实现又审批 | 内置 `auditor` 角色，独立合同；裁定严格三档 `PASS`/`DIRECTION`/`LOCAL` |
 | **改坏了无法回退** | 只能手动 `git revert` | 派发前自动快照 → `flow_revert_plan` 生成原子还原计划 |
+| **每次都要手动喊话启动** | "走门禁""开始流程"——不喊就不启动，忘了就裸奔 | **智能触发引擎**自动识别意图，评分达标才触发，且告诉你命中了什么 |
 ### 差异对比
 | 能力 | **Carlos Flow** | 原生 MCP Server | 提示词 / 手写脚本 |
 |------|-----------------|-----------------|------------------|
@@ -30,8 +81,7 @@ Carlos Flow 是**机械性的**。约束写在代码里，不写在散文里。
 | **诚实派发配额** | ✅ 只计派发 | ❌ 无 | ❌ 无 |
 | **独立复核** | ✅ 内置 `auditor` 角色 | ❌ 无 | ❌ 可选 |
 | **快照 + 还原** | ✅ 自动、原子计划 | ❌ 无 | ❌ 手动 `git revert` |
-| **守护进程生命周期** | ✅ 全自动（Cindy 版） | ❌ 手动 | ❌ 手动 |**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+| **守护进程生命周期** | ✅ 全自动（Cindy 版） | ❌ 手动 | ❌ 手动 |
 
 ---
 ## 🚀 30 秒快速开始
@@ -48,19 +98,37 @@ npm install
 cp .env.example .env      # 编辑：CARLOS_FLOW_MCP_ROOT、CARLOS_FLOW_HOME
 npm test                  # 冒烟测试（完全隔离）
 npm run test:e2e          # 16 项端到端用例
-```**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+```
 
 ---
 ## 🌟 核心能力
-#### 🔥 v2.5.5 新增：智能触发引擎
-> **三层智能触发系统**：在工作流集中之前自动感知场景意图，减少不必要的手动启动。
-- **L1 动态上限** - 基于会话时长、任务复杂度和历史触发频率动态调整触发上限
-- **L2 触发评分** - 对每个消息评分 (0-100)：关键词 50 分 + 上下文 30 分 + 意图 20 分
-- **L3 决策引擎** - 基于评分和动态上限决定触发 (`trigger`/`review`/`ignore`)
-- **零外部依赖** - 纯 JavaScript 实现，无需 npm 包
-- **用户反馈学习** - 记录接受/拒绝，持续优化触发
-> 详细文档：[TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
+#### 🆕 智能触发引擎 — `src/trigger.js`
+> **三层智能感知**：在工作流启动前自动判断"现在是不是该走门禁"，并给出可解释的评分依据。
+
+```javascript
+import TriggerEngine from './src/trigger.js';
+
+const engine = TriggerEngine.create('session-123');
+const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 });
+
+// {
+//   shouldTrigger: true,
+//   decision: 'trigger',        // trigger | review | ignore | throttled
+//   score: 37,                  // 0~38 加权总分
+//   confidence: 0.9,
+//   breakdown: { keyword: {...}, context: {...}, intent: {...} },
+//   action: { type: 'workflow_trigger', recommendedAction: 'auto' }
+// }
+```
+
+- **L1 动态上限** — `5 + 会话时长×0.5 + 复杂度×2 − 窗口内已触发×0.3`，封顶 15
+- **L2 触发评分** — 关键词（0~50，权重 0.5）+ 上下文（0~30，权重 0.3）+ 意图（0~20，权重 0.2），加权满分 **38**
+- **L3 决策引擎** — 四档：`trigger`（达标触发）/ `review`（临界待确认）/ `ignore`（低于 10 分忽略）/ `throttled`（限流）
+- **阈值可配** — `triggerThreshold: 15`、`autoTriggerThreshold: 25`、`lowConfidenceThreshold: 10`
+- **零外部依赖** — 纯 JavaScript，不新增任何 npm 包
+- **用户反馈学习** — 记录接受 / 拒绝，动态调整正负反馈权重
+
+> 完整配置项与用法：[TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
 
 ### 1️⃣ 真实验证 — `flow_run_verify`
 ```typescript
@@ -95,8 +163,7 @@ const result = verifyAuditChain({ sinceIndex: 0 });
 ### 7️⃣ 独立复核 — `auditor` 角色
 - 独立的四段合同，强制自行取证
 - Auditor 必须自己跑 `git status --porcelain` / `git diff`
-- 裁定枚举严格：`PASS` / `DIRECTION` / `LOCAL`**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+- 裁定枚举严格：`PASS` / `DIRECTION` / `LOCAL`
 
 ---
 ## 📖 典型场景
@@ -128,8 +195,7 @@ flowchart LR
 ### 场景 5 — CI / PR 门禁
 - 同一套流程，由 CI 驱动
 - 裁定结果可阻断合并
-- 审计日志归档以备合规**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+- 审计日志归档以备合规
 
 ---
 ## 🏗️ 架构
@@ -156,8 +222,7 @@ flowchart TB
 | 配置方式 | 插件设置页 + 环境变量 | `.mcprc` / `opencode.json` |
 | 密钥存储 | **Cindy 加密保险库**，代码零明文 | 明文配置（用户自行管理） |
 | rea 集成 | 另行注册 rea MCP server（需 `REA_MCP_ROOT`/`GHIDRA_HOME`） | 另行注册 rea MCP server |
-| 适用场景 | Cindy App 用户 | OpenCode 2.2.2+ 用户 |**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+| 适用场景 | Cindy App 用户 | OpenCode 2.2.2+ 用户 |
 
 ---
 ## 🛠️ 14 个工具
@@ -189,8 +254,7 @@ flowchart TB
 | 工具 | 作用 | 关键参数 |
 |------|------|----------|
 | `flow_bypass` | 免检开关（需 `confirmed`） | `sessionId`, `bypass`, `confirmed` |
-> 完整工具参考：运行时调用 `flow_protocol`，它是权威的机器可读规范。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+> 完整工具参考：运行时调用 `flow_protocol`，它是权威的机器可读规范。
 
 ---
 ## ⚙️ 环境变量
@@ -203,22 +267,44 @@ flowchart TB
 | `GHIDRA_HOME` | ❌ | Ghidra 安装目录 | `D:/dev-env/ghidra/ghidra_12.1.4_PUBLIC` |
 | `JAVA_HOME` | ❌ | JDK 21 安装目录 | `D:/dev-env/jdk-21.0.12.1+1` |
 | `NODE_PATH` | ❌ | Node.js 可执行文件路径（默认 `node`） | `node` |
-> **提示**：插件设置页修改后需**完全退出 Cindy 重启**生效。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+> **提示**：插件设置页修改后需**完全退出 Cindy 重启**生效。
 
 ---
 ## 🧪 测试
 ```bash
-npm test          # 冒烟测试——隔离临时目录，< 10s
-npm run test:e2e  # 16 项端到端用例
-npm run test:rea  # 8 项 rea Ghidra 真实分析
+npm test              # 冒烟测试——隔离临时目录，< 10s
+npm run test:e2e      # 16 项端到端用例
+npm run test:p0       # 10 项门禁专项（role 白名单 / 越界 / 免检确认 …）
+npm run test:trigger  # 15 项触发引擎用例（含 4 项回归）
+npm run test:all      # 四个套件串联，一次跑完
 ```
-CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request 运行。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+> 本地运行无需额外配置环境变量（测试脚本会自动回退到仓库根目录）；CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request 运行全部四个套件。
 
 ---
 ## 📋 变更日志
 完整历史 → [CHANGELOG.md](CHANGELOG.md)
+### v2.5.5 — 2026-11-05 · 智能触发引擎 + 7 项真实缺陷修复
+| 类型 | 变更 |
+|------|------|
+| ✨ 新增 | 智能触发引擎（`src/trigger.js`）：L1 动态上限 / L2 三维评分 / L3 四档决策 |
+| ✨ 新增 | `TRIGGER_GUIDE.md` 完整使用指南（配置、评分公式、故障排查） |
+| ✨ 新增 | `test/trigger-e2e.mjs` 15 项用例（含 4 项回归）+ `npm run test:all` 串联四套件 |
+| ✨ 新增 | `scripts/release.mjs` 发布脚本 + `npm run check:readme` 双语一致性钩子 |
+| ✨ 新增 | `docs/QA_REPORT_v2.5.5.md` 独立 QA 验收报告（8/8 套件全绿） |
+| 🐛 修复 | 触发引擎在 ESM 客户端中被 `require()` 静默吞掉 → 改用动态 `import()` |
+| 🐛 修复 | 触发上限检查用 0~1 均值比 5~15 → 永不触发 → 改用原始次数 |
+| 🐛 修复 | 动态上限历史因子为加项（触发越多上限越高）→ 改为惩罚项 |
+| 🐛 修复 | `processUserMessage()` 硬编码 sessionId → 按上下文透传 |
+| 🐛 修复 | 触发引擎 CLI 入口因 `file:///` 前缀永不匹配 → 改用 `fileURLToPath()` |
+| 🐛 修复 | 限流时评分丢成 0、置信度缺失 → 如实返回 |
+| 🐛 修复 | 测试结果文件写入发布目录 → 改写系统临时目录 |
+| 🔒 安全 | `.gitignore` 粘连导致含 npm token 的 `.npmrc.local` 未被忽略 → 拆分规则 |
+| 🔒 安全 | 触发器状态文件写入 CWD → 统一到 `CARLOS_FLOW_HOME` |
+| 🔒 安全 | 硬编码机器路径 → `~/.carlos-flow` 跨平台默认 |
+| 🧹 清理 | 42 个一次性修复脚本与临时产物（净删 5325 行） |
+| 🔑 发布 | GitHub Actions OIDC 发布，不再需要仓库内 npm token |
+| 📚 文档 | 清理 README 语言栏/版本行噪音（每份 24~26 处 → 顶部 1 处） |
+
 ### v2.5.3 — 2026-11-04 · 致命语法错误修复 + 门禁真验证
 | 类型 | 变更 |
 |------|------|
@@ -231,8 +317,7 @@ CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request
 | 🐛 修复 | `dispatch_count` 仅在 dispatch 时递增 |
 | 🐛 修复 | 免检状态在新派发时自动清零 |
 | 🐛 修复 | 过期卡 / 配额 / 裁定枚举 / 参数校验 |
-> ⚠️ **v2.5.1 存在 18 项 P0 缺陷**，请升级到 **v2.5.2 或更高版本**。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+> ⚠️ **v2.5.1 存在 18 项 P0 缺陷**，请升级到 **v2.5.2 或更高版本**。
 
 ---
 ## ❓ 常见问题
@@ -242,18 +327,18 @@ CI 在 **ubuntu-latest** 与 **windows-latest** 上对每次 push / pull request
 | 插件设置页改完不生效 | **完全退出 Cindy 并重启**（不是最小化到托盘） |
 | 审计链校验失败 | 检查 `CARLOS_FLOW_HOME` 权限，或删除 `audit/` 重建 |
 | 验证命令超时 | `verify.cmd` 超过 60s 会被熔断，建议拆成快速命令 |
-| scope 越界误报 | `scope` 用相对路径，`git diff --name-only` 需一致 |**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+| scope 越界误报 | `scope` 用相对路径，`git diff --name-only` 需一致 |
+| 触发引擎一直不触发 | 检查输入是否命中 `keywordWeights` 关键词；中文场景需自行扩展词表（默认词表为英文） |
+| 触发太频繁 | 调高 `triggerThreshold`、调大 `minTriggerIntervalSeconds`，或调低 `historyCoeff` |
+| 触发引擎状态文件在哪 | 统一在 `CARLOS_FLOW_HOME`（默认 `~/.carlos-flow`），不再写当前工作目录 |
 
 ---
 ## 📄 许可证
-MIT —— 见 [LICENSE](LICENSE)**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+MIT —— 见 [LICENSE](LICENSE)
 
 ---
 ## 🤝 贡献
-欢迎 PR！请先跑通 `npm test` 和 `npm run test:e2e`。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+欢迎 PR！请先跑通 `npm test` 和 `npm run test:e2e`。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ---
 **用 OpenCode？** → [carlos-flow-opencode](https://github.com/skyer-now/carlos-flow-opencode) —— 纯 stdio，无 Bridge，配置走 `.mcprc` / `opencode.json`。

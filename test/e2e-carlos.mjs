@@ -3,14 +3,18 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 
 import os from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // 状态/审计根目录默认值：与 src/state.js 的 FLOW_HOME 保持一致（跨平台）
 const DEFAULT_FLOW_HOME = join(os.homedir(), '.carlos-flow');
 
+// 仓库根目录：优先环境变量，缺失时回退到本脚本所在目录的上一级（= 仓库根）
+// 这样本地 `npm run test:e2e` 无需额外配置环境变量也能跑
+const REPO_ROOT = dirname(fileURLToPath(import.meta.url)) + "/..";
+const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || REPO_ROOT;
 // 客户端路径：优先 client/carlos.js（发布版布局），回退到根目录 carlos.js（扁平布局）
-const ROOT = process.env.CARLOS_FLOW_MCP_ROOT;
 const CLIENT = [
   ROOT + "/client/carlos.js",
   ROOT + "/carlos.js",
@@ -67,7 +71,7 @@ async function main() {
   // 3. flow_submit_requirement
   r = await call("flow_submit_requirement", {
     sessionId: SID, goal: "跑通 Carlos 端到端测试",
-    quote: QUOTE, scope: [process.env.CARLOS_FLOW_MCP_ROOT + "/README.md"],
+    quote: QUOTE, scope: [ROOT + "/README.md"],
     acceptance: ["12 个工具全部可用"], confirmed: true,
   });
   check("3. flow_submit_requirement", r.ok && r.data?.ok === true, r.ok ? `tier=${r.data.tier}` : r.error);
@@ -75,7 +79,7 @@ async function main() {
   // 3b. 锚点否决（错误 quote 必须被拒）
   r = await call("flow_submit_requirement", {
     sessionId: SID, goal: "x", quote: "这句话不在用户原话里",
-    scope: [process.env.CARLOS_FLOW_MCP_ROOT + "/README.md"], acceptance: ["a"], confirmed: true,
+    scope: [ROOT + "/README.md"], acceptance: ["a"], confirmed: true,
   });
   check("3b. 锚点否决生效", r.ok && r.data?.ok === false && /锚点/.test(r.data.reason || ""), r.ok ? "已拒绝" : r.error);
 
@@ -114,7 +118,7 @@ async function main() {
   check("9. flow_audit", r.ok && r.data?.total >= 6 && hasHash, r.ok ? `total=${r.data.total} kinds=${Object.keys(kinds).join(",")}` : r.error);
 
   // 10. flow_diff_hunks
-  r = await call("flow_diff_hunks", { cwd: process.env.CARLOS_FLOW_MCP_ROOT, paths: ["README.md"] });
+  r = await call("flow_diff_hunks", { cwd: ROOT, paths: ["README.md"] });
   check("10. flow_diff_hunks", r.ok && r.data?.ok === true, r.ok ? `files=${r.data.files?.length}` : r.error);
 
   // 11. flow_bypass（开启必须显式 confirmed=true）
