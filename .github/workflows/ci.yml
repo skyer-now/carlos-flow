@@ -39,3 +39,25 @@ jobs:
         run: echo "ESM source, no build needed"
       - name: Lint (placeholder)
         run: npm run lint
+
+  # 变异测试：验证测试套件本身能抓住退化（激活只打印日志 / 闸门失效 / 会话撞名 …）
+  # 耗时较长，不在每次 push 跑；手动触发或发布前跑。
+  mutation:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --version && npm --version
+      - run: npm install
+      - name: Mutation check (5 类退化必须全部被抓住)
+        run: npm run test:mutation
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-mutation-home
+      - name: 上传变异测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: .mutation-report.md
+          if-no-files-found: ignore
