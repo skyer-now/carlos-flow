@@ -338,6 +338,25 @@ async function main() {
   check("19d. 三项补齐后闸门解除", fullyCleared,
     r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
 
+  // 19e. 占位卡的待补项必须由**服务端从卡片内容派生**，而不是硬编码三项。
+  // 这一条专门盯住「activationPending = currentMissing」这一行：
+  // 若它被退回硬编码 ["scope","acceptance","verify.cmd"]，本用例会变红。
+  // （否则派生逻辑与硬编码在现有用例下不可区分 —— 变异体 M11 逃逸的根因。）
+  const PARTIAL_SID = SID + "-partial";
+  await call("flow_add_user_msg", { sessionId: PARTIAL_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: PARTIAL_SID, goal: "占位（已带 scope）", quote: QUOTE,
+    scope: [ROOT + "/README.md"], acceptance: [], confirmed: true, activation: true,
+  });
+  r = await call("flow_status", { sessionId: PARTIAL_SID });
+  const derivedPending = r.ok && Array.isArray(r.data?.activation_pending) &&
+    r.data.activation_pending.length === 2 &&
+    !r.data.activation_pending.includes("scope") &&
+    r.data.activation_pending.includes("acceptance") &&
+    r.data.activation_pending.includes("verify.cmd");
+  check("19e. 占位卡待补项由服务端从卡片内容派生（非硬编码三项）", derivedPending,
+    r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
+
   // 20. 未派发就记 PASS 裁定 → 必须被拒（防假闭环之二）
   const NO_DISPATCH_SID = SID + "-nodispatch";
   await call("flow_add_user_msg", { sessionId: NO_DISPATCH_SID, text: QUOTE });
