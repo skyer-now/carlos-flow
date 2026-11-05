@@ -57,17 +57,44 @@ const MUTANTS = [
   },
   {
     id: "M5-scope不算补齐项",
-    desc: "把 filled.scope 硬置 true（scope 未补也算补齐）",
+    desc: "把 scope 从「当前缺失项」里剔除（scope 未补也不算缺）",
     file: "src/index.js",
-    from: `          "scope": newScope.length > 0,`,
-    to: `          "scope": true, // MUTANT: scope 未补也算补齐`,
+    from: `          ...(newScope.length === 0 ? ["scope"] : []),`,
+    to: `          ...(false ? ["scope"] : []), // MUTANT: scope 未补也不算缺`,
   },
   {
     id: "M6-半补齐绕过闸门",
-    desc: "移除「三项字段全补齐才解闸」的逐项判定",
+    desc: "只要提交就解闸（移除三项全补齐才解闸的逐项判定）",
     file: "src/index.js",
-    from: `        const stillMissing = prevPending.filter((f) => !filled[f]);`,
-    to: `        const stillMissing = []; // MUTANT: 只要提交就解闸`,
+    from: `          const stillMissing = prevPending.filter((f) => currentMissing.includes(f));`,
+    to: `          const stillMissing = []; // MUTANT: 只要提交就解闸`,
+  },
+  {
+    id: "M9-闸门交集取反",
+    desc: "把交集语义改回补集语义（半补齐会误解闸）",
+    file: "src/index.js",
+    from: `          const stillMissing = prevPending.filter((f) => currentMissing.includes(f));`,
+    to: `          const stillMissing = prevPending.filter((f) => !currentMissing.includes(f)); // MUTANT: 取反`,
+  },
+  {
+    id: "M10-普通卡也上闸",
+    desc: "普通卡（无 activation 且此前未被锁）也被上闸 —— 会误伤 T1 只读调研",
+    file: "src/index.js",
+    from: `          // 此处再加闸门会误伤 T1 只读调研。
+          activationPending = [];`,
+    to: `          // 此处再加闸门会误伤 T1 只读调研。
+          activationPending = currentMissing; // MUTANT: 普通卡也上闸`,
+  },
+  {
+    id: "M11-占位卡硬编码三项",
+    desc: "占位卡待补项退回硬编码三项（服务端派生失效）",
+    file: "src/index.js",
+    from: `          activationPending = currentMissing;
+          audit("decision", sessionId, {
+            kind: "activation_gate_activated",`,
+    to: `          activationPending = ["scope", "acceptance", "verify.cmd"]; // MUTANT: 硬编码
+          audit("decision", sessionId, {
+            kind: "activation_gate_activated",`,
   },
   {
     id: "M7-空scope fail-open",
