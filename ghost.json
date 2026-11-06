@@ -5,7 +5,7 @@
   "name": "Carlos 工作流",
   "description": "机械门禁 MCP：留痕/派发/裁定/审计/快照/免检/还原。自动管理 Bridge 后台常驻，首次调用 ~3-5s，后续 ~1s。",
   "whenToUse": "需要走 Carlos 工作流门禁时使用：留痕/派发/裁定/审计/快照/免检/还原",
-  "version": "2.5.1",
+  "version": "2.5.6",
   "kind": "mcp",
   "entry": "client/carlos.js",
   "command": "门禁",
@@ -31,22 +31,103 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "goal": { "type": "string", "description": "一句话目标（任务卡 objective）" },
-          "quote": { "type": "string", "description": "用户原话摘录，用于锚点校验，必须能在用户消息中定位" },
-          "scope": { "type": "array", "items": { "type": "string" }, "description": "只准改动的文件清单（相对 cwd 的路径）" },
-          "acceptance": { "type": "array", "items": { "type": "string" }, "description": "可判定的验收标准" },
-          "unknowns": { "type": "array", "items": { "type": "string" }, "description": "未知/待澄清事项" },
-          "assumptions": { "type": "array", "items": { "type": "string" }, "description": "已做的假设" },
-          "files": { "type": "array", "items": { "type": "object", "properties": { "path": { "type": "string" }, "line": { "type": "number" } }, "required": ["path", "line"] }, "description": "关键定位点" },
-          "verify": { "type": "object", "properties": { "cmd": { "type": "string" } }, "description": "主 Agent 指定的验证命令" },
-          "confirmed": { "type": "boolean", "description": "敏感路径是否已获用户确认（sensitive 档必须为 true）" },
-          "parallel_plan": { "type": "string", "description": "并行派发计划说明（可选）" },
-          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
-          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" },
-          "userMessages": { "type": "array", "items": { "type": "string" }, "description": "用户原话列表（可选）" },
-          "cardText": { "type": "string", "description": "完整任务卡文本，含 FLOW_CARD: 前缀" }
+          "goal": {
+            "type": "string",
+            "description": "一句话目标（任务卡 objective）"
+          },
+          "quote": {
+            "type": "string",
+            "description": "用户原话摘录，用于锚点校验，必须能在用户消息中定位"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "只准改动的文件清单（相对 cwd 的路径）"
+          },
+          "acceptance": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "可判定的验收标准"
+          },
+          "unknowns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "未知/待澄清事项"
+          },
+          "assumptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "已做的假设"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "path",
+                "line"
+              ]
+            },
+            "description": "关键定位点"
+          },
+          "verify": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string"
+              }
+            },
+            "description": "主 Agent 指定的验证命令"
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "敏感路径是否已获用户确认（sensitive 档必须为 true）"
+          },
+          "parallel_plan": {
+            "type": "string",
+            "description": "并行派发计划说明（可选）"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "工作目录，默认 process.cwd()"
+          },
+          "userMessages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "用户原话列表（可选）"
+          },
+          "cardText": {
+            "type": "string",
+            "description": "完整任务卡文本，含 FLOW_CARD: 前缀"
+          }
         },
-        "required": ["goal", "quote", "scope"]
+        "required": [
+          "goal",
+          "quote",
+          "scope"
+        ]
       }
     },
     {
@@ -55,11 +136,27 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
-          "role": { "type": "string", "enum": ["executor", "auditor"], "description": "领取角色" },
-          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" }
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "executor",
+              "auditor"
+            ],
+            "description": "领取角色"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "工作目录，默认 process.cwd()"
+          }
         },
-        "required": ["sessionId", "role"]
+        "required": [
+          "sessionId",
+          "role"
+        ]
       }
     },
     {
@@ -68,13 +165,35 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
-          "role": { "type": "string", "enum": ["executor", "auditor"], "description": "派发角色" },
-          "message": { "type": "string", "description": "附加说明，原样附在合同末尾" },
-          "run": { "type": "boolean", "description": "true = 由本工具直接运行 opencode；false/absent = 只返回 prompt" },
-          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" }
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "executor",
+              "auditor"
+            ],
+            "description": "派发角色"
+          },
+          "message": {
+            "type": "string",
+            "description": "附加说明，原样附在合同末尾"
+          },
+          "run": {
+            "type": "boolean",
+            "description": "true = 由本工具直接运行 opencode；false/absent = 只返回 prompt"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "工作目录，默认 process.cwd()"
+          }
         },
-        "required": ["sessionId", "role"]
+        "required": [
+          "sessionId",
+          "role"
+        ]
       }
     },
     {
@@ -83,13 +202,36 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
-          "verdict": { "type": "string", "enum": ["PASS", "DIRECTION", "LOCAL"], "description": "裁定结果" },
-          "notes": { "type": "string", "description": "裁定说明/证据摘要" },
-          "role": { "type": "string", "description": "记录裁定者角色（通常 auditor）" },
-          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" }
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "DIRECTION",
+              "LOCAL"
+            ],
+            "description": "裁定结果"
+          },
+          "notes": {
+            "type": "string",
+            "description": "裁定说明/证据摘要"
+          },
+          "role": {
+            "type": "string",
+            "description": "记录裁定者角色（通常 auditor）"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "工作目录，默认 process.cwd()"
+          }
         },
-        "required": ["sessionId", "verdict"]
+        "required": [
+          "sessionId",
+          "verdict"
+        ]
       }
     },
     {
@@ -98,9 +240,14 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" }
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          }
         },
-        "required": ["sessionId"]
+        "required": [
+          "sessionId"
+        ]
       }
     },
     {
@@ -109,10 +256,22 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string", "description": "会话 ID；不传则聚合全部" },
-          "type": { "type": "string", "description": "事件类型过滤：run / finding / decision / resolution" },
-          "limit": { "type": "number", "description": "最多返回最近 N 条" },
-          "date": { "type": "string", "description": "YYYY-MM-DD，默认今天" }
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID；不传则聚合全部"
+          },
+          "type": {
+            "type": "string",
+            "description": "事件类型过滤：run / finding / decision / resolution"
+          },
+          "limit": {
+            "type": "number",
+            "description": "最多返回最近 N 条"
+          },
+          "date": {
+            "type": "string",
+            "description": "YYYY-MM-DD，默认今天"
+          }
         }
       }
     },
@@ -122,10 +281,21 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "cwd": { "type": "string", "description": "仓库工作目录，默认 process.cwd()" },
-          "paths": { "type": "array", "items": { "type": "string" }, "description": "要检查的文件路径列表" }
+          "cwd": {
+            "type": "string",
+            "description": "仓库工作目录，默认 process.cwd()"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "要检查的文件路径列表"
+          }
         },
-        "required": ["cwd"]
+        "required": [
+          "cwd"
+        ]
       }
     },
     {
@@ -134,11 +304,23 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
-          "on": { "type": "boolean", "description": "true 开启免检，false 关闭" },
-          "reason": { "type": "string", "description": "开启/关闭理由（建议写用户原话）" }
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "on": {
+            "type": "boolean",
+            "description": "true 开启免检，false 关闭"
+          },
+          "reason": {
+            "type": "string",
+            "description": "开启/关闭理由（建议写用户原话）"
+          }
         },
-        "required": ["sessionId", "on"]
+        "required": [
+          "sessionId",
+          "on"
+        ]
       }
     },
     {
@@ -147,10 +329,19 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
-          "text": { "type": "string", "description": "用户原话原文" }
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "text": {
+            "type": "string",
+            "description": "用户原话原文"
+          }
         },
-        "required": ["sessionId", "text"]
+        "required": [
+          "sessionId",
+          "text"
+        ]
       }
     },
     {
@@ -159,13 +350,35 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
-          "role": { "type": "string", "enum": ["executor", "auditor"], "description": "执行角色" },
-          "stdout": { "type": "string", "description": "子 Agent 的 stdout" },
-          "stderr": { "type": "string", "description": "子 Agent 的 stderr" },
-          "code": { "type": "number", "description": "退出码" }
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "executor",
+              "auditor"
+            ],
+            "description": "执行角色"
+          },
+          "stdout": {
+            "type": "string",
+            "description": "子 Agent 的 stdout"
+          },
+          "stderr": {
+            "type": "string",
+            "description": "子 Agent 的 stderr"
+          },
+          "code": {
+            "type": "number",
+            "description": "退出码"
+          }
         },
-        "required": ["sessionId", "role"]
+        "required": [
+          "sessionId",
+          "role"
+        ]
       }
     },
     {
@@ -174,10 +387,18 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string", "description": "会话 ID，默认 unknown" },
-          "cwd": { "type": "string", "description": "工作目录，默认 process.cwd()" }
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "工作目录，默认 process.cwd()"
+          }
         },
-        "required": ["sessionId"]
+        "required": [
+          "sessionId"
+        ]
       }
     }
   ]
