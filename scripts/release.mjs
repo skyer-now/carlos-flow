@@ -3,13 +3,16 @@
 //
 // 用法：
 //   node scripts/release.mjs --version 2.5.5
-//   node scripts/release.mjs --version 2.5.5 --include-opencode
 //   node scripts/release.mjs --version 2.5.5 --dry-run
-//   node scripts/release.mjs --version 2.5.5 --include-opencode --dry-run
+//   node scripts/release.mjs --version 2.5.5 --include-peer            # 连对方仓一起发布
+//   node scripts/release.mjs --version 2.5.5 --include-peer --dry-run
 //
-// 用法：
-//   node scripts/release.mjs --version 2.5.5
-//   node scripts/release.mjs --version 2.5.5 --dry-run
+// 说明：
+//   · 本脚本可在**任意一仓**里跑（两仓 release.mjs 逐字相同）；
+//     它会读本仓 package.json.name 判定身份，并把本仓**始终**发布；
+//   · --include-peer 控制**对方仓**是否一起发布（语义与本仓位置无关）；
+//     --include-opencode 是历史别名，保留兼容；
+//   · 推送顺序固定为 opencode → cindy（先推失败则尚未给任何仓打 tag，不会半发布）。
 //
 // 前置条件（需已具备）：
 //   1. GitHub 凭据：gh CLI 已登录，或 .git-credentials / remote URL 内含有效 PAT
@@ -292,63 +295,40 @@ if (dryRun) {
 // 顺序很重要 —— 若 opencode 先失败，cindy 尚未打 tag，不会出现「cindy 已发布、
 // opencode 未发布」的半发布状态。
 for (const target of PUSH_SEQUENCE) {
-  if (target.repo === "opencode") {
-    if (!includePeer) {
-      console.log("  · 跳过 opencode（未指定 --include-peer）");
-      continue;
-    }
-    // 路径按**仓名**解析：不能直接用 peerPath（在 opencode 仓跑时它指向 cindy）。
-    const targetPath = repoPathOf("opencode");
-    step(`推送 opencode v${version}`);
-    try {
-      run("git", ["push", "origin", "main"], { cwd: targetPath });
-      ok("opencode main 已推送");
-    } catch (e) {
-      console.error("  ✗ opencode 推送失败：", e.stderr ? e.stderr.toString().trim() : e.message);
-      console.error("    已中止：cindy 尚未打 tag，不存在半发布。");
-      process.exit(1);
-    }
-    const ocTag = `v${version}`;
-    try {
-      run("git", ["tag", ocTag], { cwd: targetPath });
-      ok(`opencode 已打 tag ${ocTag}`);
-    } catch (e) {
-      console.log(`  · opencode tag ${ocTag} 已存在，跳过`);
-    }
-    run("git", ["push", "origin", ocTag], { cwd: targetPath });
-    ok(`opencode ${ocTag} 已推送`);
+  // 跳过逻辑与路径解析**同源于身份**（R1 修复）：
+  //   · 本仓（SELF_ID）→ 始终发布（发自己的包是本脚本的默认职责）
+  //   · 对方仓（PEER_ID）→ 受 --include-peer 开关约束
+  // 旧代码把跳过条件写在「opencode」分支里（按标签），而路径按身份解析，
+  // 在 opencode 仓不带 --include-peer 时会「跳过自己、推了对方」。
+  const isSelf = target.repo === SELF_ID;
+  if (!isSelf && !includePeer) {
+    console.log(`  · 跳过对方仓 ${target.repo}（未指定 --include-peer）`);
     continue;
   }
 
-  if (target.repo === "cindy") {
-    // 8. 提交 + tag + push（cindy）
-    // cwd 按**仓名**解析并**显式**指定 —— 否则在 opencode 仓运行时，
-    // 这一步会推 opencode 而不是 cindy（cindy 永不发布）。
-    const targetPath = repoPathOf("cindy");
-    step("推送 GitHub");
-    try {
-      run("git", ["push", "origin", "main"], { cwd: targetPath });
-      ok("main 已推送");
-    } catch (e) {
-      console.error("  ✗ 推送失败：", e.stderr ? e.stderr.toString().trim() : e.message);
-      console.error("    请检查 GitHub 凭据（gh auth login 或 .git-credentials）");
-      process.exit(1);
-    }
+  // 路径按**仓名**解析：不能直接用 peerPath（在 opencode 仓跑时它指向 cindy）。
+  const targetPath = repoPathOf(target.repo);
+  const label = `${target.repo} (${isSelf ? "本仓" : "对方仓"})`;
 
-    const tag = `v${version}`;
-    try {
-      run("git", ["tag", tag], { cwd: targetPath });
-      ok(`已打 tag ${tag}`);
-    } catch (e) {
-      console.log(`  · tag ${tag} 已存在，跳过`);
-    }
-    run("git", ["push", "origin", tag], { cwd: targetPath });
-    ok(`${tag} 已推送（release workflow 将自动创建 GitHub Release 并发布 npm）`);
-    continue;
+  step(`推送 ${label} v${version}`);
+  try {
+    run("git", ["push", "origin", "main"], { cwd: targetPath });
+    ok(`${label} main 已推送`);
+  } catch (e) {
+    console.error(`  ✗ ${label} 推送失败：`, e.stderr ? e.stderr.toString().trim() : e.message);
+    console.error("    已中止：尚未给任何仓打 tag，不存在半发布。");
+    process.exit(1);
   }
 
-  console.error(`  ✗ 未知的推送目标：${target.repo}（PUSH_SEQUENCE 只允许 opencode / cindy）`);
-  process.exit(1);
+  const tag = `v${version}`;
+  try {
+    run("git", ["tag", tag], { cwd: targetPath });
+    ok(`${label} 已打 tag ${tag}`);
+  } catch (e) {
+    console.log(`  · ${label} tag ${tag} 已存在，跳过`);
+  }
+  run("git", ["push", "origin", tag], { cwd: targetPath });
+  ok(`${label} ${tag} 已推送（release workflow 将自动创建 GitHub Release 并发布 npm）`);
 }
 
 step("完成");

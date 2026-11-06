@@ -75,6 +75,11 @@ const MUST_MATCH = [
   "docs/QA_REPORT_v2.5.5.md",
   "LICENSE",
   "CODE_OF_CONDUCT.md",
+  // 守卫自身与本轮新增的 P0 回归测试 —— 也要纳入逐字一致范围，
+  // 否则单仓改这两个文件不会被 parity 守卫发现。
+  "scripts/check-repo-parity.mjs",
+  "scripts/check-mutant-anchors.mjs",
+  "test/e2e-acceptance.mjs",
 ];
 
 // ---- 版本专属文件：只能出现在自己这一侧 ----
