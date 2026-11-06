@@ -538,6 +538,49 @@ const testCases = [
     }
   },
   {
+    name: '回归: trigger-config 非法值不弄崩触发引擎',
+    test: () => {
+      // 背景：配置加载原为浅合并，null / 数组 / 非法 JSON 会让 config.keywordWeights
+      // 变成非法值 → buildKeywordIndex() 的 Object.entries(null) 抛 TypeError →
+      // 触发引擎在该进程内**每次调用都失败**（客户端 catch 掉 → 静默失去自动触发）。
+      // 现在：类型不对就丢弃用户值回退默认表；JSON 非法则整体回退并告警。
+      const badConfigs = [
+        '{"keywordWeights": null}',
+        '{"keywordWeights": [1,2]}',
+        '{"readOnlyIntentWords": "not-array"}',
+        '{invalid json',
+      ];
+      for (const raw of badConfigs) {
+        const home = join(tmpdir(), `carlos-flow-badcfg-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 7)}`);
+        mkdirSync(home, { recursive: true });
+        writeFileSync(join(home, 'trigger-config.json'), raw, 'utf8');
+        const probe = `
+          const { TriggerEngine } = await import(${JSON.stringify(pathToFileURL(TRIGGER_PATH).href)});
+          const c = TriggerEngine.getConfig();
+          const r = TriggerEngine.create('badcfg').shouldTrigger('走门禁流程', {});
+          console.log(JSON.stringify({
+            kwOk: !!(c.keywordWeights && typeof c.keywordWeights === 'object' && !Array.isArray(c.keywordWeights)),
+            zh: c.keywordWeights && c.keywordWeights['门禁'] !== undefined,
+            works: !!r.decision,
+          }));
+        `;
+        const r = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+          env: { ...process.env, CARLOS_FLOW_HOME: home },
+          encoding: 'utf8',
+        });
+        try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
+        if (!r.stdout || !r.stdout.trim()) {
+          console.log(`  [DEBUG] 子进程无输出（配置 ${raw}）: ${(r.stderr || '').slice(0, 160)}`);
+          return false;
+        }
+        const c = JSON.parse(r.stdout.trim().split('\n').pop());
+        console.log(`  [DEBUG] 配置 ${raw} → ${JSON.stringify(c)}`);
+        if (!(c.kwOk && c.zh && c.works)) return false;
+      }
+      return true;
+    }
+  },
+  {
     name: '回归: reset("*") 可重置全部会话状态',
     test: () => {
       const sid = 'rst-' + Date.now();

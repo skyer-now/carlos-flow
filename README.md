@@ -145,8 +145,6 @@ npm install -g carlos-flow-cindy@2.5.5
 > 不是版本不存在。用下面任一命令清缓存后重装：
 > ```bash
 > npm cache clean --force
-> # 或只清这一个包
-> npm cache clean carlos-flow-cindy
 > ```
 > 验证版本是否真的存在：`npm view carlos-flow-cindy versions`
 
@@ -283,29 +281,10 @@ node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run 
 > 改完需要重启宿主（MCP server / 插件）才会重新读取配置。
 > 现成模板随包附带：`trigger-config.usable.json`（可直接用）与 `trigger-config.example.json`（带说明）。
 
-##### OpenCode 插件（路径 ②，开箱即用）
-```bash
-# 1) 已全局安装本包：
-npm install -g carlos-flow-opencode@2.5.5
-
-# 2) 复制插件到 OpenCode 的插件目录
-#    Windows: %APPDATA%\opencode\plugins\
-#    macOS/Linux: ~/.config/opencode/plugins/
-cp "$(npm root -g)/carlos-flow-opencode/plugins/carlos-flow-trigger.js" \
-   ~/.config/opencode/plugins/carlos-flow-trigger.js
-
-# 3) 重启 OpenCode —— 之后每次发消息都会自动评估
-#    想临时关掉：环境变量 CARLOS_FLOW_TRIGGER=off
-#    想看决策日志：环境变量 CARLOS_FLOW_TRIGGER_DEBUG=1
-```
-> 插件只做「判断 + 激活」，**不代替 Agent 决定改哪些文件**；
-> 激活后仍需补齐 scope / acceptance / verify.cmd 才能派发（闸门不放松）。
-> 插件出异常只记日志、**绝不阻断你的消息**。
-
-
 > 📌 **Cindy 版说明**：Cindy 插件是 `kind: "mcp"` 型（纯 MCP 工具集），宿主未暴露消息事件钩子，
-> 因此**没有**「每条消息自动评估」的插件形态。在 Cindy 里用路径 ①（Agent 主动调 `flow_trigger_check`）
-> 或路径 ②（命令行）即可，门禁约束本身完全一样。
+> 因此**没有** OpenCode 那样的「每条消息自动评估」插件形态。
+> 在 Cindy 里用路径 ①（Agent 主动调 `flow_trigger_check`）或路径 ②（命令行）即可 ——
+> 门禁约束本身（越界拦截 / 真实验证 / 假 PASS 拒绝）在两条路径下**完全一样**。
 输出（stderr）：
 > 注：这里的 **37** 是 CLI 不带 `complexity` 时的值；代码示例里传了 `complexity: 1.2`，对应 **38**。
 ```

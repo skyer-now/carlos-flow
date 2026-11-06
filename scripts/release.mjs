@@ -26,6 +26,27 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
+
+// 本脚本是**双仓**发布器，但可能在任意一仓里运行（两仓 release.mjs 被 parity 守卫
+// 要求逐字相同）。早期版本把身份写死：
+//   verifyRepo(root, "carlos-flow-cindy")
+//   opencodePath = resolve(root, "..", "carlos-flow-opencode")
+// → 在 opencode 仓里运行时，opencodePath 会解析成**自己**：对方仓校验成自校验、
+//   日志标签互换、PUSH_SEQUENCE 的 cindy 步（未指定 cwd）仍推 opencode，
+//   结果是 **cindy 永不发布、opencode 被重复发布**。
+// 现在改为**自适应身份**：从本仓 package.json.name 读出自己是谁，
+// 对方仓路径由 sibling 目录推导，标签用真实身份。
+const SELF_REPO_NAME = (() => {
+  try {
+    return JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")).name || "";
+  } catch {
+    return "";
+  }
+})();
+const SELF_ID = SELF_REPO_NAME === "carlos-flow-opencode" ? "opencode" : "cindy";
+const PEER_ID = SELF_ID === "cindy" ? "opencode" : "cindy";
+const PEER_REPO_NAME = `carlos-flow-${PEER_ID}`;
+const PEER_PATH = resolve(root, "..", PEER_REPO_NAME);
 const version = (() => {
   const i = process.argv.indexOf("--version");
   return i > 0 ? process.argv[i + 1] : null;
@@ -130,6 +151,17 @@ const verifyRepo = (repoRoot, label) => {
     console.error(rDirty);
     process.exit(1);
   }
+  // ghost.json（Cindy 插件市场清单）的 version 也必须与 package.json 一致 ——
+  // 否则插件市场里显示的还是旧版本号（实测曾落后 4 个版本：2.5.1 vs 2.5.5）。
+  const ghostPath = resolve(repoRoot, "ghost.json");
+  if (existsSync(ghostPath)) {
+    const ghost = JSON.parse(readFileSync(ghostPath, "utf8"));
+    if (ghost.version !== rPkg.version) {
+      console.error(`  ✗ ${label}: ghost.json 版本是 ${ghost.version}，与 package.json ${rPkg.version} 不一致`);
+      console.error("    （Cindy 插件市场会显示这个版本号，bump 时必须同步改）");
+      process.exit(1);
+    }
+  }
   ok(`${label}: version=${rPkg.version} / lock=${lockVer} / CHANGELOG=${rTopVer} / 工作区干净`);
   return rPkg;
 };
@@ -144,8 +176,8 @@ if (pkg.version !== version) {
 }
 ok(`package.json version = ${pkg.version}`);
 
-// 1b. 完整仓库校验（版本 / lock / CHANGELOG / 工作区干净）
-verifyRepo(root, "carlos-flow-cindy");
+// 1b. 完整仓库校验（版本 / lock / CHANGELOG / 工作区干净 / ghost.json 版本）
+verifyRepo(root, SELF_REPO_NAME);
 
 // 1c. 双仓一致性守卫（必须在任何推送之前）
 // 防止跨仓同步时把某一版的文件整份覆盖到另一版（如把 Cindy 版 README
@@ -205,25 +237,27 @@ if (suspicious.length) {
 }
 ok("包内无敏感/临时文件");
 
-// 6b. opencode 仓校验（必须在**任何推送之前**完成，否则会出现半发布）
-let opencodePath = null;
+// 6b. 对方仓校验（必须在**任何推送之前**完成，否则会出现半发布）
+// 对方仓路径由 sibling 目录推导（见文件头的 SELF_ID / PEER_ID），
+// 不再写死「carlos-flow-opencode」—— 否则在 opencode 仓跑会指向自己。
+let peerPath = null;
 if (includeOpencode) {
-  opencodePath = resolve(root, "..", "carlos-flow-opencode");
-  if (!existsSync(opencodePath)) {
-    console.error(`  ✗ 未找到 opencode 仓库: ${opencodePath}`);
+  peerPath = PEER_PATH;
+  if (!existsSync(peerPath)) {
+    console.error(`  ✗ 未找到对方仓库 ${PEER_REPO_NAME}: ${peerPath}`);
     process.exit(1);
   }
-  step(`校验 opencode 仓 v${version}`);
-  verifyRepo(opencodePath, "carlos-flow-opencode");
-  // opencode 也跑一遍自己的测试与文档校验（同样隔离状态目录）
-  process.env.CARLOS_FLOW_MCP_ROOT = opencodePath;
-  const opencodeHome = join(tmpdir(), "carlos-flow-release-home", "opencode");
-  rmSync(opencodeHome, { recursive: true, force: true });
-  process.env.CARLOS_FLOW_HOME = opencodeHome;
-  runOrFail("npm", ["run", "test:all"], { cwd: opencodePath }, "opencode test:all");
-  ok("opencode test:all 通过");
-  rmSync(opencodeHome, { recursive: true, force: true });
-  runOrFail("npm", ["run", "check:readme"], { cwd: opencodePath }, "opencode check:readme");
+  step(`校验对方仓 ${PEER_REPO_NAME} v${version}`);
+  verifyRepo(peerPath, PEER_REPO_NAME);
+  // 对方仓也跑一遍自己的测试与文档校验（同样隔离状态目录）
+  process.env.CARLOS_FLOW_MCP_ROOT = peerPath;
+  const peerHome = join(tmpdir(), "carlos-flow-release-home", PEER_ID);
+  rmSync(peerHome, { recursive: true, force: true });
+  process.env.CARLOS_FLOW_HOME = peerHome;
+  runOrFail("npm", ["run", "test:all"], { cwd: peerPath }, `${PEER_ID} test:all`);
+  ok(`${PEER_ID} test:all 通过`);
+  rmSync(peerHome, { recursive: true, force: true });
+  runOrFail("npm", ["run", "check:readme"], { cwd: peerPath }, `${PEER_ID} check:readme`);
   ok("opencode check:readme 通过");
   process.env.CARLOS_FLOW_MCP_ROOT = root;
   process.env.CARLOS_FLOW_HOME = releaseHome;
@@ -249,7 +283,7 @@ for (const target of PUSH_SEQUENCE) {
     }
     step(`推送 opencode v${version}`);
     try {
-      run("git", ["push", "origin", "main"], { cwd: opencodePath });
+      run("git", ["push", "origin", "main"], { cwd: peerPath });
       ok("opencode main 已推送");
     } catch (e) {
       console.error("  ✗ opencode 推送失败：", e.stderr ? e.stderr.toString().trim() : e.message);
@@ -258,21 +292,23 @@ for (const target of PUSH_SEQUENCE) {
     }
     const ocTag = `v${version}`;
     try {
-      run("git", ["tag", ocTag], { cwd: opencodePath });
+      run("git", ["tag", ocTag], { cwd: peerPath });
       ok(`opencode 已打 tag ${ocTag}`);
     } catch (e) {
       console.log(`  · opencode tag ${ocTag} 已存在，跳过`);
     }
-    run("git", ["push", "origin", ocTag], { cwd: opencodePath });
+    run("git", ["push", "origin", ocTag], { cwd: peerPath });
     ok(`opencode ${ocTag} 已推送`);
     continue;
   }
 
   if (target.repo === "cindy") {
     // 8. 提交 + tag + push（cindy）
+    // cwd 必须**显式**指定为本仓 —— 否则在 opencode 仓运行时，
+    // 这一步会推 opencode 而不是 cindy（cindy 永不发布）。
     step("推送 GitHub");
     try {
-      run("git", ["push", "origin", "main"]);
+      run("git", ["push", "origin", "main"], { cwd: root });
       ok("main 已推送");
     } catch (e) {
       console.error("  ✗ 推送失败：", e.stderr ? e.stderr.toString().trim() : e.message);
@@ -282,12 +318,12 @@ for (const target of PUSH_SEQUENCE) {
 
     const tag = `v${version}`;
     try {
-      run("git", ["tag", tag]);
+      run("git", ["tag", tag], { cwd: root });
       ok(`已打 tag ${tag}`);
     } catch (e) {
       console.log(`  · tag ${tag} 已存在，跳过`);
     }
-    run("git", ["push", "origin", tag]);
+    run("git", ["push", "origin", tag], { cwd: root });
     ok(`${tag} 已推送（release workflow 将自动创建 GitHub Release 并发布 npm）`);
     continue;
   }

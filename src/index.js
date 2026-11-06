@@ -170,7 +170,7 @@ const TOOLS = [
         // 内容判定：与 validateCard 的必填字段口径**严格一致**（两边都要求
         // 「每个元素都是非空字符串」）。acceptance=[""] / [null] / ["a",null] 这类
         // 含无效元素的伪填充，既不算卡片合规，也不算闸门已补齐 —— 统一卡严，避免绕过。
-        const cardHasScope = Array.isArray(card.scope) && card.scope.some(
+        const cardHasScope = Array.isArray(card.scope) && card.scope.length > 0 && card.scope.every(
           (p) => typeof p === "string" && p.trim() !== "" && p !== "." && p !== ".."
         );
         const cardHasAcceptance = Array.isArray(card.acceptance) && card.acceptance.length > 0 && card.acceptance.every(
@@ -1173,16 +1173,19 @@ function validateToolArgs(toolName, args) {
       // 才报错（例：flow_check_scope 的 paths:["README.md",123] 会抛
       // "The \"path\" argument must be of type string" 这种底层错误），
       // 调用方拿到的是不可读的堆栈信息。改为在入口就给出明确提示。
+      // 注意：**null 也要拦**（typeof null !== "string"）—— 否则 unknowns=[null]
+      // 这类值会静默落盘（虽然不参与档位必填、不进 executor 合同文本，
+      // 但会在 flow_status 回显整卡时露出 null 元素）。
       if (prop.type === "array" && Array.isArray(v) && prop.items && prop.items.type) {
         const want = prop.items.type === "integer" ? "number" : prop.items.type;
         for (let i = 0; i < v.length; i++) {
           const el = v[i];
-          if (el === undefined || el === null) continue;
+          if (el === undefined) continue;
           const bad =
             (want === "number" && typeof el !== "number") ||
             (want === "string" && typeof el !== "string") ||
             (want === "boolean" && typeof el !== "boolean") ||
-            (want === "object" && (typeof el !== "object" || Array.isArray(el)));
+            (want === "object" && (typeof el !== "object" || el === null || Array.isArray(el)));
           if (bad) {
             return { ok: false, error: "字段 " + key + "[" + i + "] 类型错误，期望 " + want };
           }

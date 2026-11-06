@@ -63,6 +63,8 @@
     "README.zh.md",
     "LICENSE",
     "CHANGELOG.md",
-    "TRIGGER_GUIDE.md"
+    "TRIGGER_GUIDE.md",
+    "trigger-config.example.json",
+    "trigger-config.usable.json"
   ]
 }

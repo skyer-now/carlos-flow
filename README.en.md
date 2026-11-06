@@ -122,8 +122,6 @@ npm install -g carlos-flow-cindy@2.5.5
 > not a missing version. Clear the cache and retry:
 > ```bash
 > npm cache clean --force
-> # or just this package
-> npm cache clean carlos-flow-cindy
 > ```
 > To confirm the version really exists: `npm view carlos-flow-cindy versions`
 
@@ -260,29 +258,10 @@ To add your own words, edit `CARLOS_FLOW_HOME/trigger-config.json` (default `~/.
 > Restart the host (MCP server / plugin) after editing for the config to be re-read.
 > Ready-made templates ship with the package: `trigger-config.usable.json` (drop-in) and `trigger-config.example.json` (documented).
 
-##### OpenCode plugin (path ② — works out of the box)
-```bash
-# 1) install this package globally
-npm install -g carlos-flow-opencode@2.5.5
-
-# 2) copy the plugin into OpenCode's plugin directory
-#    Windows: %APPDATA%\opencode\plugins\
-#    macOS/Linux: ~/.config/opencode/plugins/
-cp "$(npm root -g)/carlos-flow-opencode/plugins/carlos-flow-trigger.js" \
-   ~/.config/opencode/plugins/carlos-flow-trigger.js
-
-# 3) restart OpenCode — every incoming message is evaluated from then on
-#    disable temporarily: env CARLOS_FLOW_TRIGGER=off
-#    show decisions:      env CARLOS_FLOW_TRIGGER_DEBUG=1
-```
-> The plugin only decides and activates — it **never decides for the agent which files to change**;
-> after activation you still must fill in scope / acceptance / verify.cmd before dispatching (the gate stays tight).
-> Plugin errors are logged only and **never block your message**.
-
-
 > **Cindy edition note**: the Cindy plugin is a `kind: "mcp"` package (a pure MCP tool set) — the host exposes no message-event hook,
-> so there is no "evaluate on every message" plugin here. Use path ① (the agent calls `flow_trigger_check`)
-> or path ② (the CLI). The gate constraints themselves are identical either way.
+> so there is no "evaluate on every message" plugin here.
+> Use path ① (the agent calls `flow_trigger_check`) or path ② (the CLI) — the gate constraints
+> themselves (scope enforcement / real verification / rejected fake PASS) are identical either way.
 ##### Engine highlights
 - **L1 dynamic cap** — `5 + sessionHours×0.5 + complexity×2 − triggersInWindow×0.3`, capped at 15
 - **L2 trigger scoring** — keywords (0–50, weight 0.5) + context (0–30, weight 0.3) + intent (0–20, weight 0.2), weighted maximum **38**

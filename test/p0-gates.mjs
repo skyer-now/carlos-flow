@@ -251,6 +251,18 @@ async function main() {
     r.ok === false && /类型错误/.test(r.error || ""),
     (r.error || "").slice(0, 70));
 
+  // unknowns / assumptions 虽不参与档位必填、不进 executor 合同文本，
+  // 但 null 元素仍不应静默落盘（会在 flow_status 回显整卡时露出）
+  const nullUnknownSid = "p0-nullunk-" + Date.now();
+  await call("flow_add_user_msg", { sessionId: nullUnknownSid, text: "quote here" });
+  r = await call("flow_submit_requirement", {
+    sessionId: nullUnknownSid, goal: "unknowns 含 null", quote: "quote here",
+    scope: [ROOT + "/README.md"], acceptance: ["x"], unknowns: [null], confirmed: true,
+  });
+  check("21. unknowns 含 null 元素被拒（不静默落盘）",
+    rejected(r),
+    reasonOf(r).slice(0, 70));
+
   // 合法的 acceptance 必须仍然通过（防止把门禁收得过紧误伤正常流程）
   const goodAccSid = "p0-goodacc-" + Date.now();
   await call("flow_add_user_msg", { sessionId: goodAccSid, text: "quote here" });

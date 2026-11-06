@@ -119,12 +119,26 @@ if (existsSync(CONFIG_PATH)) {
   try {
     const loaded = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
     config = { ...DEFAULT_CONFIG, ...loaded };
-    if (loaded.keywordWeights && DEFAULT_CONFIG.keywordWeights) {
-      config.keywordWeights = { ...DEFAULT_CONFIG.keywordWeights, ...loaded.keywordWeights };
+    // keywordWeights 必须是**对象**才能合并。
+    // 浅合并会把 null / 数组 / 数字一并带进 config.keywordWeights，
+    // 而下面的 if 因假值跳过深合并 → config.keywordWeights 保持非法值 →
+    // buildKeywordIndex() 的 Object.entries(null) 抛 TypeError →
+    // 触发引擎在该进程内**每次调用都失败**（客户端 catch 掉 → 静默失去自动触发）。
+    // 所以：类型不对就丢弃用户值、回退默认表，并在合并后再兜一次底。
+    if (loaded.keywordWeights !== undefined) {
+      if (loaded.keywordWeights && typeof loaded.keywordWeights === 'object' && !Array.isArray(loaded.keywordWeights)) {
+        config.keywordWeights = { ...DEFAULT_CONFIG.keywordWeights, ...loaded.keywordWeights };
+      } else {
+        console.warn('[Carlos Trigger] keywordWeights 必须是对象，已忽略该配置项（使用默认词表）');
+        config.keywordWeights = { ...DEFAULT_CONFIG.keywordWeights };
+      }
     }
     for (const key of ['readOnlyIntentWords', 'mutatingActionWords']) {
       if (Array.isArray(loaded[key]) && Array.isArray(DEFAULT_CONFIG[key])) {
         config[key] = [...new Set([...DEFAULT_CONFIG[key], ...loaded[key]])];
+      } else if (loaded[key] !== undefined) {
+        console.warn(`[Carlos Trigger] ${key} 必须是数组，已忽略该配置项（使用默认词表）`);
+        config[key] = [...DEFAULT_CONFIG[key]];
       }
     }
   } catch (e) {
