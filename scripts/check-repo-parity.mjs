@@ -189,6 +189,47 @@ for (const chk of IDENTITY_CHECKS) {
   okCount.identity++;
 }
 
+// ---- 3b) 对方仓的身份也要检查（双向）----
+// 只查本仓是不够的：事故往往是「某一版被污染」，而从另一个方向跑守卫时
+// 同样必须能发现。否则 cindy 仓的 CI 看不到 opencode 仓被覆盖成 Cindy 版。
+const PEER_IDENTITY_CHECKS = [
+  {
+    file: "README.md",
+    peerSelfMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${peerLabelZh}\\s*适配版`),
+    peerPeerMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${labelZh}\\s*适配版`),
+    label: "README.md 标题",
+  },
+  {
+    file: "README.zh.md",
+    peerSelfMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${peerLabelZh}\\s*适配版`),
+    peerPeerMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${labelZh}\\s*适配版`),
+    label: "README.zh.md 标题",
+  },
+  {
+    file: "README.en.md",
+    peerSelfMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${peerLabelEn}\\s*Edition`),
+    peerPeerMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${labelEn}\\s*Edition`),
+    label: "README.en.md 标题",
+  },
+];
+
+for (const chk of PEER_IDENTITY_CHECKS) {
+  const peerTxt = readText(PEER_ROOT, chk.file);
+  if (peerTxt === null) {
+    problems.push(`MISSING 对方仓 ${chk.file}：${PEER_NAME} 仓缺少该文件`);
+    continue;
+  }
+  if (chk.peerPeerMust.test(peerTxt)) {
+    problems.push(`IDENT   对方仓 ${chk.label} 写成了本仓版本（${SELF_NAME}）—— ${PEER_NAME} 仓的身份被污染了`);
+    continue;
+  }
+  if (!chk.peerSelfMust.test(peerTxt)) {
+    problems.push(`IDENT   对方仓 ${chk.label} 未声明自己是 ${PEER_NAME} 版 —— ${PEER_NAME} 仓的身份被污染了`);
+    continue;
+  }
+  okCount.identity++;
+}
+
 // ---- 4) package.json 描述不得指向对方 ----
 if (typeof pkg.description === "string") {
   const otherLabel = SELF_NAME === "cindy" ? "OpenCode" : "Cindy";
