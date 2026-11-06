@@ -163,15 +163,29 @@ export function saveAgentResult(sid, role, stdout, stderr, code) {
 }
 
 // Phase 1-1: 执行验证命令并返回结果
+//
+// 跨平台：原先硬编码 `spawn("cmd", ["/c", cmd], { shell: true })` —— cmd.exe 只存在于 Windows，
+// 在 Linux/macOS 上 `cmd` 不是可执行文件 → 命令根本没跑起来，
+// exitCode=127（command not found），记 PASS 的前置证据永远拿不到，
+// ubuntu CI 的 e2e 会整片变红。
+//
+// 现在按平台选 shell：
+//   · Windows：cmd.exe /c + shell:true（实测 shell:false 会把带引号的
+//     `node -e "process.exit(3)"` 的引号吃掉，退出码变成 0 而不是 3 ——
+//     那样「验证失败必须拦住 PASS」的门禁就形同虚设）；
+//   · POSIX：/bin/sh -c + shell:false（明确指定解释器，不依赖 PATH 里的 sh）。
 export async function runVerifyCommand(cmd, cwd) {
   if (!cmd || !cmd.trim()) {
     return { ok: false, exitCode: -1, stdout: "", stderr: "验证命令为空" };
   }
+  const isWindows = process.platform === "win32";
+  const shell = isWindows ? process.env.COMSPEC || "cmd.exe" : "/bin/sh";
+  const shellArgs = isWindows ? ["/c", cmd] : ["-c", cmd];
   return new Promise((resolve) => {
-    const child = spawn("cmd", ["/c", cmd], {
+    const child = spawn(shell, shellArgs, {
       cwd: cwd || process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
-      shell: true,
+      shell: isWindows,
       windowsHide: true,
     });
     let stdout = "";
