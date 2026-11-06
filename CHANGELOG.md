@@ -86,6 +86,10 @@
 | T-28 | `runVerifyCommand` 硬编码 `spawn("cmd", ["/c", cmd])` | **Linux/macOS 上命令根本没跑**（`cmd.exe` 不存在），exitCode=127，导致「验证通过才能记 PASS」的门禁在非 Windows 环境彻底失守 | 按平台选 shell：Windows 用 `cmd.exe /c` + `shell:true`；POSIX 用 `/bin/sh -c` + `shell:false`。实测 `shell:false` 会吃掉引号导致 exitCode 变 0，故 Windows 必须 `shell:true` |
 | T-29 | 触发引擎只接在 CLI 客户端（`client/carlos.js`），MCP server 根本没接触发引擎 | **MCP 路径「自动触发」不生效**——README 里「工作流会自己认出该上场的时候」在实际使用路径上不成立 | 新增 `flow_trigger_check` 工具（MCP 侧暴露触发能力），宿主在收到消息时调用即可获得与 CLI 完全一致的自动触发行为 |
 | T-30 | 默认词表纯英文（work/flow/carlos/dispatch/trigger/start/run/execute），中文需求全 0 分不触发 | **中文场景触发器等于失效**，用户需自行扩展 `trigger-config.json` | 内置中文流程词（工作流/门禁/派发/审计/复核/任务卡/子代理/流程/触发/执行/调度/审计/复核/留痕/裁定），且只收流程性词汇不收普通开发动词，实测中文需求能触发、普通需求零误触发 |
+| T-34 | `acceptance` 必填校验只看数组**长度**（`card.js` + `src/index.js` 闸门推导） | `acceptance=[""]` / `[null]` / `[0]` / `[{}]` 这类「长度>0 但内容无效」的伪填充被当成「已填」——cross_module 档卡片带着空验收标准就能通过校验，闸门也会误判为「已补齐」而解开 | `card.js` 的必填校验改为**内容判定**（文本类数组必须至少有一个非空字符串）；`src/index.js` 闸门推导同步改为内容判定，两端口径一致且都卡严 |
+| T-35 | 卡片文本字段用 `asStringArray` 归一化（`String(x)`） | `[null]` → `["null"]`、`[{}]` → `["[object Object]"]` —— 垃圾串被当成合法验收标准，绕过内容判定 | 新增 `asTextArray`：**只保留真正的字符串元素**，数字/null/对象一律丢弃；scope/acceptance/unknowns/assumptions 改用它，paths/userMessages 保持原行为 |
+| T-36 | `trigger-config.json` 用浅合并 `{...DEFAULT_CONFIG, ...loaded}` | 用户一旦写 `keywordWeights` 就会把默认词表（含内置中文流程词）**整个丢掉**——「只是加一个自定义词」反而让所有默认词失效，中文场景重新变回 0 分 | 词表类字段改**深合并**：`keywordWeights` 合并（用户词覆盖同名项，默认保留）；`readOnlyIntentWords`/`mutatingActionWords` 追加去重；其余标量仍覆盖。附 `trigger-config.usable.json` / `trigger-config.example.json` 模板 |
+| T-37 | README FAQ 与 TRIGGER_GUIDE 仍写「默认词表为英文，中文需自行扩展」 | **文档与实现不符**（v2.5.5 起中文词表已内置），用户据此以为中文不触发 | 全部更正为「中英文流程词已内置」，并说明自定义是**追加**不是替换 |
 
 ### 📝 文档事实性修正 | Documentation Corrections
 

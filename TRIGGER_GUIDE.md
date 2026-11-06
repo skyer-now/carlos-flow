@@ -176,9 +176,13 @@ stderr 输出：
 > ⚠️ **`triggerMessage` 必须显式传入，否则完全不启用自动触发。**
 >
 > - `triggerMessage` 是**客户端专用字段**，不会被透传给 MCP 工具（`complexity` 同样剥离）；
-> - 默认词表是**英文**：`work` / `flow` / `carlos` / `dispatch` / `trigger` / `start` / `run` / `execute`
+> - 默认词表**中英文都有**：英文 `work` / `flow` / `carlos` / `dispatch` / `trigger` / `start` / `run` / `execute`，
+>   中文 `工作流` / `门禁` / `任务卡` / `派发` / `子代理` / `流程` / `触发` / `执行` / `调度` / `审计` / `复核` / `留痕` / `裁定`
 >   （上下文表另有 `executor` / `auditor`；意图表另有 `auto` / `process` / `monitor` 等）。
->   中文场景请通过 `trigger-config.json` 扩展 `keywordWeights`；
+>   词表只收**流程性**词汇，不收「实现 / 新增 / 接口」这类普通开发动词 ——
+>   所以「走门禁流程」会触发，而「给接口加个参数校验」不会误触发。
+> - 需要自定义时用 `CARLOS_FLOW_HOME/trigger-config.json`：里面的 `keywordWeights` 是
+>   **追加/覆盖同名项**（默认词表保留），`readOnlyIntentWords` / `mutatingActionWords` 是**追加去重**；
 > - 早先版本的兜底项是「工具名 + 参数 JSON」，会造成**自伤**（参数含触发词 → 自己开占位卡 →
 >   同一次调用的 `flow_dispatch` 反被闸门拒绝）与**锚点污染**（写入的「用户原话」是命令行文本 →
 >   Agent 用真实原话重提卡时 quote 锚点校验失败 → 补齐流程卡死）。现已改为**不传即不触发**。

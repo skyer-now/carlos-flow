@@ -136,20 +136,50 @@ Carlos Flow 是**机械性的**。约束写在代码里，不写在散文里。
 
 ---
 ## 🚀 30 秒快速开始
-### 方式一：Cindy 插件市场（推荐）
-1. Cindy → 设置 → 插件 → 浏览市场
-2. 搜索 `carlos-flow` 点击安装
-3. 在插件设置页填写环境变量
-4. **完全退出 Cindy 重启**，然后说"走门禁"
-### 方式二：从源码安装
+
+### 1. 安装
 ```bash
-git clone https://github.com/skyer-now/carlos-flow-cindy.git
-cd carlos-flow-cindy
-npm install
-cp .env.example .env      # 编辑：CARLOS_FLOW_MCP_ROOT、CARLOS_FLOW_HOME
-npm test                  # 冒烟测试（完全隔离）
-npm run test:e2e          # 45 项端到端用例
+npm install -g carlos-flow-cindy@2.5.5
 ```
+> ⚠️ **如果报 `ETARGET: No matching version found`** —— 这是 npm 的 **registry 元数据缓存**没刷新，
+> 不是版本不存在。用下面任一命令清缓存后重装：
+> ```bash
+> npm cache clean --force
+> # 或只清这一个包
+> npm cache clean carlos-flow-cindy
+> ```
+> 验证版本是否真的存在：`npm view carlos-flow-cindy versions`
+
+### 2. 配置
+
+Cindy 版走**插件市场**：Cindy → 设置 → 插件 → 浏览市场 → 搜索 `carlos-flow` → 安装，
+然后在插件设置页填写环境变量（等价于仓库里的 `.env.example`）。
+
+```bash
+# 源码安装时也可以直接用 .env
+cp .env.example .env      # 编辑：CARLOS_FLOW_MCP_ROOT、CARLOS_FLOW_HOME
+```
+> **路径一律用正斜杠**（`D:/cindy/xxx`）或双反斜杠（`D:\\cindy\\xxx`）——
+> 单反斜杠在配置里会被当成转义符，`\c`、`\o` 会被吃掉，路径直接失效。
+
+### 3. 设置环境变量
+
+```bash
+CARLOS_FLOW_MCP_ROOT=D:/cindy/publish-output/carlos-flow-cindy
+CARLOS_FLOW_HOME=C:/Users/EDY/.carlos-flow
+BRIDGE_PORT=19099
+```
+
+### 4. 重启并验证
+
+```bash
+# 在 Cindy 里问一句「走门禁」，或用 CLI 验证
+node client/carlos.js flow_status '{"sessionId":"probe"}'
+```
+> 期望输出里 `has_card: false` 即表示服务正常。
+
+> 📁 首次运行会在 `CARLOS_FLOW_HOME`（默认 `~/.carlos-flow`）下创建状态目录，
+> 里面存放**审计日志**与**文件快照**。**不要手动删除** —— 删了审计链就断了。
 
 ---
 ## 🌟 核心能力
@@ -232,6 +262,26 @@ node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run 
 //     "activation_pending": ["scope", "acceptance", "verify.cmd"] }
 ```
 > `execute: false` 时只评分不动作（只返回 `decision` / `score` / `breakdown`）。
+
+##### 自定义触发词表（可选）
+**中英文流程词已内置**，开箱即用 —— 中文需求（如「走门禁流程」「执行工作流」）直接能触发，
+普通开发需求（如「给接口加个参数校验」）**不会误触发**。
+
+要追加自己的词，编辑 `CARLOS_FLOW_HOME/trigger-config.json`（默认 `~/.carlos-flow/trigger-config.json`）：
+
+```jsonc
+{
+  // 追加/覆盖同名项 —— 默认词表（含内置中文词）**全部保留**
+  "keywordWeights": { "评审": 3, "走查": 3 },
+  // 追加去重
+  "readOnlyIntentWords": ["讲一下"],
+  "mutatingActionWords": ["改造一下"]
+}
+```
+
+> 📌 合并语义：**是追加，不是替换**。只写你关心的那几项即可，不必抄全默认表。
+> 改完需要重启宿主（MCP server / 插件）才会重新读取配置。
+> 现成模板随包附带：`trigger-config.usable.json`（可直接用）与 `trigger-config.example.json`（带说明）。
 
 ##### OpenCode 插件（路径 ②，开箱即用）
 ```bash
@@ -475,7 +525,7 @@ npm run test:all           # 五个套件串联，一次跑完
 | 审计链校验失败 | 检查 `CARLOS_FLOW_HOME` 权限，或删除 `audit/` 重建 |
 | 验证命令超时 | `verify.cmd` 超过 60s 会被熔断，建议拆成快速命令 |
 | scope 越界误报 | `scope` 用相对路径，`git diff --name-only` 需一致 |
-| 触发引擎一直不触发 | 检查输入是否命中 `keywordWeights` 关键词；中文场景需自行扩展词表（默认词表为英文） |
+| 触发引擎一直不触发 | 检查输入是否命中 `keywordWeights` 关键词。**中文流程词已内置**（工作流 / 门禁 / 派发 / 审计 / 复核 / 任务卡 …），中文需求能正常触发；仍不触发时用 `CARLOS_FLOW_HOME/trigger-config.json` 追加自定义词（是**追加**，不会覆盖默认词表） |
 | 触发太频繁 | 调高 `triggerThreshold`、调大 `minTriggerIntervalSeconds`、或调高 `historyCoeff`（它是惩罚项，调高会更快收紧上限） |
 | 触发引擎状态文件在哪 | 统一在 `CARLOS_FLOW_HOME`（默认 `~/.carlos-flow`），不再写当前工作目录 |
 

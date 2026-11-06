@@ -13,6 +13,7 @@
     "test:p0": "node test/p0-gates.mjs",
     "test:trigger": "node test/trigger-e2e.mjs",
     "test:concurrency": "node test/concurrency-e2e.mjs",
+    "test:acceptance": "node test/e2e-acceptance.mjs",
     "test:all": "npm run test && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency",
     "test:mutation": "node scripts/mutation-check.mjs",
     "sync:readme": "node scripts/sync-readme.mjs",

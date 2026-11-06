@@ -178,6 +178,73 @@ async function main() {
     r.ok && r.data?.ok === false && (r.data?.violations || []).length === 1,
     r.ok ? `ok=${r.data?.ok} violations=${JSON.stringify(r.data?.violations)}` : r.error);
 
+  // --- 15. acceptance 伪填充必须被拒（不能解开闸门）---
+  // acceptance=[""] / [null] / [0] / [{}] 这类「长度>0 但内容无效」的伪填充，
+  // 若被判为「已填」，验收标准就形同虚设。
+  //
+  // 注意：acceptance 只在 **cross_module / sensitive** 档才是必填项
+  // （single_file 档的必填项只有 goal+quote+scope），
+  // 所以这里必须用**两个以上 scope 文件**触发 cross_module 档才能测到必填校验。
+  //
+  // 另一个坑：flow_submit_requirement 的「卡片不合规」是**正常的 MCP 响应**
+  // （JSON 里 ok:false），**不是** isError —— 所以判定要看 r.data.ok，
+  // 不能看 r.ok（r.ok 只表示「这次工具调用本身有没有报错」）。
+  const fakeAccSid = "p0-fakeacc-" + Date.now();
+  await call("flow_add_user_msg", { sessionId: fakeAccSid, text: "quote here" });
+  r = await call("flow_submit_requirement", {
+    sessionId: fakeAccSid, goal: "伪填充 acceptance", quote: "quote here",
+    scope: [ROOT + "/README.md", ROOT + "/src/index.js"],
+    files: [{ path: ROOT + "/README.md", line: 1 }, { path: ROOT + "/src/index.js", line: 1 }],
+    acceptance: [""], confirmed: true,
+  });
+  check("15. acceptance=[\"\"] 被拒（cross_module 档 · 伪填充不算已填）",
+    r.data?.ok === false && /acceptance/.test(r.data?.reason || ""),
+    (r.data?.reason || r.error || "").slice(0,70));
+
+  // 同理：[null] / [0] / [{}] / ["","  "] 都必须被拒
+  const fakeVariants = [[null], [0], [{}], ["", "  "]];
+  let allRejected = true;
+  const details = [];
+  for (const acc of fakeVariants) {
+    const sid = "p0-fakeacc-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+    await call("flow_add_user_msg", { sessionId: sid, text: "quote here" });
+    const rr = await call("flow_submit_requirement", {
+      sessionId: sid, goal: "伪填充 acceptance", quote: "quote here",
+      scope: [ROOT + "/README.md", ROOT + "/src/index.js"],
+      files: [{ path: ROOT + "/README.md", line: 1 }, { path: ROOT + "/src/index.js", line: 1 }],
+      acceptance: acc, confirmed: true,
+    });
+    if (rr.data?.ok !== false) { allRejected = false; details.push(`${JSON.stringify(acc)}→被接受`); }
+  }
+  check("16. acceptance=[null]/[0]/[{}]/[\"\",\"  \"] 全部被拒",
+    allRejected, details.join("; ") || "4 种伪填充均被拒");
+
+  // 合法的 acceptance 必须仍然通过（防止把门禁收得过紧误伤正常流程）
+  const goodAccSid = "p0-goodacc-" + Date.now();
+  await call("flow_add_user_msg", { sessionId: goodAccSid, text: "quote here" });
+  r = await call("flow_submit_requirement", {
+    sessionId: goodAccSid, goal: "合法 acceptance", quote: "quote here",
+    scope: [ROOT + "/README.md", ROOT + "/src/index.js"],
+    files: [{ path: ROOT + "/README.md", line: 1 }, { path: ROOT + "/src/index.js", line: 1 }],
+    acceptance: ["README 首行改成中文标题"], confirmed: true,
+  });
+  check("18. 合法 acceptance 不被误伤（cross_module 档通过）",
+    r.data?.ok === true,
+    r.data?.ok ? `tier=${r.data?.tier}` : (r.data?.reason || r.error || "").slice(0, 60));
+
+  // 激活闸门场景：伪填充不得让闸门误判为「已补齐」
+  const fakeGateSid = "p0-fakegate-" + Date.now();
+  await call("flow_add_user_msg", { sessionId: fakeGateSid, text: "quote here" });
+  r = await call("flow_submit_requirement", {
+    sessionId: fakeGateSid, goal: "伪填充开闸", quote: "quote here",
+    scope: [ROOT + "/README.md"], acceptance: [""], verify: { cmd: "node -e \"process.exit(0)\"" },
+    confirmed: true, activation: true,
+  });
+  const gatePending = r.data?.state?.activation_pending || [];
+  check("17. 伪填充 acceptance 时闸门仍记为待补（不解闸）",
+    r.data?.ok === false || gatePending.includes("acceptance"),
+    r.data?.ok === false ? "卡片被拒（合规）" : `pending=${gatePending.join(",")}`);
+
   console.log(lines.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
   cleanupBridge();

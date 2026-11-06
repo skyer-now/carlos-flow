@@ -1,0 +1,30 @@
+{
+  "_说明": "Carlos 工作流 · 智能触发引擎自定义配置（示例模板）",
+  "_放置位置": "复制到 CARLOS_FLOW_HOME/trigger-config.json（默认 ~/.carlos-flow/trigger-config.json）即可生效",
+  "_合并语义": "keywordWeights 是**追加/覆盖同名项**（默认词表全部保留）；readOnlyIntentWords / mutatingActionWords 是**追加去重**。所以这里只写你要补充的词即可，不必抄全默认表。",
+  "_注意": "改完需要重启宿主（MCP server / 插件）才会重新读取配置。",
+
+  "_示例1_追加自定义流程词": {
+    "keywordWeights": {
+      "评审": 3,
+      "走查": 3,
+      "验收": 2
+    }
+  },
+
+  "_示例2_追加中文只读词与改动动词": {
+    "readOnlyIntentWords": ["讲一下", "介绍一下", "解读"],
+    "mutatingActionWords": ["改造一下", "重写一遍"]
+  },
+
+  "_示例3_调高触发门槛_减少打扰": {
+    "triggerThreshold": 20,
+    "autoTriggerThreshold": 30,
+    "minTriggerIntervalSeconds": 600
+  },
+
+  "_默认词表_一般不需要写": {
+    "_keywordWeights": "英文 work/flow/carlos/dispatch/trigger/start/run/execute；中文 工作流/门禁/任务卡/派发/子代理/流程/触发/执行/调度/审计/复核/留痕/裁定",
+    "_说明": "以上中英文流程词**已内置**在代码里（v2.5.5 起），无需再写进本文件。"
+  }
+}

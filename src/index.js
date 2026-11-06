@@ -25,6 +25,14 @@ const ok = (obj) => ({ content: [{ type: "text", text: JSON.stringify(obj, null,
 const fail = (message) => ({ content: [{ type: "text", text: "ERROR: " + String(message) }], isError: true });
 
 const asStringArray = (v) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
+
+// 卡片文本字段（scope / acceptance / unknowns / assumptions）的归一化。
+// 与 asStringArray 的区别：**只保留真正的字符串元素**。
+// 原先用 String(x) 会把 null → "null"、{} → "[object Object]" ——
+// 这些垃圾串会让 acceptance=["null"] 看起来像「已填」，
+// 从而解开激活闸门（验收标准形同虚设）。
+// 数字形式的路径/验收标准没有意义，一并丢弃。
+const asTextArray = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
 const asObject = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
 
 // 卡片里声明的验证命令（归一化后用于比较）
@@ -114,10 +122,10 @@ const TOOLS = [
           card = {
             goal: a.goal,
             quote: a.quote,
-            scope: asStringArray(a.scope),
-            acceptance: asStringArray(a.acceptance),
-            unknowns: asStringArray(a.unknowns),
-            assumptions: asStringArray(a.assumptions),
+            scope: asTextArray(a.scope),
+            acceptance: asTextArray(a.acceptance),
+            unknowns: asTextArray(a.unknowns),
+            assumptions: asTextArray(a.assumptions),
             files: Array.isArray(a.files) ? a.files : [],
             verify: asObject(a.verify),
             confirmed: a.confirmed === true,
@@ -155,11 +163,15 @@ const TOOLS = [
         card.env = { git_head: gitHead(cwd), project: cwd };
 
         // ---- 闸门待补项：服务端从当前卡片内容**幂等派生** ----
-        // 长度判定：只检查数组长度 > 0，与 validateCard 的必填字段口径保持一致。
+        // 内容判定：与 validateCard 的必填字段口径**严格一致**（两边都要求
+        // 「至少一个非空字符串」）。acceptance=[""] / [null] 这类「长度>0 但内容无效」
+        // 的伪填充，既不算卡片合规，也不算闸门已补齐 —— 统一卡严，避免绕过。
         const cardHasScope = Array.isArray(card.scope) && card.scope.some(
           (p) => typeof p === "string" && p.trim() !== "" && p !== "." && p !== ".."
         );
-        const cardHasAcceptance = Array.isArray(card.acceptance) && card.acceptance.length > 0;
+        const cardHasAcceptance = Array.isArray(card.acceptance) && card.acceptance.some(
+          (x) => typeof x === "string" && x.trim() !== ""
+        );
         const cardHasVerify = !!(card.verify && typeof card.verify.cmd === "string" && card.verify.cmd.trim() !== "");
         const currentMissing = [
           ...(!cardHasScope ? ["scope"] : []),

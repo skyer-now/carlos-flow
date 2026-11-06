@@ -105,11 +105,28 @@ const DEFAULT_CONFIG = {
 };
 
 // 加载配置文件
+//
+// 词表类字段必须做**合并**而不是整体替换。
+// 原实现 `config = { ...DEFAULT_CONFIG, ...loaded }` 是浅合并 —— 用户一旦写了
+// `keywordWeights`，就会把默认词表（含内置的中文流程词）**整个丢掉**，
+// 于是「我只是加一个自定义词」反而让所有默认词失效，中文场景重新变回 0 分。
+// 语义修正：
+//   · keywordWeights：对象 → 合并（用户词覆盖同名默认词，其余默认词保留）
+//   · readOnlyIntentWords / mutatingActionWords：数组 → 追加去重（“扩展”而非“替换”）
+//   · 其余标量字段：覆盖（阈值、权重等本来就是单值）
 let config = DEFAULT_CONFIG;
 if (existsSync(CONFIG_PATH)) {
   try {
     const loaded = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
     config = { ...DEFAULT_CONFIG, ...loaded };
+    if (loaded.keywordWeights && DEFAULT_CONFIG.keywordWeights) {
+      config.keywordWeights = { ...DEFAULT_CONFIG.keywordWeights, ...loaded.keywordWeights };
+    }
+    for (const key of ['readOnlyIntentWords', 'mutatingActionWords']) {
+      if (Array.isArray(loaded[key]) && Array.isArray(DEFAULT_CONFIG[key])) {
+        config[key] = [...new Set([...DEFAULT_CONFIG[key], ...loaded[key]])];
+      }
+    }
   } catch (e) {
     console.warn('[Carlos Trigger] 配置加载失败:', e.message);
   }

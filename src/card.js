@@ -222,6 +222,11 @@ export function validateCard(card, options) {
     }
   }
 
+  // 文本类数组字段：元素必须是可读文本。
+  // 这些字段「长度>0」不等于「已填」——acceptance=[""] / [null] / [0] / [{}]
+  // 都是「长度>0 但内容无效」的伪填充，必须判为「未填」。
+  const TEXT_ARRAY_FIELDS = new Set(['acceptance', 'unknowns', 'assumptions', 'scope']);
+
   const required = {
     read_only: ['goal', 'quote'],
     single_file: ['goal', 'quote', 'scope'],
@@ -230,9 +235,27 @@ export function validateCard(card, options) {
   }[tier] || ['goal', 'quote'];
   for (const f of required) {
     const v = card ? card[f] : undefined;
-    const missing = v === undefined || v === null ||
-      (Array.isArray(v) && v.length === 0) ||
-      (typeof v === 'string' && v.trim() === '');
+    let missing;
+    if (v === undefined || v === null) {
+      missing = true;
+    } else if (Array.isArray(v)) {
+      if (v.length === 0) {
+        missing = true;
+      } else if (TEXT_ARRAY_FIELDS.has(f)) {
+        // 文本类数组：必须**至少有一个非空字符串**才算「已填」。
+        // 只看长度会放过 acceptance=[""] / [null] / [0] / [{}] 这类
+        // 「长度>0 但内容无效」的伪填充 —— 它们会让激活闸门误判为「已补齐」
+        // 并解开派发闸门（验收标准形同虚设）。
+        missing = !v.some((x) => typeof x === 'string' && x.trim() !== '');
+      } else {
+        // 其他数组（如 files）：元素结构另有校验，这里只看长度。
+        missing = false;
+      }
+    } else if (typeof v === 'string') {
+      missing = v.trim() === '';
+    } else {
+      missing = false;
+    }
     if (missing) findings.push('缺少必填字段：' + f + '（风险档 ' + tier + '）');
   }
 

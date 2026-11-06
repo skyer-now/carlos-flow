@@ -113,20 +113,49 @@ Carlos Flow is **mechanical**. The constraints live in code, not in prose.
 
 ---
 ## 🚀 Quick start (30 seconds)
-### Option 1 — Cindy plugin marketplace (recommended)
-1. Cindy → Settings → Plugins → Browse marketplace
-2. Search `carlos-flow`, click install
-3. Fill in the environment variables on the plugin settings page
-4. **Fully quit and restart Cindy**, then say *"走门禁"* / *"run the gate"*
-### Option 2 — from source
+
+### 1. Install
 ```bash
-git clone https://github.com/skyer-now/carlos-flow-cindy.git
-cd carlos-flow-cindy
-npm install
-cp .env.example .env      # edit: CARLOS_FLOW_MCP_ROOT, CARLOS_FLOW_HOME
-npm test                  # smoke test (fully isolated)
-npm run test:e2e          # 16-case end-to-end suite
+npm install -g carlos-flow-cindy@2.5.5
 ```
+> ⚠️ **If you get `ETARGET: No matching version found`** — that is npm's **registry metadata cache** being stale,
+> not a missing version. Clear the cache and retry:
+> ```bash
+> npm cache clean --force
+> # or just this package
+> npm cache clean carlos-flow-cindy
+> ```
+> To confirm the version really exists: `npm view carlos-flow-cindy versions`
+
+### 2. Configure
+
+The Cindy edition installs from the **plugin marketplace**: Cindy → Settings → Plugins → Browse marketplace →
+search `carlos-flow` → Install, then fill in the environment variables on the plugin settings page
+(equivalent to the repo's `.env.example`).
+
+```bash
+# or from source
+cp .env.example .env      # edit: CARLOS_FLOW_MCP_ROOT, CARLOS_FLOW_HOME
+```
+
+### 3. Set the environment variables
+
+```bash
+CARLOS_FLOW_MCP_ROOT=D:/cindy/publish-output/carlos-flow-cindy
+CARLOS_FLOW_HOME=C:/Users/EDY/.carlos-flow
+BRIDGE_PORT=19099
+```
+
+### 4. Restart and verify
+
+```bash
+# ask Cindy “走门禁”, or verify via the CLI
+node client/carlos.js flow_status '{"sessionId":"probe"}'
+```
+> Expected output contains `has_card: false`, which means the service is alive.
+
+> 📁 On first run a state directory is created under `CARLOS_FLOW_HOME` (default `~/.carlos-flow`),
+> holding the **audit log** and **file snapshots**. **Do not delete it manually** — that would break the audit chain.
 
 ---
 ## 🌟 Core capabilities
@@ -209,6 +238,27 @@ node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run 
 //     "activation_pending": ["scope", "acceptance", "verify.cmd"] }
 ```
 > Pass `execute: false` to score only, without taking any action.
+
+##### Custom trigger vocabulary (optional)
+**Chinese and English workflow words are built in** and work out of the box — Chinese requests
+("走门禁流程", "执行工作流") trigger normally, while ordinary development requests
+("给接口加个参数校验") do **not** misfire.
+
+To add your own words, edit `CARLOS_FLOW_HOME/trigger-config.json` (default `~/.carlos-flow/trigger-config.json`):
+
+```jsonc
+{
+  // Merged / overrides same-name entries — the default vocabulary (incl. built-in Chinese) is **kept**
+  "keywordWeights": { "评审": 3, "走查": 3 },
+  // Appended, de-duplicated
+  "readOnlyIntentWords": ["讲一下"],
+  "mutatingActionWords": ["改造一下"]
+}
+```
+
+> 📌 Merge semantics: **append, not replace**. Just write the entries you care about — no need to copy the whole default table.
+> Restart the host (MCP server / plugin) after editing for the config to be re-read.
+> Ready-made templates ship with the package: `trigger-config.usable.json` (drop-in) and `trigger-config.example.json` (documented).
 
 ##### OpenCode plugin (path ② — works out of the box)
 ```bash

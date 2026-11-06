@@ -1,0 +1,28 @@
+// trigger-config.example.json 的真实可用版
+//
+// 与 trigger-config.example.json（带注释的说明模板）不同，这个文件是**可直接使用**的：
+// 复制到 CARLOS_FLOW_HOME/trigger-config.json 后即可生效。
+//
+// 合并语义（v2.5.5 起）：
+//   · keywordWeights              → 追加/覆盖同名项，默认词表（含中文流程词）全部保留
+//   · readOnlyIntentWords         → 追加去重
+//   · mutatingActionWords         → 追加去重
+//   · 其余标量（阈值、权重等）      → 覆盖
+//
+// 也就是说：**你只需要写自己关心的那几项**，不必抄全默认表。
+{
+  "keywordWeights": {
+    "评审": 3,
+    "走查": 3,
+    "验收": 2
+  },
+  "readOnlyIntentWords": [
+    "讲一下",
+    "介绍一下",
+    "解读"
+  ],
+  "mutatingActionWords": [
+    "改造一下",
+    "重写一遍"
+  ]
+}

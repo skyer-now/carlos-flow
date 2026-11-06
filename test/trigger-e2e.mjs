@@ -4,8 +4,10 @@
 
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -485,6 +487,54 @@ const testCases = [
       const notOk = shouldNotTrigger.every((m) => score(m).decision !== 'trigger');
       console.log(`  [DEBUG] 中文触发=${trigOk} 普通需求不误触发=${notOk}`);
       return trigOk && notOk;
+    }
+  },
+  {
+    name: '回归: trigger-config.json 词表是追加不是替换',
+    test: () => {
+      // 背景：配置加载原为浅合并 `{...DEFAULT_CONFIG, ...loaded}`，
+      // 用户一旦写 `keywordWeights` 就会把默认词表（含内置中文流程词）**整个丢掉** ——
+      // 「我只是加一个自定义词」反而让所有默认词失效，中文场景重新变回 0 分。
+      // 正确语义：keywordWeights 合并（用户词覆盖同名项），词表数组追加去重。
+      //
+      // trigger.js 在**模块加载时**读配置，所以必须用独立进程测（换 CARLOS_FLOW_HOME）。
+      const home = join(tmpdir(), `carlos-flow-cfg-${Date.now()}-${process.pid}`);
+      mkdirSync(home, { recursive: true });
+      writeFileSync(
+        join(home, 'trigger-config.json'),
+        JSON.stringify({
+          keywordWeights: { '评审': 3 },
+          readOnlyIntentWords: ['讲一下'],
+          mutatingActionWords: ['改造一下'],
+        }),
+        'utf8'
+      );
+      const probe = `
+        const { TriggerEngine } = await import(${JSON.stringify(pathToFileURL(TRIGGER_PATH).href)});
+        const c = TriggerEngine.getConfig();
+        console.log(JSON.stringify({
+          hasBuiltinZh: c.keywordWeights['门禁'] !== undefined,
+          hasBuiltinEn: c.keywordWeights['work'] !== undefined,
+          hasUser: c.keywordWeights['评审'] === 3,
+          roHasDefault: c.readOnlyIntentWords.includes('explain'),
+          roHasUser: c.readOnlyIntentWords.includes('讲一下'),
+          mutHasDefault: c.mutatingActionWords.includes('修复'),
+          mutHasUser: c.mutatingActionWords.includes('改造一下'),
+        }));
+      `;
+      const r = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+        env: { ...process.env, CARLOS_FLOW_HOME: home },
+        encoding: 'utf8',
+      });
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
+      if (!r.stdout || !r.stdout.trim()) {
+        console.log(`  [DEBUG] 子进程无输出: ${(r.stderr || '').slice(0, 200)}`);
+        return false;
+      }
+      const c = JSON.parse(r.stdout.trim().split('\n').pop());
+      console.log(`  [DEBUG] 配置合并: ${JSON.stringify(c)}`);
+      return c.hasBuiltinZh && c.hasBuiltinEn && c.hasUser
+        && c.roHasDefault && c.roHasUser && c.mutHasDefault && c.mutHasUser;
     }
   },
   {
