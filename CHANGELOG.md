@@ -15,6 +15,7 @@
 | T-48 | README 安装命令钉死 `@2.5.5` | 用户照文档装不到含 bin 修复的版本，老 EEXIST 照原样复现 | 改为不钉版本（`npm install -g carlos-flow-opencode`），避免文档随发版过时；版本行同步；`docs/` 报告链接改 GitHub 绝对链接（`docs/` 不在 npm files 白名单，相对链接在 npm 页面 404） |
 | T-49 | `.mutation-report.md` 未被 `.gitignore` 覆盖 | 跑一次变异测试就脏工作区 ⇒ `release.mjs` 的「工作区干净」硬拦、**发不了** | 加 `.gitignore` + 把历史上误提交的该文件取消跟踪并删除；同时清理根目录 13 个死进程残留的 `bridge-*.pid` |
 | T-50 | M6/M9 **共用同一段 from 锚点**、M10 的 from 仅 2 行 | 该段一改缩进/注释 → 多个变异体同时 SKIP：**静默失去守护作用**，而历史报告仍显示「13/13 全部被抓住」 | 三个锚点各自唯一且更长；新增 `scripts/check-mutant-anchors.mjs`（`npm run check:anchors`）+ 接入 CI，锚点失效立刻报错 |
+| T-51 | `release.mjs` 的跳过逻辑按**标签**、目标路径按**身份**解析 —— 两者不同源 | 在 opencode 仓**不带** `--include-peer` 时：「opencode」分支被跳过（跳掉**自己**），「cindy」分支照跑却推了**对方** ⇒ **opencode 包永不发布，反而去发 cindy**，而日志还写「跳过 opencode」 | 推送循环重构为「跳过与路径同源于身份」：本仓**始终**发布，对方仓受 `--include-peer` 约束；两个标签分支合并为一段，日志带仓名与身份标记。四种组合的决策推演已全部验证正确 |
 
 > 实测：两个触发器模板复制后，自定义词「评审」生效、默认中文词「门禁」保留、只读词「讲一下」已追加。
 
