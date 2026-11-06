@@ -1,6 +1,6 @@
 {
   "name": "carlos-flow-cindy",
-  "version": "2.5.6",
+  "version": "2.5.7",
   "description": "Carlos 工作流 MCP - Cindy 适配版（自动管理 Bridge，内置密钥库集成）",
   "type": "module",
   "main": "src/index.js",
