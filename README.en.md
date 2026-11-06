@@ -3,7 +3,7 @@
 > **Mechanical gatekeeping for AI coding agents**: Record → Dispatch → Verify → Verdict → Audit → Restore
 > Turns "trust the agent" into "verify the agent" — with machine-enforced scope limits, real command execution, and a tamper-proof audit chain.
 **语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.7 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🆕 What's new in v2.5.5
@@ -76,8 +76,8 @@ The earlier implementation only printed a log line when it hit — it never actu
 - 🔑 **GitHub Actions OIDC publishing**: no npm token stored in the repository any more
 - 🧩 **`scripts/release.mjs`**: version checks / bilingual consistency / tests / build / publish in one command
 - 🛡️ **`npm run check:readme`**: prepublish hook keeps the three README files from drifting apart
-- 📋 **Independent QA report**: [`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md) — third-party read-only acceptance before release
-- 🧬 **Mutation report**: [`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md) — 13 injected mutations, **all 13 caught**
+- 📋 **Independent QA report**: [`docs/QA_REPORT_v2.5.5.md`](https://github.com/skyer-now/carlos-flow-cindy/blob/main/docs/QA_REPORT_v2.5.5.md) — third-party read-only acceptance before release
+- 🧬 **Mutation report**: [`docs/MUTATION_REPORT_v2.5.5.md`](https://github.com/skyer-now/carlos-flow-cindy/blob/main/docs/MUTATION_REPORT_v2.5.5.md) — 13 injected mutations, **all 13 caught**
 
 ### 📚 Documentation readability
 - Removed the repeated **language bar / version line noise** that was injected throughout the READMEs (24–26 occurrences per file → consolidated to 1 at the top); tables are no longer truncated
@@ -116,7 +116,7 @@ Carlos Flow is **mechanical**. The constraints live in code, not in prose.
 
 ### 1. Install
 ```bash
-npm install -g carlos-flow-cindy@2.5.5
+npm install -g carlos-flow-cindy
 ```
 > ⚠️ **If you get `ETARGET: No matching version found`** — that is npm's **registry metadata cache** being stale,
 > not a missing version. Clear the cache and retry:

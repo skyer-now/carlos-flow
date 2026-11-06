@@ -23,7 +23,8 @@
     "clean:readme": "node scripts/clean-readme-noise.mjs README.md README.zh.md README.en.md && npm run sync:readme",
     "prepublishOnly": "npm run check:readme",
     "start:bridge": "node bridge/mcp-bridge.js",
-    "lint": "echo \"no linter configured\""
+    "lint": "echo \"no linter configured\"",
+    "check:anchors": "node scripts/check-mutant-anchors.mjs"
   },
   "keywords": [
     "carlos",

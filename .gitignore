@@ -68,3 +68,6 @@ test-results.json
 test/trigger-e2e-results.json
 src/*.bak
 src/*.patch
+
+# 变异测试报告（mutation-check.mjs 默认写在仓库根，跑一次就脏工作区 → 会卡住 release 的「工作区干净」校验）
+.mutation-report.md

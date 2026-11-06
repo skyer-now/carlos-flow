@@ -29,6 +29,11 @@ jobs:
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home
+      # 变异体锚点体检：确认 mutation-check 的每个注入锚点仍能命中当前源码。
+      # 锚点失效时 mutation-check 会记 SKIP —— 不假绿，但**失去了守护作用**，
+      # 而历史报告仍可能显示「13/13 全部被抓住」，属于静默退化。
+      - name: Mutant anchors still valid
+        run: npm run check:anchors
       - name: Trigger engine E2E
         run: npm run test:trigger
         env:

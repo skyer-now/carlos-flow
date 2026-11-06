@@ -3,7 +3,7 @@
 > **面向 AI 编码 Agent 的机械门禁**：留痕 → 派发 → 验证 → 裁定 → 审计 → 还原
 > 把"相信 Agent"变成"验证 Agent"——机器级 scope 限制、真实命令执行、防篡改审计链。
 **语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.5 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.7 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🆕 v2.5.5 更新速览
@@ -99,8 +99,8 @@ MCP 协议是**被动**的——服务端不能主动推送。因此“自动触
 - 🔑 **GitHub Actions OIDC 发布**：不再需要在仓库里存 npm token
 - 🧩 **`scripts/release.mjs`**：一条命令跑完版本校验 / 双语一致性 / 测试 / 构建 / 发布
 - 🛡️ **`npm run check:readme`**：prepublish 钩子自动校验 README 三份文件不漂移
-- 📋 **独立 QA 验收报告**：[`docs/QA_REPORT_v2.5.5.md`](docs/QA_REPORT_v2.5.5.md)（发布前第三方只读验收）
-- 🧬 **变异测试报告**：[`docs/MUTATION_REPORT_v2.5.5.md`](docs/MUTATION_REPORT_v2.5.5.md)（13 类变异体 **13/13 全部被抓住**）
+- 📋 **独立 QA 验收报告**：[`docs/QA_REPORT_v2.5.5.md`](https://github.com/skyer-now/carlos-flow-cindy/blob/main/docs/QA_REPORT_v2.5.5.md)（发布前第三方只读验收）
+- 🧬 **变异测试报告**：[`docs/MUTATION_REPORT_v2.5.5.md`](https://github.com/skyer-now/carlos-flow-cindy/blob/main/docs/MUTATION_REPORT_v2.5.5.md)（13 类变异体 **13/13 全部被抓住**）
 
 ### 📚 文档可读性
 - 清理了 README 中被重复注入的**语言栏 / 版本行噪音**（每份 24~26 处 → 收敛到顶部 1 处），表格不再被截断
@@ -139,7 +139,7 @@ Carlos Flow 是**机械性的**。约束写在代码里，不写在散文里。
 
 ### 1. 安装
 ```bash
-npm install -g carlos-flow-cindy@2.5.5
+npm install -g carlos-flow-cindy
 ```
 > ⚠️ **如果报 `ETARGET: No matching version found`** —— 这是 npm 的 **registry 元数据缓存**没刷新，
 > 不是版本不存在。用下面任一命令清缓存后重装：

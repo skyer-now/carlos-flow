@@ -74,31 +74,48 @@ const MUTANTS = [
     id: "M6-半补齐绕过闸门",
     desc: "已激活会话改成「只要提交就解闸」（移除幂等派生）",
     file: "src/index.js",
-    from: `            activationPending = currentMissing;
-          } else {
-            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。`,
-    to: `            activationPending = []; // MUTANT: 只要提交就解闸
-          } else {
-            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。`,
+    // 锚点必须**唯一且足够长**：曾经 M6/M9 共用同一段 from，
+    // 该段一改缩进/注释 → 两个变异体同时 SKIP（变异测试失去守护却仍报 13/13）。
+    // 现在带上 else-if 分支的专属上下文。
+    from: `          } else if (wasActivatedBefore) {
+            // 该会话开过占位卡：继续按**当前卡片实际缺什么**锁定。
+            // 幂等派生（而不是「上一轮 pending 传递」），所以即使并发丢更新，
+            // 落盘的 pending 永远与同一份落盘卡片一致，不会出现「卡片空却 pending=[]」。
+            activationPending = currentMissing;
+          } else {`,
+    to: `          } else if (wasActivatedBefore) {
+            // 该会话开过占位卡：继续按**当前卡片实际缺什么**锁定。
+            // 幂等派生（而不是「上一轮 pending 传递」），所以即使并发丢更新，
+            // 落盘的 pending 永远与同一份落盘卡片一致，不会出现「卡片空却 pending=[]」。
+            activationPending = []; // MUTANT: 只要提交就解闸
+          } else {`,
   },
   {
     id: "M9-闸门派生回退",
-    desc: "把「已激活会话」的待补项改回上一轮 pending 传递（并发丢更新时会失效）",
+    desc: "把「普通卡分支」的待补项改回上一轮 pending 传递（并发丢更新时会失效）",
     file: "src/index.js",
-    from: `            activationPending = currentMissing;
-          } else {
-            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。`,
-    to: `            activationPending = prevPendingBefore; // MUTANT: 回退到状态传递
-          } else {
-            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。`,
+    // 锚点与 M6 区分：M6 改「已激活会话」的赋值，M9 改「普通卡」分支的赋值。
+    from: `          } else {
+            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。
+            // 档位必填项已由 validateCard 按 tier 强制（read_only 只要 goal+quote），
+            // 此处再加闸门会误伤 T1 只读调研。
+            activationPending = [];`,
+    to: `          } else {
+            // 普通卡（未标 activation，且该会话从未激活过）：不上闸门。
+            // 档位必填项已由 validateCard 按 tier 强制（read_only 只要 goal+quote），
+            // 此处再加闸门会误伤 T1 只读调研。
+            activationPending = prevPendingBefore; // MUTANT: 回退到状态传递`,
   },
   {
     id: "M10-普通卡也上闸",
     desc: "普通卡（无 activation 且此前未被锁）也被上闸 —— 会误伤 T1 只读调研",
     file: "src/index.js",
-    from: `            activationPending = [];
+    // 锚点从 2 行加长到 4 行：原来的 from 过短，任何相邻代码改动都可能连带改写它。
+    from: `            // 此处再加闸门会误伤 T1 只读调研。
+            activationPending = [];
           }`,
-    to: `            activationPending = currentMissing; // MUTANT: 普通卡也上闸
+    to: `            // 此处再加闸门会误伤 T1 只读调研。
+            activationPending = currentMissing; // MUTANT: 普通卡也上闸
           }`,
   },
   {
