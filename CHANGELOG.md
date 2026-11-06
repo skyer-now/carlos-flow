@@ -5,6 +5,20 @@
 
 ---
 
+## [2.5.8] - 2026-11-06 — 修包内容与文档不一致 + 变异体锚点加固
+
+### 🐛 修复 | Fixed
+
+| # | 问题 | 影响 | 修复 |
+|---|------|------|------|
+| T-47 | `trigger-config.usable.json` 整份含 `//` 注释 ⇒ **不是合法 JSON** | 复制成 trigger-config.json 后 `JSON.parse` 抛错 → 配置被整体丢弃、静默回退默认词表 ⇒ 用户以为「复制即可生效」，实际自定义词**一条都不生效** | 改为纯 JSON；`trigger-config.example.json` 补上真实可配置键（原先真键都带 `_` 前缀，直接复制同样无效） |
+| T-48 | README 安装命令钉死 `@2.5.5` | 用户照文档装不到含 bin 修复的版本，老 EEXIST 照原样复现 | 改为不钉版本（`npm install -g carlos-flow-opencode`），避免文档随发版过时；版本行同步；`docs/` 报告链接改 GitHub 绝对链接（`docs/` 不在 npm files 白名单，相对链接在 npm 页面 404） |
+| T-49 | `.mutation-report.md` 未被 `.gitignore` 覆盖 | 跑一次变异测试就脏工作区 ⇒ `release.mjs` 的「工作区干净」硬拦、**发不了** | 加 `.gitignore` + 把历史上误提交的该文件取消跟踪并删除；同时清理根目录 13 个死进程残留的 `bridge-*.pid` |
+| T-50 | M6/M9 **共用同一段 from 锚点**、M10 的 from 仅 2 行 | 该段一改缩进/注释 → 多个变异体同时 SKIP：**静默失去守护作用**，而历史报告仍显示「13/13 全部被抓住」 | 三个锚点各自唯一且更长；新增 `scripts/check-mutant-anchors.mjs`（`npm run check:anchors`）+ 接入 CI，锚点失效立刻报错 |
+
+> 实测：两个触发器模板复制后，自定义词「评审」生效、默认中文词「门禁」保留、只读词「讲一下」已追加。
+
+
 ## [2.5.7] - 2026-11-06 — 修 bin 名冲突：两个包可同时全局安装
 
 ### 🐛 修复 | Fixed
