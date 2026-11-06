@@ -5,7 +5,8 @@
   "type": "module",
   "main": "src/index.js",
   "bin": {
-    "carlos-flow": "client/carlos.js"
+    "carlos-flow": "client/carlos.js",
+    "carlos-flow-cindy": "client/carlos.js"
   },
   "scripts": {
     "test": "node test/smoke.js",
