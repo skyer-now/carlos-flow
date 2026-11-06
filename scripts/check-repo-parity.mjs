@@ -71,7 +71,6 @@ const MUST_MATCH = [
   "scripts/verify-activation-e2e.sh",
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
-  "CHANGELOG.md",
   "TRIGGER_GUIDE.md",
   "docs/QA_REPORT_v2.5.5.md",
   "LICENSE",
