@@ -74,7 +74,20 @@ Carlos Flow 智能触发引擎是一个三层智能系统，能够自动感知�
     "trigger": 2,
     "start": 1,
     "run": 1,
-    "execute": 2
+    "execute": 2,
+    "工作流": 3,
+    "门禁": 4,
+    "任务卡": 3,
+    "派发": 3,
+    "子代理": 3,
+    "流程": 2,
+    "触发": 2,
+    "执行": 2,
+    "调度": 2,
+    "审计": 2,
+    "复核": 2,
+    "留痕": 2,
+    "裁定": 2
   },
   
   "contextRelevanceWeight": 0.3,
@@ -187,9 +200,14 @@ stderr 输出：
 >   同一次调用的 `flow_dispatch` 反被闸门拒绝）与**锚点污染**（写入的「用户原话」是命令行文本 →
 >   Agent 用真实原话重提卡时 quote 锚点校验失败 → 补齐流程卡死）。现已改为**不传即不触发**。
 
-> **当前定位**：触发引擎是**库级能力**（`src/trigger.js`），由客户端集成调用；
-> 它**尚未**作为独立的 MCP 工具暴露给宿主 Agent。如果你需要 `flow_trigger_check` 之类的
-> MCP 工具入口，请自行在 `src/index.js` 的 `TOOLS` 数组中注册一个包装工具。
+> **当前定位**：触发引擎是**库级能力**（`src/trigger.js`），但它**已经**作为第 15 个 MCP 工具
+> **`flow_trigger_check`** 暴露给宿主 Agent —— 调用它即可获得与命令行客户端完全一致的评分与激活行为：
+> 达标时**实际完成激活**（写入用户原话 + 开占位卡 → 会话进入门禁态），未达标只如实返回评分。
+>
+> 三条触发路径（行为一致）：
+> 1. **MCP 工具** —— 调 `flow_trigger_check`（任何 MCP 宿主均可）
+> 2. **OpenCode 插件** —— `plugins/carlos-flow-trigger.js` 监听 `chat.message` 自动调用（opencode 版专有）
+> 3. **命令行客户端** —— `node client/carlos.js ... --triggerMessage "..."`
 
 ## 📊 评分计算详解
 

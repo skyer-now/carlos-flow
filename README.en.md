@@ -3,7 +3,7 @@
 > **Mechanical gatekeeping for AI coding agents**: Record → Dispatch → Verify → Verdict → Audit → Restore
 > Turns "trust the agent" into "verify the agent" — with machine-enforced scope limits, real command execution, and a tamper-proof audit chain.
 **语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.7 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.8 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🆕 What's new in v2.5.5
@@ -368,7 +368,7 @@ flowchart TB
 | Best for | Cindy App users | OpenCode 2.2.2+ users |
 
 ---
-## 🛠️ The 14 tools
+## 🛠️ The 15 tools
 ### 📝 Card & record
 | Tool | Purpose | Key params |
 |------|---------|------------|

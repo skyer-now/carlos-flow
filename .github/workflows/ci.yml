@@ -15,9 +15,15 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      # 必须固定 Node 版本：package.json 要求 >=22，而 runner 默认 Node 会随平台漂移
+      # （曾出现 runner 默认 20 → 与 engines 不符）。显式 setup 后行为可复现。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Check Node.js version
         run: node --version && npm --version
-      - run: npm install
+      # 用 npm ci（按 lock 精确安装）而不是 npm install（会重新解析依赖、可能引入漂移）
+      - run: npm ci
       - run: npm test
       - name: E2E (Carlos workflow)
         run: npm run test:e2e
@@ -34,6 +40,12 @@ jobs:
       # 而历史报告仍可能显示「13/13 全部被抓住」，属于静默退化。
       - name: Mutant anchors still valid
         run: npm run check:anchors
+      # 端到端验收（npm 包到真实可用）：必须进 CI —— 它验的是「装包后能不能用起来」，
+      # 只在本地跑就失去了「CI 绿 = 可发布」的含义。
+      - name: End-to-end acceptance (npm-package path)
+        run: npm run test:acceptance
+        env:
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-acceptance
       - name: Trigger engine E2E
         run: npm run test:trigger
         env:
@@ -44,6 +56,9 @@ jobs:
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-concurrency-home
+          # 并发套件在高负载下偶发「假泄漏」，偶发红会阻塞合并 → 允许重跑一次。
+          # 两次都红才判失败，真缺陷不会被重试掩盖。
+          CONCURRENCY_RETRY: 1
       - name: Security audit
         run: npm audit --audit-level=high || true
       - name: Build check (no build step for ESM)

@@ -3,7 +3,7 @@
 > **面向 AI 编码 Agent 的机械门禁**：留痕 → 派发 → 验证 → 裁定 → 审计 → 还原
 > 把"相信 Agent"变成"验证 Agent"——机器级 scope 限制、真实命令执行、防篡改审计链。
 **语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.7 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.8 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🆕 v2.5.5 更新速览
@@ -381,7 +381,7 @@ flowchart TB
         ENV --> BR[Bridge 守护进程]
     end
     subgraph Server["MCP Server (src/)"]
-        T[14 个工具] --> C[卡片解析与校验]
+        T[15 个工具] --> C[卡片解析与校验]
         C --> S[状态与审计链]
         S --> D[派发 / 快照 / 验证]
     end
@@ -400,7 +400,7 @@ flowchart TB
 | 适用场景 | Cindy App 用户 | OpenCode 2.2.2+ 用户 |
 
 ---
-## 🛠️ 14 个工具
+## 🛠️ 15 个工具
 ### 📝 卡片与留痕
 | 工具 | 作用 | 关键参数 |
 |------|------|----------|
