@@ -147,6 +147,13 @@ ok(`package.json version = ${pkg.version}`);
 // 1b. 完整仓库校验（版本 / lock / CHANGELOG / 工作区干净）
 verifyRepo(root, "carlos-flow-cindy");
 
+// 1c. 双仓一致性守卫（必须在任何推送之前）
+// 防止跨仓同步时把某一版的文件整份覆盖到另一版（如把 Cindy 版 README
+// 覆盖到 opencode 仓，导致该仓对外宣称自己是「Cindy 适配版」）。
+step("双仓一致性检查");
+runOrFail("node", ["scripts/check-repo-parity.mjs"], { cwd: root }, "check:parity");
+ok("双仓一致：核心逻辑逐字相同 / 专属文件无交叉 / 身份标识各自正确");
+
 // 2. CHANGELOG 顶部版本一致
 const changelog = readFileSync(resolve(root, "CHANGELOG.md"), "utf8");
 const topVer = (changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m) || [])[1];

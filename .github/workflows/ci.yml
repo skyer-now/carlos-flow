@@ -48,24 +48,26 @@ jobs:
 
   # 双仓一致性守卫：防止 cindy ↔ opencode 两版身份混淆
   # （历史上曾把 Cindy 版 README 整份覆盖到 opencode 仓，导致该仓对外宣称自己是 Cindy 版）。
-  # 只在本地有对方仓时有效 —— CI 里对方仓不存在时脚本应跳过而非报错。
+  #
+  # 关键：必须把**对方仓也检出**到相邻目录，否则守卫找不到 peer 会直接跳过（等于空转）。
   parity:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'cindy' || 'opencode' }}
+      - uses: actions/checkout@v4
+        with:
+          repository: skyer-now/carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'opencode' || 'cindy' }}
+          path: carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'opencode' || 'cindy' }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm install
+        working-directory: carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'cindy' || 'opencode' }}
       - name: 双仓一致性检查
-        continue-on-error: true
-        run: |
-          PEER="../carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'opencode' || 'cindy' }}"
-          if [ -d "$PEER" ]; then
-            node scripts/check-repo-parity.mjs "$PEER"
-          else
-            echo "跳过：CI 单仓检出，找不到对方仓 $PEER（本地双仓 checkout 时生效）"
-          fi
+        working-directory: carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'cindy' || 'opencode' }}
+        run: node scripts/check-repo-parity.mjs ../carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'opencode' || 'cindy' }}
 
   # 变异测试：验证测试套件本身能抓住退化（激活只打印日志 / 闸门失效 / 会话撞名 …）
   # 耗时较长，不在每次 push 跑；手动触发或发布前跑。
