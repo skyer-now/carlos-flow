@@ -90,6 +90,9 @@
 | T-35 | 卡片文本字段用 `asStringArray` 归一化（`String(x)`） | `[null]` → `["null"]`、`[{}]` → `["[object Object]"]` —— 垃圾串被当成合法验收标准，绕过内容判定 | 新增 `asTextArray`：**只保留真正的字符串元素**，数字/null/对象一律丢弃；scope/acceptance/unknowns/assumptions 改用它，paths/userMessages 保持原行为 |
 | T-36 | `trigger-config.json` 用浅合并 `{...DEFAULT_CONFIG, ...loaded}` | 用户一旦写 `keywordWeights` 就会把默认词表（含内置中文流程词）**整个丢掉**——「只是加一个自定义词」反而让所有默认词失效，中文场景重新变回 0 分 | 词表类字段改**深合并**：`keywordWeights` 合并（用户词覆盖同名项，默认保留）；`readOnlyIntentWords`/`mutatingActionWords` 追加去重；其余标量仍覆盖。附 `trigger-config.usable.json` / `trigger-config.example.json` 模板 |
 | T-37 | README FAQ 与 TRIGGER_GUIDE 仍写「默认词表为英文，中文需自行扩展」 | **文档与实现不符**（v2.5.5 起中文词表已内置），用户据此以为中文不触发 | 全部更正为「中英文流程词已内置」，并说明自定义是**追加**不是替换 |
+| T-38 | 验收标准的有效性判定用「至少一个非空字符串」（some） | `acceptance=[null,"x"]` 被当作已填 —— 混入的 null 会**原样落盘**并进入 executor 的合同文本，污染下游 | 收紧为「**每个**元素都必须是有效非空字符串」（every）；卡片文本字段两条入口（结构化 / cardText）均**保留原始元素类型**不做过滤，交由 card.js 统一判定，避免「静默过滤成合法值」 |
+| T-39 | scope 里的非字符串元素被静默丢弃 | `scope=[123]` → 丢弃 → scope=[] → **静默降档成 read_only 空卡且无任何提示** —— 用户以为设了白名单，实际是空的 | 元素类型错误在入口即明确拒绝（`字段 scope[1] 类型错误，期望 string`），不再静默降级 |
+| T-40 | `validateToolArgs` 只校验顶层类型，不校验数组**元素**类型（schema 已声明 items.type） | `flow_check_scope` 的 `paths:["README.md",123]` 一路传到 Node 内部才抛 `The "path" argument must be of type string` —— 调用方拿到的是不可读的底层错误 | 补元素级校验：数组元素类型不符在入口即返回明确提示（`字段 paths[1] 类型错误，期望 string`） |
 
 ### 📝 文档事实性修正 | Documentation Corrections
 

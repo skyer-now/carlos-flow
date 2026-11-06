@@ -46,6 +46,13 @@ function check(name, cond, detail="") {
   else { fail++; lines.push(`  ✗ ${name}${detail?"  "+detail:""}`); }
 }
 
+// 「被拒绝」有两种形态，必须都算：
+//   · fail(...)  → MCP isError → CLI 退出码非 0 → r.ok === false
+//   · ok({ok:false}) → 正常的 MCP 响应、业务校验未通过 → r.data.ok === false
+// 只看其中一种会把「真的被拒了」误判成「被接受」。
+const rejected = (r) => r.ok === false || r.data?.ok === false;
+const reasonOf = (r) => r.data?.reason || r.error || "";
+
 const QUOTE = "帮我验证 carlos-flow 的 14 个门禁工具真的有效";
 
 async function main() {
@@ -198,11 +205,13 @@ async function main() {
     acceptance: [""], confirmed: true,
   });
   check("15. acceptance=[\"\"] 被拒（cross_module 档 · 伪填充不算已填）",
-    r.data?.ok === false && /acceptance/.test(r.data?.reason || ""),
-    (r.data?.reason || r.error || "").slice(0,70));
+    rejected(r) && /acceptance/.test(reasonOf(r)),
+    reasonOf(r).slice(0,70));
 
-  // 同理：[null] / [0] / [{}] / ["","  "] 都必须被拒
-  const fakeVariants = [[null], [0], [{}], ["", "  "]];
+  // 同理：[null] / [0] / [{}] / ["","  "] / [null,"x"] 都必须被拒
+  // （严格口径：每一个元素都必须是有效的非空字符串 —— 混入 null 是笔误，
+  //  会污染落盘的卡片并原样进入 executor 合同文本）
+  const fakeVariants = [[null], [0], [{}], ["", "  "], [null, "x"], ["   "], ["\t"]];
   let allRejected = true;
   const details = [];
   for (const acc of fakeVariants) {
@@ -214,10 +223,33 @@ async function main() {
       files: [{ path: ROOT + "/README.md", line: 1 }, { path: ROOT + "/src/index.js", line: 1 }],
       acceptance: acc, confirmed: true,
     });
-    if (rr.data?.ok !== false) { allRejected = false; details.push(`${JSON.stringify(acc)}→被接受`); }
+    if (!rejected(rr)) { allRejected = false; details.push(`${JSON.stringify(acc)}→被接受`); }
   }
-  check("16. acceptance=[null]/[0]/[{}]/[\"\",\"  \"] 全部被拒",
-    allRejected, details.join("; ") || "4 种伪填充均被拒");
+  check("16. acceptance 伪填充（含 [null,\"x\"]）全部被拒",
+    allRejected, details.join("; ") || "7 种伪填充均被拒");
+
+  // scope 里的非字符串元素是明确的输入错误：必须拒绝，不能静默降档成 read_only 空卡
+  const badScopeSid = "p0-badscope-" + Date.now();
+  await call("flow_add_user_msg", { sessionId: badScopeSid, text: "quote here" });
+  r = await call("flow_submit_requirement", {
+    sessionId: badScopeSid, goal: "scope 含数字", quote: "quote here",
+    scope: [ROOT + "/README.md", 123], acceptance: ["x"], confirmed: true,
+  });
+  check("19. scope 含非字符串元素被拒（不静默降档）",
+    rejected(r),
+    reasonOf(r).slice(0, 70));
+
+  // paths 元素类型不符：入口就报明确错误，而不是抛 Node 底层异常
+  const badPathSid = "p0-badpath-" + Date.now();
+  await call("flow_add_user_msg", { sessionId: badPathSid, text: "quote here" });
+  await call("flow_submit_requirement", {
+    sessionId: badPathSid, goal: "paths 类型错", quote: "quote here",
+    scope: [ROOT + "/README.md"], acceptance: ["x"], confirmed: true,
+  });
+  r = await call("flow_check_scope", { sessionId: badPathSid, paths: [ROOT + "/README.md", 123] });
+  check("20. flow_check_scope 的 paths 元素类型错被明确拒绝",
+    r.ok === false && /类型错误/.test(r.error || ""),
+    (r.error || "").slice(0, 70));
 
   // 合法的 acceptance 必须仍然通过（防止把门禁收得过紧误伤正常流程）
   const goodAccSid = "p0-goodacc-" + Date.now();

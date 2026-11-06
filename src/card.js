@@ -242,11 +242,11 @@ export function validateCard(card, options) {
       if (v.length === 0) {
         missing = true;
       } else if (TEXT_ARRAY_FIELDS.has(f)) {
-        // 文本类数组：必须**至少有一个非空字符串**才算「已填」。
-        // 只看长度会放过 acceptance=[""] / [null] / [0] / [{}] 这类
-        // 「长度>0 但内容无效」的伪填充 —— 它们会让激活闸门误判为「已补齐」
-        // 并解开派发闸门（验收标准形同虚设）。
-        missing = !v.some((x) => typeof x === 'string' && x.trim() !== '');
+        // 文本类数组：**每一个**元素都必须是有效的非空字符串才算「已填」。
+        // 严格口径（every 而非 some）：验收标准里混入 null / 数字 / 空串是笔误，
+        // 只会污染落盘的卡片并原样进入 executor 的合同文本 —— 应该报错让作者改，
+        // 而不是「有一条真条目就算填了」。
+        missing = !v.every((x) => typeof x === 'string' && x.trim() !== '');
       } else {
         // 其他数组（如 files）：元素结构另有校验，这里只看长度。
         missing = false;

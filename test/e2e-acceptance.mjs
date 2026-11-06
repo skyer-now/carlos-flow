@@ -51,6 +51,10 @@ const req = (method, params) => new Promise((r) => {
 const call = async (name, args) => {
   const r = await req("tools/call", { name, arguments: args });
   const t = r?.result?.content?.[0]?.text || "{}";
+  // 两种拒绝形态：
+  //   · fail(...) → isError:true → 归一为 { ok:false, error }
+  //   · ok({ok:false}) → 正常响应但业务校验未通过 → JSON 里 ok:false
+  if (r?.result?.isError) return { ok: false, error: t };
   try { return JSON.parse(t); } catch { return { raw: t }; }
 };
 
@@ -100,7 +104,7 @@ for (const acc of fakeCases) {
     files: [{ path: join(REPO, "README.md"), line: 1 }, { path: join(REPO, "src", "index.js"), line: 1 }],
     acceptance: acc, confirmed: true,
   });
-  if (rr.ok !== false) { allRejected = false; det.push(JSON.stringify(acc) + "→接受"); }
+  if (!(rr.ok === false || rr.data?.ok === false)) { allRejected = false; det.push(JSON.stringify(acc) + "→接受"); }
 }
 check("P0-1 acceptance 五种伪填充全部被拒", allRejected, det.join("; ") || "5/5 拒绝");
 

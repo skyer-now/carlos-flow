@@ -26,13 +26,17 @@ const fail = (message) => ({ content: [{ type: "text", text: "ERROR: " + String(
 
 const asStringArray = (v) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
 
-// 卡片文本字段（scope / acceptance / unknowns / assumptions）的归一化。
-// 与 asStringArray 的区别：**只保留真正的字符串元素**。
-// 原先用 String(x) 会把 null → "null"、{} → "[object Object]" ——
-// 这些垃圾串会让 acceptance=["null"] 看起来像「已填」，
-// 从而解开激活闸门（验收标准形同虚设）。
-// 数字形式的路径/验收标准没有意义，一并丢弃。
-const asTextArray = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+// 卡片文本字段（scope / acceptance / unknowns / assumptions）**保留原始元素类型**，
+// 不做任何过滤/转换。
+// 背景：早先用 asStringArray（String(x)）会把 null→「null」、{}→「[object Object]」，
+// 垃圾串被当成合法验收标准；改成 asTextArray（filter 掉非字符串）虽然堵住了垃圾串，
+// 但又让「[null, \"x\"]」静默变成合法的 [\"x\"] —— 严格口径根本没机会判定。
+// 现在的做法：**两条入口都保留原样**，由 card.js 的必填校验统一判定
+// （文本类数组必须每个元素都是非空字符串）。这样：
+//   · 口径唯一，两条入口（结构化 / cardText）行为一致；
+//   · 含无效元素的卡片被**明确拒绝**，而不是静默降级或静默过滤；
+//   · 无效元素不会落盘、更不会进入 executor 的合同文本。
+const asRawArray = (v) => (Array.isArray(v) ? v : []);
 const asObject = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
 
 // 卡片里声明的验证命令（归一化后用于比较）
@@ -122,10 +126,10 @@ const TOOLS = [
           card = {
             goal: a.goal,
             quote: a.quote,
-            scope: asTextArray(a.scope),
-            acceptance: asTextArray(a.acceptance),
-            unknowns: asTextArray(a.unknowns),
-            assumptions: asTextArray(a.assumptions),
+            scope: asRawArray(a.scope),
+            acceptance: asRawArray(a.acceptance),
+            unknowns: asRawArray(a.unknowns),
+            assumptions: asRawArray(a.assumptions),
             files: Array.isArray(a.files) ? a.files : [],
             verify: asObject(a.verify),
             confirmed: a.confirmed === true,
@@ -164,12 +168,12 @@ const TOOLS = [
 
         // ---- 闸门待补项：服务端从当前卡片内容**幂等派生** ----
         // 内容判定：与 validateCard 的必填字段口径**严格一致**（两边都要求
-        // 「至少一个非空字符串」）。acceptance=[""] / [null] 这类「长度>0 但内容无效」
-        // 的伪填充，既不算卡片合规，也不算闸门已补齐 —— 统一卡严，避免绕过。
+        // 「每个元素都是非空字符串」）。acceptance=[""] / [null] / ["a",null] 这类
+        // 含无效元素的伪填充，既不算卡片合规，也不算闸门已补齐 —— 统一卡严，避免绕过。
         const cardHasScope = Array.isArray(card.scope) && card.scope.some(
           (p) => typeof p === "string" && p.trim() !== "" && p !== "." && p !== ".."
         );
-        const cardHasAcceptance = Array.isArray(card.acceptance) && card.acceptance.some(
+        const cardHasAcceptance = Array.isArray(card.acceptance) && card.acceptance.length > 0 && card.acceptance.every(
           (x) => typeof x === "string" && x.trim() !== ""
         );
         const cardHasVerify = !!(card.verify && typeof card.verify.cmd === "string" && card.verify.cmd.trim() !== "");
@@ -1162,6 +1166,26 @@ function validateToolArgs(toolName, args) {
         }
         if (expected === "boolean" && typeof v !== "boolean") {
           return { ok: false, error: "字段 " + key + " 类型错误，期望 boolean" };
+        }
+      }
+      // 数组**元素**类型校验：schema 已声明 items:{type:"string"} 时，
+      // 只校验顶层 array 类型是不够的 —— 元素类型不符会一路传到 Node 内部
+      // 才报错（例：flow_check_scope 的 paths:["README.md",123] 会抛
+      // "The \"path\" argument must be of type string" 这种底层错误），
+      // 调用方拿到的是不可读的堆栈信息。改为在入口就给出明确提示。
+      if (prop.type === "array" && Array.isArray(v) && prop.items && prop.items.type) {
+        const want = prop.items.type === "integer" ? "number" : prop.items.type;
+        for (let i = 0; i < v.length; i++) {
+          const el = v[i];
+          if (el === undefined || el === null) continue;
+          const bad =
+            (want === "number" && typeof el !== "number") ||
+            (want === "string" && typeof el !== "string") ||
+            (want === "boolean" && typeof el !== "boolean") ||
+            (want === "object" && (typeof el !== "object" || Array.isArray(el)));
+          if (bad) {
+            return { ok: false, error: "字段 " + key + "[" + i + "] 类型错误，期望 " + want };
+          }
         }
       }
       if (prop.enum && !prop.enum.includes(v)) {
