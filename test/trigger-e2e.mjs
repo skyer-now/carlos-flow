@@ -458,6 +458,36 @@ const testCases = [
     }
   },
   {
+    name: '中文: 流程词能触发、普通中文需求不误触发',
+    test: () => {
+      // 默认词表原本只有英文（work/flow/carlos/dispatch/trigger/start/run/execute），
+      // 中文需求全部 0 分 → 触发器对中文用户等于不存在。
+      // 现在内置中文流程词，但必须保证普通开发需求不误触发。
+      const shouldTrigger = [
+        '走门禁流程，执行 dispatch 任务',
+        '执行工作流',
+        '开始门禁',
+        '派发 executor 子代理',
+        '我要走工作流审计一下这个改动',
+      ];
+      const shouldNotTrigger = [
+        '给登录接口加一个参数校验，如果缺少参数返回 400 错误',
+        '修复一下用户头像上传失败的问题',
+        '帮我看下这个函数为什么超时',
+        '重构一下支付模块',
+        '写一个单元测试',
+      ];
+      const score = (m) => {
+        const sid = 'cn-' + Date.now() + Math.random();
+        return TriggerEngine.create(sid).shouldTrigger(m, { sessionId: sid }, sid);
+      };
+      const trigOk = shouldTrigger.every((m) => score(m).decision === 'trigger');
+      const notOk = shouldNotTrigger.every((m) => score(m).decision !== 'trigger');
+      console.log(`  [DEBUG] 中文触发=${trigOk} 普通需求不误触发=${notOk}`);
+      return trigOk && notOk;
+    }
+  },
+  {
     name: '回归: reset("*") 可重置全部会话状态',
     test: () => {
       const sid = 'rst-' + Date.now();

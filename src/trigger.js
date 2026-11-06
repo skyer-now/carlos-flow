@@ -57,9 +57,16 @@ const DEFAULT_CONFIG = {
   historyCoeff: 0.3,                // 历史触发频率系数（惩罚项）
 
   // 评分参数
+  // 关键词表：只收**流程性**词汇（表示“要走门禁/工作流”），不收普通开发动词
+  // （如「实现」「新增」「接口」）—— 否则每条普通需求都会命中，触发器就退化成噪声。
+  // 中文词与英文词同权重：用户用中文提需求时，触发行为与英文一致。
   keywordWeights: {
     'work': 3, 'flow': 3, 'carlos': 4, 'dispatch': 3,
-    'trigger': 2, 'start': 1, 'run': 1, 'execute': 2
+    'trigger': 2, 'start': 1, 'run': 1, 'execute': 2,
+    // 中文流程词
+    '工作流': 3, '门禁': 4, '任务卡': 3, '派发': 3, '子代理': 3,
+    '流程': 2, '触发': 2, '执行': 2, '调度': 2,
+    '审计': 2, '复核': 2, '留痕': 2, '裁定': 2,
   },
   contextRelevanceWeight: 0.3,
   userIntentWeight: 0.2,
@@ -373,7 +380,8 @@ class TriggerScorer {
    */
   calculateContextRelevance(message, context = {}) {
     // 简单实现：基于工作流相关关键词
-    const workFlowKeywords = ['work', 'flow', 'dispatch', 'executor', 'auditor'];
+    const workFlowKeywords = ['work', 'flow', 'dispatch', 'executor', 'auditor',
+      '工作流', '门禁', '派发', '审计', '复核', '任务卡'];
     const lowerMsg = message.toLowerCase();
     
     let contextScore = 0;
@@ -411,9 +419,9 @@ class TriggerScorer {
   calculateUserIntent(message, historyCount = 0) {
     // 简单实现：基于用户行为模式
     const userIntentCandidates = {
-      'workflow': ['dispatch', 'run', 'execute', 'trigger', 'start'],
-      'automation': ['auto', 'automate', 'workflow', 'process'],
-      'management': ['manage', 'control', 'monitor', 'track']
+      'workflow': ['dispatch', 'run', 'execute', 'trigger', 'start', '执行', '派发', '触发', '工作流', '门禁'],
+      'automation': ['auto', 'automate', 'workflow', 'process', '自动', '流程', '调度'],
+      'management': ['manage', 'control', 'monitor', 'track', '管理', '监控']
     };
 
     const lowerMsg = message.toLowerCase();

@@ -195,7 +195,44 @@ const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 }
 # pass the real user text via triggerMessage (or the CARLOS_TRIGGER_MESSAGE env var)
 node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run dispatch workflow"}'
 ```
+> ⚠️ `triggerMessage` **must be passed explicitly** — without it automatic triggering is **entirely off**.
+> Chinese workflow words are built in (工作流 / 门禁 / 派发 / 审计 / 复核 / 任务卡 …),
+> so Chinese requests trigger too; override the vocabulary via
+> `CARLOS_FLOW_HOME/trigger-config.json` (`keywordWeights`).
 
+##### MCP tool triggering (path ①)
+```jsonc
+// Call from any MCP host; it actually activates when the message qualifies
+{ "name": "flow_trigger_check",
+  "arguments": { "sessionId": "my-task", "message": "走门禁流程，执行 dispatch 任务" } }
+// → { "decision": "trigger", "score": 34, "activated": true, "has_card": true,
+//     "activation_pending": ["scope", "acceptance", "verify.cmd"] }
+```
+> Pass `execute: false` to score only, without taking any action.
+
+##### OpenCode plugin (path ② — works out of the box)
+```bash
+# 1) install this package globally
+npm install -g carlos-flow-opencode@2.5.5
+
+# 2) copy the plugin into OpenCode's plugin directory
+#    Windows: %APPDATA%\opencode\plugins\
+#    macOS/Linux: ~/.config/opencode/plugins/
+cp "$(npm root -g)/carlos-flow-opencode/plugins/carlos-flow-trigger.js" \
+   ~/.config/opencode/plugins/carlos-flow-trigger.js
+
+# 3) restart OpenCode — every incoming message is evaluated from then on
+#    disable temporarily: env CARLOS_FLOW_TRIGGER=off
+#    show decisions:      env CARLOS_FLOW_TRIGGER_DEBUG=1
+```
+> The plugin only decides and activates — it **never decides for the agent which files to change**;
+> after activation you still must fill in scope / acceptance / verify.cmd before dispatching (the gate stays tight).
+> Plugin errors are logged only and **never block your message**.
+
+
+> **Cindy edition note**: the Cindy plugin is a `kind: "mcp"` package (a pure MCP tool set) — the host exposes no message-event hook,
+> so there is no "evaluate on every message" plugin here. Use path ① (the agent calls `flow_trigger_check`)
+> or path ② (the CLI). The gate constraints themselves are identical either way.
 ##### Engine highlights
 - **L1 dynamic cap** — `5 + sessionHours×0.5 + complexity×2 − triggersInWindow×0.3`, capped at 15
 - **L2 trigger scoring** — keywords (0–50, weight 0.5) + context (0–30, weight 0.3) + intent (0–20, weight 0.2), weighted maximum **38**

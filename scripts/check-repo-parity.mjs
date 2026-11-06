@@ -35,6 +35,22 @@ const writeMode = argv.includes("--write");
 const peerArg = argv.find((a) => !a.startsWith("--"));
 const PEER_ROOT = resolve(peerArg || join(SELF_ROOT, "..", `carlos-flow-${PEER_NAME}`));
 
+// ---- 单仓降级 ----
+// npm 安装后只有**本仓**（对方仓不在同一个父目录），此时无法做双仓比对。
+// 这不是错误 —— 直接优雅跳过并 exit 0，否则用户误跑 npm run check:parity 会看到红色报错。
+// 需要真正检查时：显式传对方仓路径，或在本地双仓 checkout 的目录下跑。
+if (!existsSync(join(PEER_ROOT, "package.json"))) {
+  console.log("=".repeat(64));
+  console.log("Carlos Flow 双仓一致性守卫");
+  console.log(`  本仓: ${SELF_NAME.padEnd(8)} ${SELF_ROOT}`);
+  console.log(`  对方: ${PEER_NAME.padEnd(8)} ${PEER_ROOT}`);
+  console.log("=".repeat(64));
+  console.log(`⏭  跳过：找不到对方仓（${PEER_ROOT}）—— 单仓环境无法做双仓比对。`);
+  console.log("   需要检查时：npm run check:parity -- <对方仓路径>");
+  console.log("   或在本地双仓 checkout 的父目录下直接运行。");
+  process.exit(0);
+}
+
 // ---- 必须逐字一致的文件清单（核心逻辑，双仓同源） ----
 const MUST_MATCH = [
   "src/index.js",

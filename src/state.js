@@ -18,6 +18,43 @@ const OPENCODE_DB = path.normalize(
     path.join(os.homedir(), ".local", "share", "opencode", "opencode.db")
 );
 
+// OpenCode 会话库的**候选路径**（按平台习惯不同，取第一个存在的）。
+// 背景：原先只写死 XDG 路径 ~/.local/share/opencode/opencode.db —— 那是 Linux 的约定。
+// macOS 上 OpenCode 实际落在 ~/Library/Application Support/opencode/，
+// Windows 上落在 %APPDATA%\opencode\ —— 只探 XDG 路径的话，
+// macOS/Windows 用户会**永远拿不到用户原话**，导致 quote 锚点校验直接失败、卡片无法提交。
+// 环境变量优先（显式指定时不做任何猜测）。
+const OPENCODE_DB_CANDIDATES = (() => {
+  const envPath = process.env.OPENCODE_DB_PATH || process.env.OPENCODE_DB || process.env.CARLOS_OPENCODE_DB;
+  if (envPath) return [path.normalize(envPath)];
+  const home = os.homedir();
+  const rel = ["opencode", "opencode.db"];
+  const candidates = [];
+  // XDG 约定（Linux，以及部分 macOS 配置）
+  candidates.push(path.join(home, ".local", "share", ...rel));
+  // macOS 原生
+  candidates.push(path.join(home, "Library", "Application Support", ...rel));
+  // Windows（APPDATA）
+  const appData = process.env.APPDATA;
+  if (appData) candidates.push(path.join(appData, ...rel));
+  // Windows（无 APPDATA 时的兜底）
+  candidates.push(path.join(home, "AppData", "Roaming", ...rel));
+  // 去重（保持顺序）
+  return [...new Set(candidates.map((p) => path.normalize(p)))];
+})();
+
+// 选出第一个真实存在的候选；都不存在则返回 null（不抛错，降级为“无历史消息”）。
+function resolveOpenCodeDb() {
+  for (const p of OPENCODE_DB_CANDIDATES) {
+    try {
+      if (p && fs.existsSync(p)) return p;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
 function localDate() {
   const d = new Date();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -332,11 +369,12 @@ export async function getOpenCodeUserMessages(sid, limit = 20) {
     const mod = await import("node:sqlite");
     const DatabaseSync = mod && mod.DatabaseSync;
     if (typeof DatabaseSync !== "function") return null;
-    if (!OPENCODE_DB || !fs.existsSync(OPENCODE_DB)) return null;
+    const dbPath = resolveOpenCodeDb();
+    if (!dbPath) return null;
     try {
-      db = new DatabaseSync(OPENCODE_DB, { readOnly: true });
+      db = new DatabaseSync(dbPath, { readOnly: true });
     } catch {
-      db = new DatabaseSync(OPENCODE_DB, { readonly: true }); // 选项名兜底
+      db = new DatabaseSync(dbPath, { readonly: true }); // 选项名兜底
     }
     let sql =
       "SELECT p.data AS d FROM part p JOIN message m ON p.message_id=m.id" +

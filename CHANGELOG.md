@@ -83,6 +83,9 @@
 | T-25 | `mutation-check.mjs` 的 `rmSync(WORK)` 在 Windows 上遇残留 bridge 占用 → `EBUSY` **直接崩溃**；各变异体复用同一 `BRIDGE_PORT` | 中断过一次后跑变异测试必崩；且可能串到旧副本的 bridge → 结果失真 | 删目录加重试与可读错误；每轮独立 `BRIDGE_PORT`；收尾只终止**本轮新增**的 bridge（不误杀源仓 bridge） |
 | T-26 | `scripts/release.mjs` 与 `release.yml` 跑 `test:all` 时**未设** `CARLOS_FLOW_HOME` | 会写用户真实的 `~/.carlos-flow`（CI runner 同样被写） | 两处均隔离到 `os.tmpdir()` / `runner.temp` 下的独立目录并在结束后清理 |
 | T-27 | `release.mjs` 的「先推 opencode、再推 cindy」顺序**零测试守护** | 顺序被误改会重新出现「cindy 已打 tag 而 opencode 失败」的半发布 | 推送步骤抽成有序常量 `PUSH_SEQUENCE`，新增 `--print-push-sequence` 只读子命令，并加 e2e 行为级断言（opencode 索引必须小于 cindy） |
+| T-28 | `runVerifyCommand` 硬编码 `spawn("cmd", ["/c", cmd])` | **Linux/macOS 上命令根本没跑**（`cmd.exe` 不存在），exitCode=127，导致「验证通过才能记 PASS」的门禁在非 Windows 环境彻底失守 | 按平台选 shell：Windows 用 `cmd.exe /c` + `shell:true`；POSIX 用 `/bin/sh -c` + `shell:false`。实测 `shell:false` 会吃掉引号导致 exitCode 变 0，故 Windows 必须 `shell:true` |
+| T-29 | 触发引擎只接在 CLI 客户端（`client/carlos.js`），MCP server 根本没接触发引擎 | **MCP 路径「自动触发」不生效**——README 里「工作流会自己认出该上场的时候」在实际使用路径上不成立 | 新增 `flow_trigger_check` 工具（MCP 侧暴露触发能力），宿主在收到消息时调用即可获得与 CLI 完全一致的自动触发行为 |
+| T-30 | 默认词表纯英文（work/flow/carlos/dispatch/trigger/start/run/execute），中文需求全 0 分不触发 | **中文场景触发器等于失效**，用户需自行扩展 `trigger-config.json` | 内置中文流程词（工作流/门禁/派发/审计/复核/任务卡/子代理/流程/触发/执行/调度/审计/复核/留痕/裁定），且只收流程性词汇不收普通开发动词，实测中文需求能触发、普通需求零误触发 |
 
 ### 📝 文档事实性修正 | Documentation Corrections
 

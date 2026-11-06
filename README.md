@@ -10,13 +10,31 @@
 > 一句话：**工作流现在会自己认出该上场的时候。**
 
 ### ✨ 智能触发引擎（全新）
-不再需要每次手动喊"走门禁"。引擎会读取你的输入，自动判断现在是否该启动 Carlos 工作流——并且**告诉你为什么**。
+引擎会读取你的输入，自动判断现在是否该启动 Carlos 工作流——并且**告诉你为什么**。
 
 | 层 | 组件 | 做什么 | 为什么需要它 |
-|----|------|--------|-------------|
+|----|------|--------|-------------||
 | **L1** | `DynamicTriggerManager` | 动态计算"本会话还允许触发几次" | 固定上限要么太吵、要么太严；会话越长、任务越复杂，上限自动放宽 |
 | **L2** | `TriggerScorer` | 给每条消息打分：关键词 50 + 上下文 30 + 意图 20，加权后满分 **38** | 触发与否必须**可解释**——每次都告诉你命中了哪些词、得了多少分 |
 | **L3** | `TriggerDecisionEngine` | 四档决策：`trigger` / `review` / `ignore` / `throttled` | 把"要不要触发"从模糊直觉变成明确规则 |
+
+#### 🔌 触发从哪里发生？（必读：两条路径行为一致）
+
+MCP 协议是**被动**的——服务端不能主动推送。因此“自动触发”必须由**能拿到用户消息的那一侧**发起。两条路径共用同一份评分与决策实现（`src/trigger.js`），**行为完全一致**：
+
+| 路径 | 怎么触发 | 适用 |
+|------|---------|------|
+| **① MCP 工具** | 调 `flow_trigger_check`（传 `sessionId` + `message`），达标即**实际激活**（写入用户原话 + 开占位卡 → 会话进入门禁态） | 任何 MCP 宿主；Agent 主动调用即可 |
+| **② 命令行客户端** | `node client/carlos.js flow_status '{"sessionId":"x","triggerMessage":"run dispatch workflow"}'` | 脚本 / 调试 |
+
+> ⚠️ **v2.5.5 之前的一个真实偏差**：触发引擎当时**只接在命令行客户端上**，MCP server 根本不接触发引擎——
+> 于是「工作流会自己认出该上场的时候」在 MCP 实际使用路径上**不成立**。
+> v2.5.5 起新增 `flow_trigger_check` 工具（路径 ①），MCP 与命令行两条路径现已对齐。
+>
+> 📌 **Cindy 版说明**：Cindy 插件是 `kind: "mcp"` 型（纯 MCP 工具集），宿主未暴露消息事件钩子，
+> 因此**没有**类似 OpenCode 那样的「每条消息自动评估」插件。
+> 在 Cindy 里可用路径 ①（Agent 主动调 `flow_trigger_check`）或路径 ②（命令行）——
+> 门禁约束本身（越界拦截 / 真实验证 / 假 PASS 拒绝）在两条路径下**完全一样**。
 
 **关键特性**
 - 🎚️ **动态上限**：`5 + 会话时长(小时)×0.5 + 复杂度×2 − 窗口内已触发×0.3`，封顶 15
@@ -25,6 +43,9 @@
 - ⚖️ **限流也如实**：被限流时照样返回真实评分与置信度，不假装"0 分"
 - 🧠 **反馈学习**：记录你接受 / 拒绝的触发（持久化到会话状态）；**负反馈占多数时自动抬高触发阈值**，更保守
 - 📦 **零外部依赖**：纯 JavaScript，不新增任何 npm 包
+- 🇨🇳 **中文开箱即用**：内置中文流程词（工作流/门禁/派发/审计/复核/任务卡…），
+  中文需求同样能触发；而普通开发需求（“给接口加个参数校验”）**不会误触发**
+  （只收流程性词汇，不收「实现/新增/接口」这类普通开发动词）
 
 #### 🔁 动态决策 → 判断 → 激活（本次最关键的一环）
 过去的实现只会在命中时**打一行日志**，并没有真的启动工作流。现在这一环补齐了：
@@ -198,9 +219,43 @@ const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 }
 # triggerMessage 传入真实用户原话（也可用环境变量 CARLOS_TRIGGER_MESSAGE）
 node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run dispatch workflow"}'
 ```
-> ⚠️ `triggerMessage` **必须显式传入**，且默认词表是英文（`work` / `flow` / `carlos` / `dispatch` / `trigger` / `start` / `run` / `execute`）；
-> 不传则**完全不启用自动触发**。中文场景请通过 `trigger-config.json` 扩展 `keywordWeights`。
+> ⚠️ `triggerMessage` **必须显式传入**，不传则**完全不启用自动触发**。
+> 词表已内置中文流程词（工作流 / 门禁 / 派发 / 审计 / 复核 / 任务卡 …），
+> 中文需求同样能触发；自定义词表可用 `CARLOS_FLOW_HOME/trigger-config.json` 覆盖 `keywordWeights`。
 
+##### MCP 工具触发（路径 ①）
+```jsonc
+// 任一 MCP 宿主调用；达标即实际激活（写入用户原话 + 开占位卡）
+{ "name": "flow_trigger_check",
+  "arguments": { "sessionId": "my-task", "message": "走门禁流程，执行 dispatch 任务" } }
+// → { "decision": "trigger", "score": 34, "activated": true, "has_card": true,
+//     "activation_pending": ["scope", "acceptance", "verify.cmd"] }
+```
+> `execute: false` 时只评分不动作（只返回 `decision` / `score` / `breakdown`）。
+
+##### OpenCode 插件（路径 ②，开箱即用）
+```bash
+# 1) 已全局安装本包：
+npm install -g carlos-flow-opencode@2.5.5
+
+# 2) 复制插件到 OpenCode 的插件目录
+#    Windows: %APPDATA%\opencode\plugins\
+#    macOS/Linux: ~/.config/opencode/plugins/
+cp "$(npm root -g)/carlos-flow-opencode/plugins/carlos-flow-trigger.js" \
+   ~/.config/opencode/plugins/carlos-flow-trigger.js
+
+# 3) 重启 OpenCode —— 之后每次发消息都会自动评估
+#    想临时关掉：环境变量 CARLOS_FLOW_TRIGGER=off
+#    想看决策日志：环境变量 CARLOS_FLOW_TRIGGER_DEBUG=1
+```
+> 插件只做「判断 + 激活」，**不代替 Agent 决定改哪些文件**；
+> 激活后仍需补齐 scope / acceptance / verify.cmd 才能派发（闸门不放松）。
+> 插件出异常只记日志、**绝不阻断你的消息**。
+
+
+> 📌 **Cindy 版说明**：Cindy 插件是 `kind: "mcp"` 型（纯 MCP 工具集），宿主未暴露消息事件钩子，
+> 因此**没有**「每条消息自动评估」的插件形态。在 Cindy 里用路径 ①（Agent 主动调 `flow_trigger_check`）
+> 或路径 ②（命令行）即可，门禁约束本身完全一样。
 输出（stderr）：
 > 注：这里的 **37** 是 CLI 不带 `complexity` 时的值；代码示例里传了 `complexity: 1.2`，对应 **38**。
 ```

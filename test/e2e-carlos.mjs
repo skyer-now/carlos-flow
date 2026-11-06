@@ -520,6 +520,45 @@ async function main() {
   check("25b. 推送顺序：opencode 先于 cindy（防半发布）",
     ocIdx >= 0 && cindyIdx >= 0 && ocIdx < cindyIdx, `order=${pushRepos.join(",")}`);
 
+  // 26. MCP 路径的智能触发（历史缺陷：触发引擎只接在 CLI 客户端上，
+  //     MCP server 根本不接触发引擎 —— 在 OpenCode / Cindy 里直接用 MCP 工具时，
+  //     「工作流会自己认出该上场的时候」是假的）。
+  // 现在 MCP server 暴露 flow_trigger_check，宿主可在消息事件里调用它。
+  const TRIG_SID = SID + "-trigger";
+  const TRIG_MSG = "走门禁流程，执行 dispatch 任务";
+  r = await call("flow_trigger_check", { sessionId: TRIG_SID, message: TRIG_MSG });
+  const trigActivated = r.ok && r.data?.activated === true && r.data?.has_card === true;
+  check("26a. MCP 路径：中文流程消息能自动激活（开卡 + 写入用户原话）", trigActivated,
+    r.ok ? `decision=${r.data?.decision} score=${r.data?.score} activated=${r.data?.activated}` : r.error);
+
+  r = await call("flow_status", { sessionId: TRIG_SID });
+  const trigPending = Array.isArray(r.data?.activation_pending) ? r.data.activation_pending : [];
+  check("26b. 自动激活后进入门禁态（待补 scope/acceptance/verify.cmd）",
+    r.ok && r.data?.has_card === true && trigPending.length === 3,
+    r.ok ? `pending=${JSON.stringify(trigPending)}` : r.error);
+
+  r = await call("flow_claim", { sessionId: TRIG_SID, role: "executor" });
+  check("26c. 自动激活后补齐前不许派发（闸门拦住）", r.ok === false, r.ok ? "竟然放行了" : "已拒绝");
+
+  const TRIG_NS = SID + "-trigger-ns";
+  r = await call("flow_trigger_check", { sessionId: TRIG_NS, message: "给登录接口加一个参数校验" });
+  const nsNotTriggered = r.ok && r.data?.decision === "ignore" && r.data?.activated !== true;
+  check("26d. 普通中文需求不误触发（不激活、不开卡）", nsNotTriggered,
+    r.ok ? `decision=${r.data?.decision} score=${r.data?.score}` : r.error);
+
+  r = await call("flow_status", { sessionId: TRIG_NS });
+  check("26e. 未触发时不开卡（has_card 保持 false）", r.ok && r.data?.has_card === false,
+    r.ok ? `has_card=${r.data?.has_card}` : r.error);
+
+  r = await call("flow_trigger_check", { sessionId: SID + "-trigger-noscore", message: TRIG_MSG, execute: false });
+  check("26f. execute=false 时只评分不动作", r.ok && r.data?.execute_suppressed === true && r.data?.activated !== true,
+    r.ok ? `suppressed=${r.data?.execute_suppressed} decision=${r.data?.decision}` : r.error);
+
+  const TRIG_NS2 = SID + "-trigger-ns2";
+  r = await call("flow_status", { sessionId: TRIG_NS2 });
+  check("26g. execute=false 时不开卡", r.ok && r.data?.has_card === false,
+    r.ok ? `has_card=${r.data?.has_card}` : r.error);
+
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
   console.log(`sessionId=${SID}`);

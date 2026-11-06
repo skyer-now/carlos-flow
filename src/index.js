@@ -928,6 +928,168 @@ const TOOLS = [
       }
     },
   },
+  // 15 -----------------------------------------------------------------------
+  {
+    name: "flow_trigger_check",
+    description:
+      "智能触发检查：判断当前这条用户消息是否应该启动 Carlos 工作流，并在达标时**实际完成激活**（写入用户原话 + 开占位卡 → 会话进入门禁态）。" +
+      "宿主在收到用户消息时调用本工具，就能获得与命令行客户端完全一致的自动触发行为。" +
+      "未达阈值时只如实返回评分与决策，不做任何动作；被限流时也如实返回真实评分。" +
+      "中文流程词（工作流/门禁/派发/审计…）已内置，中文需求同样能触发。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "会话 ID，默认 unknown" },
+        message: { type: "string", description: "用户本轮消息原文（必须是真实原话，用于 quote 锚点）" },
+        complexity: { type: "number", description: "任务复杂度系数，默认 1.0" },
+        execute: { type: "boolean", description: "true = 达标时实际执行激活步骤（默认 true）；false = 只评分不动作" },
+        cwd: { type: "string", description: "工作目录，默认 process.cwd()" },
+      },
+      required: ["message"],
+    },
+    handler: async (args) => {
+      try {
+        const a = args || {};
+        const sessionId = a.sessionId || "unknown";
+        const message = String(a.message || "");
+        if (!message.trim()) {
+          return fail("message 不能为空：触发检查需要用户本轮消息原文（quote 锚点与评分都依赖它）");
+        }
+        const shouldExecute = a.execute !== false;
+
+        // 触发引擎（纯 JS，零外部依赖）：与 CLI 客户端共用同一份实现，
+        // 保证「命令行路径」与「MCP 路径」的评分与决策完全一致。
+        const { TriggerEngine } = await import("./trigger.js");
+        const result = TriggerEngine.processUserMessage(message, {
+          sessionId,
+          complexity: typeof a.complexity === "number" ? a.complexity : 1.0,
+        });
+
+        const base = {
+          ok: true,
+          sessionId,
+          decision: result.decision,
+          score: result.score,
+          confidence: result.confidence,
+          breakdown: result.breakdown,
+          reason: result.reason,
+          should_trigger: result.shouldTrigger === true,
+          executed: [],
+        };
+
+        // 未达标 / 被限流：只如实报告，不做任何动作。
+        if (!result.shouldTrigger || !result.activationPlan || !result.activationPlan.activated) {
+          return ok({
+            ...base,
+            activated: false,
+            pending_fields: (result.activationPlan && result.activationPlan.pendingFields) || [],
+            note: result.decision === "throttled"
+              ? "被限流：本轮不触发（已如实返回真实评分）"
+              : (result.decision === "review"
+                ? "接近阈值：建议手动启动门禁，未自动激活"
+                : "未达触发阈值：不激活"),
+          });
+        }
+
+        // 只读调研意图不进门禁（占位卡恒为 read_only，待补项永远无法满足 → 会话会被锁死）
+        const plan = result.activationPlan;
+        if (plan.activated === false) {
+          return ok({
+            ...base,
+            activated: false,
+            pending_fields: plan.pendingFields || [],
+            note: plan.reason || "不激活",
+          });
+        }
+
+        if (!shouldExecute) {
+          return ok({
+            ...base,
+            activated: false,
+            execute_suppressed: true,
+            pending_fields: plan.pendingFields || [],
+            note: "只评分不动作（execute=false）",
+          });
+        }
+
+        // ---- 执行激活计划中 auto=true 的步骤 ----
+        // 安全约束（与 CLI 客户端一致）：
+        //   · 会话已有任务卡 → 不自动开卡（不覆盖用户已有任务）
+        //   · 只执行 auto 步骤；needsFill 步骤交回 Agent 补齐
+        const existing = loadState(sessionId);
+        if (existing.card) {
+          return ok({
+            ...base,
+            activated: false,
+            note: "会话已有任务卡，跳过自动开卡（不覆盖用户已有任务）",
+          });
+        }
+
+        const executed = [];
+        for (const step of plan.steps || []) {
+          if (!step || step.auto !== true) continue;
+          const stepArgs = { ...(step.args || {}), sessionId };
+          if (step.tool === "flow_add_user_msg") {
+            writeUserMessage(sessionId, String(stepArgs.text || message));
+            executed.push({ tool: step.tool, ok: true });
+          } else if (step.tool === "flow_submit_requirement") {
+            const r = validateCard(stepArgs, {
+              userMessages: [message],
+              scopeExists: () => true,
+              confirmed: stepArgs.confirmed === true,
+            });
+            if (!r || r.ok !== true) {
+              executed.push({ tool: step.tool, ok: false, reason: (r && r.reason) || "卡片不合规" });
+              continue;
+            }
+            const card = { ...stepArgs };
+            card.env = { git_head: gitHead(a.cwd || process.cwd()), project: a.cwd || process.cwd() };
+            const tier = riskTier(card.scope);
+            const withLock = withStateLock(sessionId, () => {
+              const prev = loadState(sessionId);
+              const wasActivated = prev.activation_activated === true;
+              const state = {
+                ...defaultState(),
+                ...prev,
+                card,
+                card_ts: Date.now(),
+                tier,
+                dispatch_count: 0,
+                claimed: false,
+                claimed_role: null,
+                write_files: 0,
+                last_user_ts: Date.now(),
+                bypass: false,
+                verdict: null,
+                completed_ok: false,
+                stale: false,
+                // 幂等派生：待补项由当前卡片内容算出，落盘状态自洽
+                activation_pending: ["scope", "acceptance", "verify.cmd"],
+                activation_activated: true,
+              };
+              saveState(sessionId, state);
+              return state;
+            });
+            audit("run", sessionId, { kind: "activation", tier, goal: card.goal, pending: withLock.activation_pending });
+            executed.push({ tool: step.tool, ok: true, tier });
+          }
+        }
+
+        const after = loadState(sessionId);
+        return ok({
+          ...base,
+          activated: true,
+          executed,
+          has_card: !!after.card,
+          activation_pending: Array.isArray(after.activation_pending) ? after.activation_pending : [],
+          pending_fields: plan.pendingFields || [],
+          note: "已自动激活：会话进入门禁态，补齐 scope/acceptance/verify.cmd 后方可派发",
+        });
+      } catch (e) {
+        return fail(e && e.message ? e.message : String(e));
+      }
+    },
+  },
 ];
 
 // ---- 服务器装配 ------------------------------------------------------------
