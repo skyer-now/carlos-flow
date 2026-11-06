@@ -19,7 +19,7 @@
 | **激活 ①** | `flow_add_user_msg` | 用户原话入库，成为任务卡 `quote` 的锚点数据源 |
 | **激活 ②** | `flow_submit_requirement`（`activation: true`） | 提交 `read_only` 占位卡，**会话进入已留痕门禁态** |
 | **闸门** | `activation_pending` | 字段补齐前，`flow_claim` / `flow_dispatch` / `flow_verdict` **一律拒绝派发** |
-| **放行** | 重新提交完整卡（不带 `activation`） | 三项**全部补齐**才清空 `activation_pending`（只补一项不解闸）→ 正常派发 |
+| **放行** | 重新提交完整卡（不带 `activation`） | 待补项由**服务端从当前卡片内容幂等派生**；三项**全部补齐**才清空 `activation_pending`（只补一项不解闸）→ 正常派发 |
 
 **安全约束**：会话已有任务卡时跳过自动开卡（不覆盖已有任务）；自动激活不决定改哪些文件；
 推断出的 `goal` 标记为占位需确认；`manual` 档只给建议不执行任何动作。
@@ -52,7 +52,7 @@
 
 ### 🐛 修复 | Fixed
 
-> 以下 9 项均为**真实可复现的缺陷**，在本次发布前由独立验证发现并修复。
+> 以下均为**真实可复现的缺陷**，在本次发布前由独立验证发现并修复（每条都有 file:line 证据与可复现的实测步骤）。
 
 | # | 问题 | 影响 | 修复 |
 |---|------|------|------|
@@ -77,6 +77,12 @@
 | T-19 | `triggerWindowMinutes: 15` 与 `minTriggerIntervalSeconds: 300` 不匹配 | 窗口内最多触发 3 次，而上限至少 6 → 「次数达上限」分支**永远不可达**，实际只有 5 分钟冷却 | 默认窗口改为 **60 分钟**（1 小时内最多 12 次），上限惩罚项才有意义 |
 | T-20 | 激活占位卡的建立与解闸在审计链里没有专属事件（只有通用 `record`/`accepted`） | 事后无法从 `gate-audit` 流水回答「这是不是占位卡？解闸过没有？」 | 新增四类专属事件：`activation` / `activation_gate_held` / `activation_released` / `verdict_denied` |
 | T-21 | `verdict` 的 `dispatch_count` 前置最初对三档裁定一视同仁 | 未派发时 `DIRECTION`/`LOCAL` 也被拦 —— 「先标返工意见」的合理流程被误伤 | 前置**只施加于 PASS** |
+| T-22 | `flow_verdict` 只看 `dispatch_count > 0`，**不看验证结果** | **「未验证即完成」**：`verify.cmd` 故意 `exit 3`、乃至从未跑过验证，都能签发 PASS → `completed_ok=true` | 记 PASS 前必须：`flow_run_verify` 写入的 `last_verify` 存在且 `ok===true` 且其 `cmd` 与**当前卡片**的 `verify.cmd` 一致；否则拒绝并记 `verdict_denied`。`DIRECTION`/`LOCAL` 豁免 |
+| T-23 | 门禁**采信执行者自述**：`flow_save_result` 只原样存档 stdout/stderr，不做任何事实交叉验证 | 存入一份完全虚假的 executor 报告（声称改了 5 个文件、88 项全过，实际什么都没做）即可支撑一次 PASS 裁定 | 记 PASS 的机器级约束收紧到 T-22（验证必须真跑通）；「采信自述、无自动事实交叉验证」作为**已知边界**写入 `docs/QA_REPORT_v2.5.5.md` §六 |
+| T-24 | `scripts/mutation-check.mjs` 的基线结果只被记录，不参与判定 | **假绿**：基线 44 通过 / 1 失败时，13 个变异体仍全判「被抓住」且 `exit 0` | 基线任一套件非全绿 → 报告标红 + `exit 1`；套件输出无法解析时同样 fail-closed |
+| T-25 | `mutation-check.mjs` 的 `rmSync(WORK)` 在 Windows 上遇残留 bridge 占用 → `EBUSY` **直接崩溃**；各变异体复用同一 `BRIDGE_PORT` | 中断过一次后跑变异测试必崩；且可能串到旧副本的 bridge → 结果失真 | 删目录加重试与可读错误；每轮独立 `BRIDGE_PORT`；收尾只终止**本轮新增**的 bridge（不误杀源仓 bridge） |
+| T-26 | `scripts/release.mjs` 与 `release.yml` 跑 `test:all` 时**未设** `CARLOS_FLOW_HOME` | 会写用户真实的 `~/.carlos-flow`（CI runner 同样被写） | 两处均隔离到 `os.tmpdir()` / `runner.temp` 下的独立目录并在结束后清理 |
+| T-27 | `release.mjs` 的「先推 opencode、再推 cindy」顺序**零测试守护** | 顺序被误改会重新出现「cindy 已打 tag 而 opencode 失败」的半发布 | 推送步骤抽成有序常量 `PUSH_SEQUENCE`，新增 `--print-push-sequence` 只读子命令，并加 e2e 行为级断言（opencode 索引必须小于 cindy） |
 
 ### 📝 文档事实性修正 | Documentation Corrections
 
