@@ -155,14 +155,11 @@ const TOOLS = [
         card.env = { git_head: gitHead(cwd), project: cwd };
 
         // ---- 闸门待补项：服务端从当前卡片内容**幂等派生** ----
-        // 内容判定而非长度判定：acceptance=[""] / [null] 这类「长度>0 但内容无效」
-        // 不得被算作「已补齐」（与 verify.cmd 的 trim 口径保持一致）。
+        // 长度判定：只检查数组长度 > 0，与 validateCard 的必填字段口径保持一致。
         const cardHasScope = Array.isArray(card.scope) && card.scope.some(
           (p) => typeof p === "string" && p.trim() !== "" && p !== "." && p !== ".."
         );
-        const cardHasAcceptance = Array.isArray(card.acceptance) && card.acceptance.some(
-          (x) => typeof x === "string" && x.trim() !== ""
-        );
+        const cardHasAcceptance = Array.isArray(card.acceptance) && card.acceptance.length > 0;
         const cardHasVerify = !!(card.verify && typeof card.verify.cmd === "string" && card.verify.cmd.trim() !== "");
         const currentMissing = [
           ...(!cardHasScope ? ["scope"] : []),
