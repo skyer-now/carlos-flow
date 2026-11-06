@@ -91,7 +91,7 @@ Carlos Flow is **mechanical**. The constraints live in code, not in prose.
 | Pain | Typical state today | Carlos Flow's answer |
 |------|--------------------|---------------------|
 | **Scope creep** | "Only edit `src/auth.py`" — a suggestion, not a rule | `enforceScope()` compares real `git diff` output against the card's whitelist; out-of-scope files **block the dispatch** |
-| **Verification theatre** | Agent claims "tests pass"; nobody can prove it | `runVerifyCommand()` actually spawns `verify.cmd`, captures `stdout` / `stderr` / `exitCode` |
+| **Verification theatre** | Agent claims "tests pass"; nobody can prove it | `runVerifyCommand()` actually spawns `verify.cmd`, captures `stdout` / `stderr` / `exitCode`; a `PASS` verdict additionally **requires** a passing verification |
 | **Laundered audit logs** | Logs in a plain file — deletable, editable | SHA-256 **chained** audit log (`prevHash` → `hash`); altering one record breaks the chain |
 | **Runaway bypass mode** | One sentence ("skip the gate, it's urgent") disables everything | Bypass requires an explicit `confirmed=true` on the card and **auto-resets on every dispatch** |
 | **Infinite dispatch budget** | Claiming a slot resets the counter — unlimited retries | `dispatch_count` increments **only on dispatch**; quota exhaustion blocks both claim and dispatch |
@@ -103,7 +103,7 @@ Carlos Flow is **mechanical**. The constraints live in code, not in prose.
 | Capability | **Carlos Flow** | Raw MCP server | Prompt-only / scripts |
 |------------|-----------------|-----------------|----------------------|
 | **Scope enforcement** | ✅ runtime `git diff` level | ❌ none | ❌ relies on goodwill |
-| **Real verification** | ✅ spawns the command, captures output | ❌ none | ❌ agent self-reports |
+| **Real verification** | ✅ spawns the command, captures output; `PASS` requires it to pass | ❌ none | ❌ agent self-reports |
 | **Tamper-proof audit** | ✅ SHA-256 chained | ❌ none | ❌ none |
 | **Controlled bypass** | ✅ explicit + auto-reset | ❌ none | ❌ one-liner disables all |
 | **Honest dispatch quota** | ✅ counts dispatch only | ❌ none | ❌ none |

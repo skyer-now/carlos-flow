@@ -9,7 +9,7 @@
 // 现在：源仓默认取当前仓库根目录；工作副本/报告路径走临时目录或环境变量；
 // shell 按平台选择（Windows 用 cmd，POSIX 用默认 sh）。
 import { execSync } from "node:child_process";
-import { cpSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
+import { cpSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -176,28 +176,126 @@ lines.push(`- 变异副本：临时目录（用完自动删除，不入库）`);
 lines.push(`- 目的：确认测试套件能抓住「激活只打印日志」「闸门失效」「会话撞名」等退化`);
 lines.push("");
 
+// ---- 工具：安全删目录 / 清理残留 bridge ------------------------------------
+// Windows 上临时目录里若有后台 bridge 进程占用文件，rmSync 会抛 EBUSY 直接崩溃。
+// 这里改成「重试若干次 → 仍失败则给出可读错误并改用新工作目录继续」，不裸崩。
+const rmDirSafe = (dir) => {
+  for (let i = 0; i < 6; i++) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return true;
+    } catch (e) {
+      const code = e && e.code;
+      if (code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY") {
+        // 占用的进程还没退出：等一下再试
+        try { execSync(process.platform === "win32" ? "ping -n 2 127.0.0.1 >nul" : "sleep 1"); } catch { /* ignore */ }
+        continue;
+      }
+      console.error(`⚠ 清理临时目录失败（${dir}）：${e && e.message ? e.message : e}`);
+      return false;
+    }
+  }
+  console.error(
+    `⚠ 清理临时目录失败（${dir}）：Windows 上仍有进程占用该目录（EBUSY）。` +
+    `已改用新的工作目录继续，避免整轮变异测试崩溃。`
+  );
+  return false;
+};
+
+// 测试期间由副本拉起的 bridge 会写 <dir>/bridge-<port>.pid；
+// 只清理**本次新增**的 pid 文件（不碰用户自己的 bridge）。
+const bridgePidFiles = (dir) => {
+  try {
+    return readdirSync(dir).filter((f) => /^bridge-\d+\.pid$/.test(f));
+  } catch {
+    return [];
+  }
+};
+const killBridge = (pid) => {
+  try {
+    if (process.platform === "win32") {
+      execSync(`taskkill /PID ${pid} /T /F`, { stdio: "ignore" });
+    } else {
+      process.kill(Number(pid), "SIGTERM");
+    }
+    return true;
+  } catch {
+    return false; // 进程已退出
+  }
+};
+const cleanupBridges = (dir, before) => {
+  for (const f of bridgePidFiles(dir)) {
+    if (before && before.has(f)) continue; // 源仓已存在的 pid 文件（如用户自己的 bridge）绝不碰
+    try {
+      const pid = readFileSync(join(dir, f), "utf8").trim();
+      if (/^\d+$/.test(pid) && killBridge(pid)) {
+        console.log(`  [cleanup] 已终止残留 bridge（pid=${pid}, ${f}）`);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+};
+
+// 基线：源仓里已存在的 bridge pid 文件（用户自己开的、或上一轮遗留的）。
+// 工作目录是从源仓复制出来的，里面的 pid 文件天然都在这个集合里 → 只有**本轮新产生**的
+// 端口对应的 pid 文件才会被清理，绝不会误杀源仓/用户已在运行的 bridge。
+const SRC_BRIDGES = new Set(bridgePidFiles(SRC));
+
+// 每个变异体的 BRIDGE_PORT 基准（可用 MUTATION_PORT_BASE 调整）。
+// 注意：**不要并发跑两个 mutation-check 实例** —— 端口段固定，并发实例会互相抢端口，
+// 导致套件启动失败/结果失真（表现为 concurrency 套件输出异常）。
+const PORT_BASE = Number(process.env.MUTATION_PORT_BASE || 20100);
+
 const base = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?", SRC, {
   CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", "base"),
 });
 const baseE2e = /════ 结果: (\d+) 通过 \/ (\d+) 失败/.exec(base);
 const baseTr = /总测试数: (\d+)[\s\S]*?✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(base);
+const baseConc = /✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(base.slice(base.lastIndexOf("跨进程并发")));
+
+// 基线必须全绿：否则每个变异体「注入后仍然失败」会被误判成「被抓住」，
+// 脚本就会在基线本身是红的情况下报「全部被抓住」并 exit 0（假绿）。
+const baseProblems = [];
+if (!baseE2e) baseProblems.push("e2e 未取到结果");
+else if (Number(baseE2e[2]) > 0) baseProblems.push(`e2e ${baseE2e[2]} 条失败`);
+if (!baseTr) baseProblems.push("trigger 未取到结果");
+else if (Number(baseTr[3]) > 0) baseProblems.push(`trigger ${baseTr[3]} 条失败`);
+if (!baseConc) baseProblems.push("concurrency 未取到结果");
+else if (Number(baseConc[2]) > 0) baseProblems.push(`concurrency ${baseConc[2]} 条失败`);
+const baseGreen = baseProblems.length === 0;
+
 lines.push(`## 基线（未变异）`);
 lines.push("");
 lines.push(`- e2e：${baseE2e ? `${baseE2e[1]} 通过 / ${baseE2e[2]} 失败` : "未取到"}`);
 lines.push(`- trigger：${baseTr ? `${baseTr[2]} 通过 / ${baseTr[3]} 失败` : "未取到"}`);
+lines.push(`- concurrency：${baseConc ? `${baseConc[1]} 通过 / ${baseConc[2]} 失败` : "未取到"}`);
 lines.push("");
+if (!baseGreen) {
+  lines.push(`> ❌ **基线不绿**（${baseProblems.join("；")}）——基线红时无法区分「变异被抓住」与「基线本来就红」，`);
+  lines.push(`> 本次变异结果**不可信**，脚本已以退出码 1 终止。请先修好基线再跑变异测试。`);
+  lines.push("");
+  writeFileSync(REPORT, lines.join("\n") + "\n", "utf8");
+  console.error(`✗ 基线不绿：${baseProblems.join("；")}`);
+  console.error("  基线红时，任何变异体都会「注入后仍然失败」→ 会被误判成被抓住（假绿）。");
+  console.error("  请先修复基线（见报告 " + REPORT + "）。");
+  process.exit(1);
+}
 
 const results = [];
 
-for (const m of MUTANTS) {
-  rmSync(WORK, { recursive: true, force: true });
-  mkdirSync(WORK, { recursive: true });
-  cpSync(SRC, WORK, {
+let workDir = WORK;
+
+for (const [mi, m] of MUTANTS.entries()) {
+  // 删目录失败（Windows 上后台 bridge 占用 → EBUSY）时不裸崩：换新工作目录继续
+  if (!rmDirSafe(workDir)) workDir = WORK + "-" + (mi + 1);
+  mkdirSync(workDir, { recursive: true });
+  cpSync(SRC, workDir, {
     recursive: true,
     filter: (src) => !src.includes("node_modules") && !src.includes(".git"),
   });
   // 复用依赖（必须成功，否则 bridge 找不到 MCP SDK，测试会全超时）
-  const nm = join(WORK, "node_modules");
+  const nm = join(workDir, "node_modules");
   if (!existsSync(nm)) {
     // 优先 junction/symlink（快）；POSIX 上若不支持则退化为拷贝（CI 稳但慢）
     let linked = false;
@@ -217,7 +315,7 @@ for (const m of MUTANTS) {
     }
   }
 
-  const target = join(WORK, m.file);
+  const target = join(workDir, m.file);
   // 统一换行符：仓库里 index.js 等是 CRLF，trigger.js 等是 LF，不归一化会匹配不上
   const text = readFileSync(target, "utf8").replace(/\r\n/g, "\n");
   let mutated;
@@ -244,12 +342,38 @@ for (const m of MUTANTS) {
   }
   writeFileSync(target, mutated, "utf8");
 
-  const out = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?", WORK, {
+  const out = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?", workDir, {
     CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", m.id.replace(/[^A-Za-z0-9]/g, "_")),
+    // 每个变异体用**独立端口**：否则会复用上一轮副本拉起的旧 bridge，
+    // 旧 bridge 内存里跑的是旧代码 → 测试结果失真（可能假绿 / 假红）。
+    BRIDGE_PORT: String(PORT_BASE + mi),
   });
   const e2eFail = /════ 结果: (\d+) 通过 \/ (\d+) 失败/.exec(out);
   const trFail = /总测试数: (\d+)[\s\S]*?✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(out);
   const concFail = /✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(out.slice(out.lastIndexOf("跨进程并发")));
+
+  // fail-closed：套件**没跑起来**（输出里取不到结果）时，既不能算「被抓住」，
+  // 也不能算「逃逸」——那是测试没运行，不是退化蒙混过关。
+  // 高负载下并发套件偶尔启动失败，若当成 0 失败就会把变异体误判成 NOT CAUGHT（假红且误导）。
+  const unparsed = [];
+  if (!e2eFail) unparsed.push("e2e");
+  if (!trFail) unparsed.push("trigger");
+  if (!concFail) unparsed.push("concurrency");
+  if (unparsed.length) {
+    lines.push(`## ${m.id}`);
+    lines.push("");
+    lines.push(`- 注入：${m.desc}`);
+    lines.push(`- 文件：\`${m.file}\``);
+    lines.push("- 结果：**套件未成功运行（结果不可信）**");
+    lines.push(`- 详情：无法解析结果的套件：${unparsed.join("、")}`);
+    lines.push("");
+    writeFileSync(REPORT, lines.join("\n") + "\n", "utf8");
+    console.error(`✗ 变异体 ${m.id}：套件输出无法解析（${unparsed.join("、")}）—— 测试没有真正运行，结果不可信。`);
+    console.error("  （不是「变异体逃逸」，而是套件没跑起来；请在低负载下重跑，或看 mutation-run.log）");
+    console.error("  报告已写入: " + REPORT);
+    process.exit(1);
+  }
+
   const caught =
     (e2eFail && Number(e2eFail[2]) > 0) ||
     (trFail && Number(trFail[3]) > 0) ||
@@ -274,9 +398,14 @@ for (const m of MUTANTS) {
     for (const f of failed) lines.push("```\n" + f.trim() + "\n```");
     lines.push("");
   }
+
+  // 本轮收尾：先终止本轮拉起的 bridge，再删工作目录（否则 Windows 上删不掉 → EBUSY）
+  cleanupBridges(workDir, SRC_BRIDGES);
+  rmDirSafe(workDir);
 }
 
-rmSync(WORK, { recursive: true, force: true });
+cleanupBridges(workDir, SRC_BRIDGES);
+rmDirSafe(workDir);
 
 lines.unshift("## 总览");
 lines.unshift("");

@@ -27,6 +27,23 @@ const fail = (message) => ({ content: [{ type: "text", text: "ERROR: " + String(
 const asStringArray = (v) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
 const asObject = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
 
+// 卡片里声明的验证命令（归一化后用于比较）
+const cardVerifyCmd = (state) => {
+  const c = state && state.card && state.card.verify;
+  return c && typeof c.cmd === "string" ? c.cmd.trim() : "";
+};
+
+// 真实验证是否已通过：必须存在 flow_run_verify 写入的 last_verify、ok===true，
+// 且验证的正是**当前卡片**的 verify.cmd（防止拿旧卡的验证结果冒充新卡）。
+const verifyPassed = (state) => {
+  const lv = state && state.last_verify;
+  if (!lv || typeof lv !== "object") return false;
+  if (lv.ok !== true) return false;
+  const want = cardVerifyCmd(state);
+  if (!want) return false;
+  return typeof lv.cmd === "string" && lv.cmd.trim() === want;
+};
+
 const TOOLS = [
   // 1 -----------------------------------------------------------------------
   {
@@ -465,6 +482,58 @@ const TOOLS = [
             "请先 flow_claim / flow_dispatch 派发并完成验证后再落 PASS。");
         }
 
+        // 防假闭环之三：记 PASS 必须有**真实验证通过**的证据。
+        // 「派发过」≠「验证过」——只查 dispatch_count 时，一张跑过但验证失败的卡
+        // 照样能落 PASS（completed_ok=true），等于把验证环节架空。
+        // 三个条件同时成立才放行：
+        //   1) 存在 flow_run_verify 写入的 state.last_verify；
+        //   2) last_verify.ok === true（真实执行退出码为 0）；
+        //   3) last_verify.cmd 与**当前卡片**的 verify.cmd 一致（防止旧卡结果冒充新卡）。
+        // 只施加于 PASS：DIRECTION / LOCAL 是返工意见，不要求已完成验证。
+        if (verdict === "PASS") {
+          const lv = state.last_verify;
+          const want = cardVerifyCmd(state);
+          if (!lv || typeof lv !== "object") {
+            // 区分两种「没验证」：卡片压根没写 verify.cmd（用户无从下手）
+            // vs 写了但还没跑。前者必须给出可操作的下一步，否则是死路。
+            if (!want) {
+              audit("decision", sessionId, {
+                kind: "verdict_denied",
+                reason: "卡片未指定验证命令",
+              });
+              return fail("卡片未指定 verify.cmd，没有可核验的验证依据，不能记录 PASS 裁定。" +
+                "请重新提交带 verify.cmd 的任务卡（flow_submit_requirement），" +
+                "用 flow_run_verify 跑通后再记录裁定。");
+            }
+            audit("decision", sessionId, {
+              kind: "verdict_denied",
+              reason: "尚未执行验证",
+            });
+            return fail("尚未执行验证，不能记录 PASS 裁定。请先调用 flow_run_verify " +
+              "跑通卡片里的 verify.cmd，再记录裁定。");
+          }
+          if (lv.ok !== true) {
+            audit("decision", sessionId, {
+              kind: "verdict_denied",
+              reason: "验证未通过",
+              exitCode: lv.exitCode,
+              verify_cmd: lv.cmd,
+            });
+            return fail("验证未通过（exitCode=" + lv.exitCode + "），不能记录 PASS 裁定。" +
+              "请先修复问题、让 verify.cmd 真实跑通（flow_run_verify），再记录裁定。");
+          }
+          if (!want || typeof lv.cmd !== "string" || lv.cmd.trim() !== want) {
+            audit("decision", sessionId, {
+              kind: "verdict_denied",
+              reason: "验证命令与当前卡片不一致",
+              verify_cmd: lv.cmd,
+              card_cmd: want,
+            });
+            return fail("已有的验证结果对应的命令与当前卡片的 verify.cmd 不一致，不能记录 PASS 裁定。" +
+              "请对当前卡片重新执行 flow_run_verify，再记录裁定。");
+          }
+        }
+
         const findings = [];
         if (state.verdict && state.verdict !== verdict) {
           findings.push(`裁定被覆盖：${state.verdict} → ${verdict}`);
@@ -513,6 +582,9 @@ const TOOLS = [
           max_dispatch: MAX_DISPATCH,
           verdict: state.verdict,
           verified: !!state.verdict,
+          // verify_passed：真实验证是否通过（last_verify.ok===true 且命令与当前卡片一致）。
+          // 注意 verified 只表示「是否已有裁定」，不代表验证通过——两者语义不同，不可混用。
+          verify_passed: verifyPassed(state),
           completed_ok: state.completed_ok === true,
           stale: isStale(state),
           bypass: !!state.bypass,

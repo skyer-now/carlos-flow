@@ -28,6 +28,10 @@ const QUOTE = "并发回归 请把激活闸门跑通";
 const ROUNDS = Number(process.env.CONCURRENCY_ROUNDS) || 40;
 // 重复组数：单组对「锁失效」这类变异的检出率约 80%，3 组后接近 99%。
 const GROUPS = Number(process.env.CONCURRENCY_GROUPS) || 3;
+// 每轮内并发提交的 session 数（不同 sid）。
+// 单靠加轮数来提检出率是线性成本；把同一轮里的并发组做多，**并发窗口的密度**更高，
+// 竞态命中概率上升得更快（实测：1 组/轮 时在完整变异矩阵里 M12 仍偶发漏检）。
+const PARALLEL_PER_ROUND = Number(process.env.CONCURRENCY_PARALLEL) || 4;
 
 // 隔离状态目录：绝不污染用户的 ~/.carlos-flow。
 // 必须**每次运行唯一**：若复用固定路径，上一次运行残留的 server 进程（kill 不干净）
@@ -111,20 +115,28 @@ async function main() {
   // （单组判定的假警报与真 bug 难以区分，用多组把概率压下去。）
   for (let g = 0; g < GROUPS; g++) {
   for (let i = 0; i < ROUNDS; i++) {
-    const sid = "conc-g" + g + "-" + i + "-" + Date.now();
-    await c1.call("flow_add_user_msg", { sessionId: sid, text: QUOTE });
-    const emptyArgs = {
-      sessionId: sid, goal: "待补充目标", quote: QUOTE,
-      scope: [], acceptance: [], unknowns: [], assumptions: [], files: [],
-      confirmed: false, cwd: REPO_ROOT,
-    };
-    const lockArgs = Object.assign({}, emptyArgs, { activation: true });
-    // 真正的并发：两个进程同时提交同一 sessionId
-    await Promise.all([
-      c1.call("flow_submit_requirement", lockArgs),
-      c2.call("flow_submit_requirement", emptyArgs),
-    ]);
+    // 一轮内同时发起 PARALLEL_PER_ROUND 组跨进程并发提交（每组不同 sessionId）
+    const groupSids = [];
+    for (let k = 0; k < PARALLEL_PER_ROUND; k++) {
+      const sid = "conc-g" + g + "-" + i + "-k" + k + "-" + Date.now();
+      groupSids.push(sid);
+      await c1.call("flow_add_user_msg", { sessionId: sid, text: QUOTE });
+      const emptyArgs = {
+        sessionId: sid, goal: "待补充目标", quote: QUOTE,
+        scope: [], acceptance: [], unknowns: [], assumptions: [], files: [],
+        confirmed: false, cwd: REPO_ROOT,
+      };
+      const lockArgs = Object.assign({}, emptyArgs, { activation: true });
+      // 真正的并发：两个进程同时提交同一 sessionId
+      Promise.all([
+        c1.call("flow_submit_requirement", lockArgs),
+        c2.call("flow_submit_requirement", emptyArgs),
+      ]).catch(() => { /* 后续以状态判定为准 */ });
+    }
+    // 等待本轮所有并发提交落盘
+    await new Promise((r) => setTimeout(r, 60));
 
+    for (const sid of groupSids) {
     const st = readState(sid);
     if (!st) continue;
     rounds++;
@@ -150,9 +162,10 @@ async function main() {
       const vd = await c1.call("flow_verdict", { sessionId: sid, verdict: "PASS", notes: "exploit", role: "auditor" });
       if (!isErr(cl) && !isErr(vd)) exploited++;
       if (evidences.length < 3) {
-        evidences.push(`  组${g}第${i}轮：pending=[] 但卡片 scope=${JSON.stringify(s2)} acceptance=${JSON.stringify(a2)} verify=${JSON.stringify(v2 && v2.cmd)} activation_activated=${st2 && st2.activation_activated} → claim=${isErr(cl) ? "拒" : "放行"} verdict=${isErr(vd) ? "拒" : "放行"}`);
+        evidences.push(`  组${g}第${i}轮 sid=${sid}：pending=[] 但卡片 scope=${JSON.stringify(s2)} acceptance=${JSON.stringify(a2)} verify=${JSON.stringify(v2 && v2.cmd)} activation_activated=${st2 && st2.activation_activated} → claim=${isErr(cl) ? "拒" : "放行"} verdict=${isErr(vd) ? "拒" : "放行"}`);
       }
     }
+  }
   }
   }
 

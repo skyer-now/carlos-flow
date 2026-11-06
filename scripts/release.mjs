@@ -19,8 +19,9 @@
 // 脚本只做「构建 → 校验 → 提交 → 打 tag → 推送 → 发布」，不做任何凭据读取或打印。
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -30,6 +31,21 @@ const version = (() => {
   return i > 0 ? process.argv[i + 1] : null;
 })();
 const dryRun = process.argv.includes("--dry-run");
+const printPushSequence = process.argv.includes("--print-push-sequence");
+
+// 推送顺序（**执行顺序 = 数组顺序**）：必须先 opencode、再 cindy。
+// 若 opencode 先失败，cindy 尚未打 tag → 不会出现「cindy 已发布、opencode 未发布」的半发布。
+// 这个顺序是本轮防半发布的核心，因此由测试守护：test/e2e-carlos.mjs 的 25b 断言本数组顺序。
+const PUSH_SEQUENCE = [
+  { repo: "opencode", desc: "先推 opencode（main + tag）" },
+  { repo: "cindy", desc: "再推 cindy（main + tag）" },
+];
+
+// 仅打印推送顺序（JSON）后退出，不做任何发布动作 —— 供测试断言与人工核对。
+if (printPushSequence) {
+  console.log(JSON.stringify(PUSH_SEQUENCE, null, 2));
+  process.exit(0);
+}
 const includeOpencode = process.argv.includes("--include-opencode");
 
 if (!version) {
@@ -153,10 +169,16 @@ ok("工作区干净");
 step("运行测试套件");
 // 测试脚本依赖 CARLOS_FLOW_MCP_ROOT 定位仓库根目录
 process.env.CARLOS_FLOW_MCP_ROOT = process.env.CARLOS_FLOW_MCP_ROOT || root;
+// 隔离状态目录：发布演练**绝不能**写用户的 ~/.carlos-flow
+// （否则会把发布者的真实会话/审计流水污染掉）
+const releaseHome = join(tmpdir(), "carlos-flow-release-home", "cindy");
+rmSync(releaseHome, { recursive: true, force: true });
+process.env.CARLOS_FLOW_HOME = releaseHome;
 runOrFail("npm", ["run", "test:all"], {
   cwd: root,
 }, "test:all（smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency）");
 ok("test:all 通过（smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency）");
+rmSync(releaseHome, { recursive: true, force: true });
 
 // 5. 双语 README 一致性（prepublishOnly 也会再查一次）
 step("校验双语 README");
@@ -186,64 +208,86 @@ if (includeOpencode) {
   }
   step(`校验 opencode 仓 v${version}`);
   verifyRepo(opencodePath, "carlos-flow-opencode");
-  // opencode 也跑一遍自己的测试与文档校验
+  // opencode 也跑一遍自己的测试与文档校验（同样隔离状态目录）
   process.env.CARLOS_FLOW_MCP_ROOT = opencodePath;
+  const opencodeHome = join(tmpdir(), "carlos-flow-release-home", "opencode");
+  rmSync(opencodeHome, { recursive: true, force: true });
+  process.env.CARLOS_FLOW_HOME = opencodeHome;
   runOrFail("npm", ["run", "test:all"], { cwd: opencodePath }, "opencode test:all");
   ok("opencode test:all 通过");
+  rmSync(opencodeHome, { recursive: true, force: true });
   runOrFail("npm", ["run", "check:readme"], { cwd: opencodePath }, "opencode check:readme");
   ok("opencode check:readme 通过");
   process.env.CARLOS_FLOW_MCP_ROOT = root;
+  process.env.CARLOS_FLOW_HOME = releaseHome;
 }
 
 if (dryRun) {
+  console.log("\n[dry-run] 推送顺序（opencode 必须先于 cindy，否则会出现半发布）：");
+  for (const t of PUSH_SEQUENCE) {
+    console.log(`  ${t.repo.padEnd(9)} —— ${t.desc}`);
+  }
   console.log("\n[dry-run] 以上检查全部通过，未执行推送与发布。");
   process.exit(0);
 }
 
-// 7. 推送：先推 opencode，再推 cindy。
+// 7. 按 PUSH_SEQUENCE 顺序推送：先 opencode，再 cindy。
 // 顺序很重要 —— 若 opencode 先失败，cindy 尚未打 tag，不会出现「cindy 已发布、
 // opencode 未发布」的半发布状态。
-if (includeOpencode) {
-  step(`推送 opencode v${version}`);
-  try {
-    run("git", ["push", "origin", "main"], { cwd: opencodePath });
-    ok("opencode main 已推送");
-  } catch (e) {
-    console.error("  ✗ opencode 推送失败：", e.stderr ? e.stderr.toString().trim() : e.message);
-    console.error("    已中止：cindy 尚未打 tag，不存在半发布。");
-    process.exit(1);
+for (const target of PUSH_SEQUENCE) {
+  if (target.repo === "opencode") {
+    if (!includeOpencode) {
+      console.log("  · 跳过 opencode（未指定 --include-opencode）");
+      continue;
+    }
+    step(`推送 opencode v${version}`);
+    try {
+      run("git", ["push", "origin", "main"], { cwd: opencodePath });
+      ok("opencode main 已推送");
+    } catch (e) {
+      console.error("  ✗ opencode 推送失败：", e.stderr ? e.stderr.toString().trim() : e.message);
+      console.error("    已中止：cindy 尚未打 tag，不存在半发布。");
+      process.exit(1);
+    }
+    const ocTag = `v${version}`;
+    try {
+      run("git", ["tag", ocTag], { cwd: opencodePath });
+      ok(`opencode 已打 tag ${ocTag}`);
+    } catch (e) {
+      console.log(`  · opencode tag ${ocTag} 已存在，跳过`);
+    }
+    run("git", ["push", "origin", ocTag], { cwd: opencodePath });
+    ok(`opencode ${ocTag} 已推送`);
+    continue;
   }
-  const ocTag = `v${version}`;
-  try {
-    run("git", ["tag", ocTag], { cwd: opencodePath });
-    ok(`opencode 已打 tag ${ocTag}`);
-  } catch (e) {
-    console.log(`  · opencode tag ${ocTag} 已存在，跳过`);
-  }
-  run("git", ["push", "origin", ocTag], { cwd: opencodePath });
-  ok(`opencode ${ocTag} 已推送`);
-}
 
-// 8. 提交 + tag + push（cindy）
-step("推送 GitHub");
-try {
-  run("git", ["push", "origin", "main"]);
-  ok("main 已推送");
-} catch (e) {
-  console.error("  ✗ 推送失败：", e.stderr ? e.stderr.toString().trim() : e.message);
-  console.error("    请检查 GitHub 凭据（gh auth login 或 .git-credentials）");
+  if (target.repo === "cindy") {
+    // 8. 提交 + tag + push（cindy）
+    step("推送 GitHub");
+    try {
+      run("git", ["push", "origin", "main"]);
+      ok("main 已推送");
+    } catch (e) {
+      console.error("  ✗ 推送失败：", e.stderr ? e.stderr.toString().trim() : e.message);
+      console.error("    请检查 GitHub 凭据（gh auth login 或 .git-credentials）");
+      process.exit(1);
+    }
+
+    const tag = `v${version}`;
+    try {
+      run("git", ["tag", tag]);
+      ok(`已打 tag ${tag}`);
+    } catch (e) {
+      console.log(`  · tag ${tag} 已存在，跳过`);
+    }
+    run("git", ["push", "origin", tag]);
+    ok(`${tag} 已推送（release workflow 将自动创建 GitHub Release 并发布 npm）`);
+    continue;
+  }
+
+  console.error(`  ✗ 未知的推送目标：${target.repo}（PUSH_SEQUENCE 只允许 opencode / cindy）`);
   process.exit(1);
 }
-
-const tag = `v${version}`;
-try {
-  run("git", ["tag", tag]);
-  ok(`已打 tag ${tag}`);
-} catch (e) {
-  console.log(`  · tag ${tag} 已存在，跳过`);
-}
-run("git", ["push", "origin", tag]);
-ok(`${tag} 已推送（release workflow 将自动创建 GitHub Release 并发布 npm）`);
 
 step("完成");
 console.log(`  GitHub Release + npm 发布由 .github/workflows/release.yml 在 tag 推送后自动执行。`);

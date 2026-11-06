@@ -81,6 +81,26 @@ function runClient(tool, argsObj) {
 
 const QUOTE = "帮我把 carlos-flow 的端到端测试跑通，确认 12 个工具都能正常工作";
 
+/**
+ * 执行一个 node 脚本并捕获 stdout（用于断言发布脚本的结构化输出，如推送顺序）。
+ * 与 runClient 分开：这个不经过 MCP/bridge，是直接跑仓库里的脚本。
+ */
+function runNodeScript(scriptPath, argsArr = []) {
+  return new Promise((resolve) => {
+    const p = spawn("node", [scriptPath, ...argsArr], {
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: ROOT,
+      env: { ...process.env, CARLOS_FLOW_HOME: FLOW_HOME },
+    });
+    let out = "", err = "";
+    p.stdout.on("data", (d) => (out += d.toString()));
+    p.stderr.on("data", (d) => (err += d.toString()));
+    const timer = setTimeout(() => { p.kill(); resolve({ ok: false, stdout: out, stderr: err, error: "timeout" }); }, 30000);
+    p.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, stdout: out, stderr: err, error: "spawn: " + e.message }); });
+    p.on("close", (code) => { clearTimeout(timer); resolve({ ok: code === 0, code, stdout: out, stderr: err }); });
+  });
+}
+
 async function main() {
   console.log("════════ Carlos 工作流 · 端到端测试 ════════");
   console.log(`sessionId: ${SID}`);
@@ -98,7 +118,8 @@ async function main() {
   r = await call("flow_submit_requirement", {
     sessionId: SID, goal: "跑通 Carlos 端到端测试",
     quote: QUOTE, scope: [ROOT + "/README.md"],
-    acceptance: ["12 个工具全部可用"], confirmed: true,
+    acceptance: ["12 个工具全部可用"],
+    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
   });
   check("3. flow_submit_requirement", r.ok && r.data?.ok === true, r.ok ? `tier=${r.data.tier}` : r.error);
 
@@ -132,6 +153,11 @@ async function main() {
   // 7. flow_save_result
   r = await call("flow_save_result", { sessionId: SID, role: "executor", stdout: "结论：全部通过", stderr: "", code: 0 });
   check("7. flow_save_result", r.ok && r.data?.ok === true && !!r.data?.file, r.ok ? "" : r.error);
+
+  // 7b. flow_run_verify —— 记 PASS 的前置证据（真实验证必须跑通）
+  r = await call("flow_run_verify", { sessionId: SID });
+  check("7b. flow_run_verify 真实执行 verify.cmd", r.ok && r.data?.ok === true && r.data?.exitCode === 0,
+    r.ok ? `ok=${r.data?.ok} exitCode=${r.data?.exitCode}` : r.error);
 
   // 8. flow_verdict
   r = await call("flow_verdict", { sessionId: SID, verdict: "PASS", notes: "端测通过" });
@@ -423,6 +449,76 @@ async function main() {
   const traceable = actKinds.activation >= 1 && actKinds.activation_released >= 1 && actKinds.activation_gate_held >= 1;
   check("22. 审计链含 activation / activation_released / activation_gate_held", traceable,
     r.ok ? `kinds=${Object.keys(actKinds).join(",")}` : r.error);
+
+  // 23. 真实验证闸门（防假闭环之三）：记 PASS 必须有**验证通过**的证据
+  //     ——验证失败时 PASS 必须被拒；DIRECTION / LOCAL 不受影响（返工意见不误伤）。
+  const VF_SID = SID + "-verifyfail";
+  await call("flow_add_user_msg", { sessionId: VF_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: VF_SID, goal: "验证失败不许记 PASS", quote: QUOTE,
+    scope: [ROOT + "/README.md"], acceptance: ["验证失败时 PASS 必须被拒"],
+    verify: { cmd: "node -e \"process.exit(3)\"" }, confirmed: true,
+  });
+  const vfSubmitted = r.ok && r.data?.ok === true;
+  await call("flow_claim", { sessionId: VF_SID, role: "executor" });
+  await call("flow_dispatch", { sessionId: VF_SID, role: "executor", message: "只读检查", run: false });
+  r = await call("flow_run_verify", { sessionId: VF_SID });
+  const vfRan = r.ok && r.data?.ok === false && r.data?.exitCode === 3;
+  check("23a. verify.cmd 失败时 run_verify 如实报失败", vfSubmitted && vfRan,
+    r.ok ? `ok=${r.data?.ok} exitCode=${r.data?.exitCode}` : r.error);
+
+  r = await call("flow_verdict", { sessionId: VF_SID, verdict: "PASS", notes: "验证没过就想通过" });
+  const vfPassBlocked = r.ok === false && /验证/.test(r.error || "");
+  check("23b. 验证失败时记 PASS 被拒（不认执行者自述）", vfPassBlocked,
+    r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  r = await call("flow_verdict", { sessionId: VF_SID, verdict: "DIRECTION", notes: "方向要调整" });
+  check("23c. 验证失败时 DIRECTION 仍可记录（不误伤）", r.ok && r.data?.verdict === "DIRECTION",
+    r.ok ? "" : r.error);
+
+  // 24. 从未跑过 flow_run_verify 就记 PASS → 必须被拒；跑通后放行
+  const NV_SID = SID + "-noverify";
+  await call("flow_add_user_msg", { sessionId: NV_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: NV_SID, goal: "没验证就想通过", quote: QUOTE,
+    scope: [ROOT + "/README.md"], acceptance: ["未验证时 PASS 必须被拒"],
+    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
+  });
+  const nvSubmitted = r.ok && r.data?.ok === true;
+  await call("flow_claim", { sessionId: NV_SID, role: "executor" });
+  await call("flow_dispatch", { sessionId: NV_SID, role: "executor", message: "只读检查", run: false });
+  r = await call("flow_verdict", { sessionId: NV_SID, verdict: "PASS", notes: "没跑过验证就想通过" });
+  const nvPassBlocked = r.ok === false && /验证/.test(r.error || "");
+  check("24a. 从未跑过 flow_run_verify 就记 PASS 被拒", nvSubmitted && nvPassBlocked,
+    r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  r = await call("flow_run_verify", { sessionId: NV_SID });
+  const nvRan = r.ok && r.data?.ok === true;
+  r = await call("flow_verdict", { sessionId: NV_SID, verdict: "PASS", notes: "验证已跑通" });
+  const nvPassOk = r.ok && r.data?.verdict === "PASS" && r.data?.completed_ok === true;
+  check("24b. 验证通过后记 PASS 放行", nvRan && nvPassOk, r.ok ? "" : r.error);
+
+  r = await call("flow_status", { sessionId: NV_SID });
+  check("24c. flow_status 暴露 verify_passed（验证是否真的通过）",
+    r.ok && r.data?.verify_passed === true, r.ok ? `verify_passed=${r.data?.verify_passed}` : r.error);
+
+  // 25. 发布推送顺序守护：opencode 必须先于 cindy
+  // （顺序被误改会重新出现「cindy 已打 tag 而 opencode 失败」的半发布）
+  const relOut = await runNodeScript(path.join(ROOT, "scripts", "release.mjs"), ["--print-push-sequence"]);
+  let pushSeq = [];
+  try {
+    pushSeq = JSON.parse(String(relOut.stdout || "").trim() || "[]");
+  } catch {
+    /* 解析失败 → 25a/25b 会红 */
+  }
+  const pushRepos = Array.isArray(pushSeq) ? pushSeq.map((x) => x && x.repo) : [];
+  const ocIdx = pushRepos.indexOf("opencode");
+  const cindyIdx = pushRepos.indexOf("cindy");
+  check("25a. release.mjs 暴露有序推送序列（--print-push-sequence）",
+    relOut.ok && Array.isArray(pushSeq) && pushSeq.length >= 2 && ocIdx >= 0 && cindyIdx >= 0,
+    relOut.ok ? `order=${pushRepos.join(",")}` : String(relOut.stderr || relOut.error || "").slice(0, 160));
+  check("25b. 推送顺序：opencode 先于 cindy（防半发布）",
+    ocIdx >= 0 && cindyIdx >= 0 && ocIdx < cindyIdx, `order=${pushRepos.join(",")}`);
 
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);

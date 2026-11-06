@@ -28,6 +28,9 @@ jobs:
       # test:all = smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency
       # （含跨进程并发回归——它曾抓出真实的激活闸门竞态绕过，不可省）
       - run: npm run test:all
+        env:
+          # 隔离状态目录：不给的话测试会写 runner 的 ~/.carlos-flow（runner home 可能是共享/缓存的）
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       # tag 与 package.json 版本必须一致，否则发出去的包版本对不上
       - name: 校验 tag 与 package.json 版本一致
         run: |

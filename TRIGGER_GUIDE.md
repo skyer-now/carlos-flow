@@ -283,10 +283,12 @@ result.activationPlan = {
   steps: [
     { tool: 'flow_add_user_msg',      auto: true  },  // 自动：留痕用户原话
     { tool: 'flow_submit_requirement', auto: true  },  // 自动：提交 read_only 占位卡
-    { tool: 'flow_submit_requirement', auto: false,  // 引导：补齐字段后重新提交
-      needsFill: ['scope', 'acceptance', 'verify.cmd'] },
+    { tool: 'flow_submit_requirement', auto: false },  // 引导：补齐字段后重新提交
+      // needsFill 不是固定三项：待补字段由**服务端从当前卡片内容派生**
+      // （scope / acceptance / verify.cmd 缺哪个就锁哪个，都齐了才解闸）。
+      needsFill: '<由服务端派生：scope / acceptance / verify.cmd 中当前缺失的项>' },
   ],
-  pendingFields: ['scope', 'acceptance', 'verify.cmd'],
+  pendingFields: '<由服务端从卡片内容派生，非固定三项>',
   prompt: '【Carlos 触发引擎已激活工作流】…',
 };
 ```
@@ -307,7 +309,7 @@ result.activationPlan = {
    |------|---------|
    | `flow_claim` | 不能拿一张没补齐的卡去领派发名额 |
    | `flow_dispatch` | 不能拿一张没补齐的卡去派发执行 |
-   | `flow_verdict` | **防假闭环**——未经派发与验证，不能直接记 PASS |
+   | `flow_verdict` | **防假闭环**——未经派发**且未验证通过**，不能直接记 PASS（`DIRECTION` / `LOCAL` 不受此限） |
 
    ```
    ERROR: 激活占位卡尚未补齐（待补：scope、acceptance、verify.cmd）。
@@ -553,7 +555,7 @@ node client/carlos.js flow_status '{"sessionId":"my-task"}'
 ## 📚 相关资源
 
 - [测试脚本](test/trigger-e2e.mjs) - E2E 测试套件（25 项，含 10 项回归用例）
-- [变异测试](scripts/mutation-check.mjs) - 注入退化验证测试套件真的能抓住（4 类变异）
+- [变异测试](scripts/mutation-check.mjs) - 注入退化验证测试套件真的能抓住（13 类变异）
 - [核心代码](src/trigger.js) - 触发引擎实现
 - [集成示例](client/carlos.js) - 客户端集成代码
 - [E2E 测试报告](../../trigger-e2e-test-report.md) - 详细测试报告
