@@ -5,6 +5,34 @@
 
 ---
 
+## [2.6.3] - 2026-11-07 — 统一工具返回结构 + 新增包级端到端实测
+
+### 🐛 修复 | Fixed
+
+| # | 问题 | 影响 | 修复 |
+|---|------|------|------|
+| T-78 | `ok()` 只做序列化、不注入 `ok` 字段；各工具有的显式写 `ok: true`、有的没写（如 `flow_audit`） | 调用方拿到手的返回结构不一致 —— 想判断成败只能逐个工具记「这个有没有 ok」 | `ok()` 统一注入 `ok: true`（payload 里已有 `ok` 则保留原值，不改 `ok:false` 语义）。**增量兼容**：读取 `total` / `events` / `by_type` 等既有字段不受影响 |
+
+### ✨ 新增 | Added
+
+- **`test/package-e2e.mjs`（`npm run test:package`）** —— 「装完就能用」的真实路径实测：
+  `npm pack` → 装到**干净临时目录** → 从 `node_modules` 拉起 MCP server → 真实 JSON-RPC
+  → 校验包内 23 个关键文件齐备 / bin 有 shebang / ghost.json 工具清单与服务端逐一对齐 /
+  插件候选含单包名 → 跑完整门禁流程 + 负例 + 智能触发。
+
+> **为什么必须走真实安装路径**：之前所有测试都跑在源码目录，绕过了
+> `npm pack → tarball → npm install → node_modules 布局 → 全局 bin → 真实握手` 这条链路。
+> v2.6.2 修掉的两个严重 bug（T-69 插件找不到单包、T-70 ghost.json 缺 3 个工具）
+> **都是只有走真实安装路径才会暴露**的 —— 源码目录测试永远发现不了。
+
+### 🔬 验证 | Verification
+
+- `test:package` **19/0** 通过（真实 tarball + 真实安装 + 真实 MCP 握手）
+- 主测试 **129/0** 通过
+- `check:full` / `check:identity` / `check:lang` / `test:lang`（12/0）全部通过
+
+---
+
 ## [2.6.2] - 2026-11-07 — 对外产物全面排查：修掉 2 个严重 bug 与 5 类遗留
 
 ### 🐛 修复 | Fixed

@@ -21,7 +21,19 @@ const log = (msg) => {
 
 // ---- 通用工具函数 ----------------------------------------------------------
 
-const ok = (obj) => ({ content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] });
+// 成功响应：统一注入 ok:true。
+//
+// 之前各工具的 payload 有的显式写 \`ok: true\`、有的没写（如 flow_audit），
+// 于是调用方拿到手的心智模型不一致 —— 想判断成败只能逐个工具记「这个有没有 ok」。
+// 现在由 ok() 统一注入：
+//   · payload 里没有 ok 字段 → 补上 ok:true
+//   · payload 里已有 ok 字段 → 保留原值（不改 ok:false 的语义）
+// 这是**增量兼容**：现有调用方读取 total / events / by_type 等字段不受影响。
+const ok = (obj) => {
+  const payload = obj && typeof obj === "object" && !Array.isArray(obj) ? obj : { value: obj };
+  const withOk = "ok" in payload ? payload : { ok: true, ...payload };
+  return { content: [{ type: "text", text: JSON.stringify(withOk, null, 2) }] };
+};
 const fail = (message) => ({ content: [{ type: "text", text: "ERROR: " + String(message) }], isError: true });
 
 const asStringArray = (v) => (Array.isArray(v) ? v.map((x) => String(x)) : []);

@@ -86,8 +86,11 @@ if (!existsSync(TRIGGER_GUIDE)) {
       return null;
     }
   })();
-  // 尝试从末尾的 '**版本**:' 字段提取版本号，去掉可能的 'v' 前缀
-  const versionMatch = guide.match(/\*\*版本\*\*\s*:\s *(v?\d+\.\d+\.\d+)/);
+  // 尝试从末尾的 '**版本**:' 字段提取版本号，去掉可能的 'v' 前缀。
+  // 冒号可能是半角 `:` 或全角 `：`（Markdown 里两种都常见）—— 早先只认半角，
+  // 结果升版本时把 TRIGGER_GUIDE.md 里写成全角的那一处漏改，本检查直接报
+  // 「提取不到版本号」而看不出真实原因。
+  const versionMatch = guide.match(/\*\*版本\*\*\s*[:：]\s*(v?\d+\.\d+\.\d+)/);
   const versionInGuide = versionMatch ? versionMatch[1].replace(/^v/, '') : null;
   if (pkgVersion && versionInGuide) {
     log(versionInGuide === pkgVersion, `TRIGGER_GUIDE.md version is ${versionInGuide} vs package.json ${pkgVersion}`);
