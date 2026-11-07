@@ -59,10 +59,15 @@ jobs:
       #
       # 为什么需要幂等：版本可能已经由维护者本地 `npm publish` 上线
       # （网络受限 / 凭据配置差异时这是常见路径）。此时再跑一次 publish 会
-      # 直接 403「cannot publish over the previously published version」，
+      # 直接 409「Cannot publish over previously staged version」，
       # 整个 workflow 红掉 —— 但包其实已经在 registry 里了。
-      # 所以先查 registry：已存在就跳过 publish（并明确告知），不存在才真发。
-      - name: 发布到 npm（已存在则跳过）
+      #
+      # 两道防线（缺一不可）：
+      #   1) 预检查：查 registry，已存在就跳过；
+      #   2) 兜底：即使预检查因**传播延迟**查不到（刚发布完的版本
+      #      通常要几十秒才可查），publish 报 409 时也视为成功。
+      #      只做第 1 道是不够的 —— 那正是本 workflow 失败的原因。
+      - name: 发布到 npm（已存在则跳过，409 视为成功）
         id: npm_publish
         run: |
           VERSION="$(node -p "require('./package.json').version")"
@@ -70,8 +75,20 @@ jobs:
             echo "⏭  carlos-flow@${VERSION} 已在 registry 中，跳过 npm publish"
             echo "published=false" >> "$GITHUB_OUTPUT"
           else
-            npm publish --access public --provenance
-            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "registry 暂未查到 ${VERSION}（可能刚发布、传播延迟），尝试发布"
+            set +e
+            npm publish --access public --provenance 2>&1 | tee /tmp/publish.log
+            CODE=${PIPESTATUS[0]}
+            set -e
+            if [ "$CODE" -eq 0 ]; then
+              echo "published=true" >> "$GITHUB_OUTPUT"
+            elif grep -qE "E409|Cannot publish over|previously (published|staged)" /tmp/publish.log; then
+              echo "✅ npm 返回 409（该版本已存在）—— 视为已发布，继续后续步骤"
+              echo "published=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "❌ npm publish 失败（退出码 ${CODE}）"
+              exit "$CODE"
+            fi
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
