@@ -1,0 +1,117 @@
+#!/usr/bin/env node
+// lang-audit.mjs — 产物语言体检（中文合规守卫）
+//
+// 为什么需要这个守卫：
+// 2026-11-07 发生过一次真实事故 —— 同一会话里对话回复全是中文，
+// 但**连续 5 个 git 提交信息写成了完整英文段落**，用户当场指为「非常严重的技术事故」。
+//
+// 根因不是「没看到用户要求」（要求早已写入记忆），而是：
+//   · 对话语言是合规的，肉眼扫一遍「回复」完全看不出问题；
+//   · 漏检的全部是**产物**（提交信息、注释、脚本文案、文档正文），
+//     而产物会持久化并对外分发（进 GitHub、进 npm 包），影响面远大于一次对话。
+//
+// 所以「我说的是中文的」不能作为合规判据 —— 必须**单独检查产物**。
+// 本脚本把这件事自动化，让它不依赖临场自觉。
+//
+// 检查范围：
+//   1) git 提交信息（标题 + 正文，排除代码块与含中文的行）
+//   2) 源码注释（.js/.mjs/.cjs/.sh/.yml/.yaml）
+//
+// 允许英文的例外（外部接口约束，不算违反）：
+//   标识符、命令、路径、报错原文、API 字段名、日志原文、技术专有名词、
+//   用户自己写的英文、以及被明确要求产出的英文材料（如 README.en.md）。
+//
+// 退出码：0 = 合规；1 = 发现英文叙述（逐条打印位置）
+import { execFileSync } from "node:child_process";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// 允许出现在中文语境里的英文词（标识符 / 专有名词 / 外部接口名）
+const ALLOW =
+  /(npm|MCP|Node|JSON|GitHub|CI|Carlos|README|CHANGELOG|TRIGGER_GUIDE|MIGRATION|ERROR|Timeout|OK|verify|scope|acceptance|sessionId|flow_[a-z_]+|init|target|git|commit|release|docs|fix|feat|chore|ci|test|npm run|node |yarn |npx |shell|stdin|stdout|stderr|json|yaml|yml|http|https|api|url|repo|src|lib|bin|tool|tools|service|server|client|bridge|plugin|template|templates|license|mit|apache|BSD|zh-CN|en-US|utf-8|Linux|Windows|macOS|OpenCode|Cursor|Cline|Claude|Copilot|version|SemVer|Keep a Changelog|monorepo|shim|shebang|validateCard|tier|read_only|goal|quote|cmd|argv|env|pkg|repoPathOf|args|opts|params|config|keywordWeights|readOnlyIntentWords|mutatingActionWords|trigger-config|carlos-flow|user_msgs|state\.json)/i;
+
+const MIN_WORDS = 5;          // 连续 5 个以上英文词才判定为「英文叙述」
+const MIN_COMMIT_WORDS = 3;   // 提交信息阈值低一点（正文段落更短）
+
+let problems = 0;
+const report = (where, text) => {
+  console.log(`  ❌ ${where}`);
+  console.log(`     ${text.slice(0, 110)}`);
+  problems++;
+};
+
+// ---- 1. 提交信息 ----
+console.log("▶ 提交信息");
+try {
+  const raw = execFileSync("git", ["log", "--format=%H%x00%B%x00%x00", "-15"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  const parts = raw.split("\u0000").filter((s) => s.trim());
+  for (let i = 0; i < parts.length; i += 2) {
+    const sha = (parts[i] || "").trim();
+    const body = parts[i + 1] || "";
+    let inCode = false;
+    for (const line of body.split("\n")) {
+      if (/^\s*```/.test(line)) { inCode = !inCode; continue; }
+      if (inCode) continue;
+      const t = line.trim();
+      if (!t) continue;
+      if (/[一-鿿]/.test(t)) continue;        // 含中文的行放行
+      const words = t.match(/[A-Za-z][A-Za-z'-]{2,}/g) || [];
+      if (words.length < MIN_COMMIT_WORDS) continue;
+      if (ALLOW.test(t)) continue;
+      report(`提交 ${sha.slice(0, 7)}`, t);
+    }
+  }
+  if (problems === 0) console.log("  ✅ 提交信息均为中文");
+} catch (e) {
+  console.log("  ⏭  跳过（取不到 git 历史）");
+}
+
+// ---- 2. 源码注释 ----
+console.log("\n▶ 源码注释");
+const walk = (dir, depth = 0) => {
+  if (depth > 4) return [];
+  let out = [];
+  let entries = [];
+  try { entries = readdirSync(dir); } catch { return out; }
+  for (const e of entries) {
+    if (e === "node_modules" || e === ".git") continue;
+    const full = join(dir, e);
+    let st;
+    try { st = statSync(full); } catch { continue; }
+    if (st.isDirectory()) out = out.concat(walk(full, depth + 1));
+    else if (/\.(js|mjs|cjs|sh|yml|yaml)$/.test(e)) out.push(full);
+  }
+  return out;
+};
+
+const codeProblems = 0;
+for (const f of walk(ROOT)) {
+  const rel = f.slice(ROOT.length + 1).replace(/\\/g, "/");
+  const text = readFileSync(f, "utf8");
+  text.split("\n").forEach((line, i) => {
+    const m = line.match(/^\s*(?:\/\/|#)\s*(.+)$/);
+    if (!m) return;
+    const t = m[1].trim();
+    if (!/[一-鿿]/.test(t)) return;            // 只看本该有中文的注释
+    const words = t.match(/[A-Za-z][A-Za-z'-]{2,}/g) || [];
+    if (words.length < MIN_WORDS) return;
+    if (ALLOW.test(t)) return;
+    report(`${rel}:${i + 1}`, t);
+    codeProblems++;
+  });
+}
+if (codeProblems === 0) console.log("  ✅ 源码注释均为中文");
+
+console.log("");
+if (problems > 0) {
+  console.log(`❌ 产物语言体检失败：发现 ${problems} 处英文叙述`);
+  console.log("   修复方式：把对应内容改写为中文（标识符、命令、报错原文可保留原样）");
+  process.exit(1);
+}
+console.log("✅ 产物语言体检通过");

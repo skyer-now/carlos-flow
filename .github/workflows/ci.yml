@@ -81,6 +81,11 @@ jobs:
       - run: npm install
       - name: 单包一致性检查（身份 / 版本 / 文档 / 产物）
         run: node scripts/check-repo-parity.mjs
+      # 产物语言体检：提交信息 / 源码注释必须是中文。
+      # 2026-11-07 的事故根因正是「对话是中文的、但提交信息是英文的」——
+      # 靠人扫「回复」发现不了，必须机器单独检查产物。
+      - name: 产物语言体检（提交信息 / 注释必须中文）
+        run: npm run check:lang
       - name: 变异体锚点体检
         run: npm run check:anchors
 

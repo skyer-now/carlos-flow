@@ -34,6 +34,10 @@ jobs:
       # 单包一致性守卫：身份 / 版本 / 文档 / 产物 必须一致
       - name: 单包一致性检查
         run: node scripts/check-repo-parity.mjs
+      # 产物语言体检：发布前最后一道闸。提交信息 / 注释必须是中文 ——
+      # 产物会进 GitHub、进 npm 包，影响面比一次对话大得多。
+      - name: 产物语言体检（提交信息 / 注释必须中文）
+        run: npm run check:lang
       # tag 与 package.json 版本必须一致，否则发出去的包版本对不上
       - name: 校验 tag 与 package.json 版本一致
         run: |

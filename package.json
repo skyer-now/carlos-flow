@@ -38,7 +38,8 @@
     "init:cursor": "node client/carlos.js init --target cursor",
     "init:cline": "node client/carlos.js init --target cline",
     "init:vscode": "node client/carlos.js init --target vscode",
-    "init:claude": "node client/carlos.js init --target claude"
+    "init:claude": "node client/carlos.js init --target claude",
+    "check:lang": "node scripts/lang-audit.mjs"
   },
   "keywords": [
     "carlos",
