@@ -133,6 +133,7 @@ Carlos Flow 是**机械性的**。约束写在代码里，不写在散文里。
 | **独立复核** | ✅ 内置 `auditor` 角色 | ❌ 无 | ❌ 可选 |
 | **快照 + 还原** | ✅ 自动、原子计划 | ❌ 无 | ❌ 手动 `git revert` |
 | **守护进程生命周期** | ✅ 全自动（Cindy 版） | ❌ 手动 | ❌ 手动 |
+| 手工改了 `state.json` 里的 verdict 能伪造 PASS 吗 | **能** —— 状态文件不在审计哈希链内（审计链只覆盖 `gate-audit/*.jsonl`）。这是**本地文件系统权限**的信任边界，不是 MCP 工具面能被绕过的漏洞：能写 `CARLOS_FLOW_HOME` 的人本来就能改自己的代码。完整说明见 [`docs/QA_REPORT_v2.5.5.md`](https://github.com/skyer-now/carlos-flow-cindy/blob/main/docs/QA_REPORT_v2.5.5.md) §六 |
 
 ---
 ## 🚀 30 秒快速开始
