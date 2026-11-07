@@ -106,18 +106,29 @@ const compareVer = (a, b) => {
   for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
   return 0;
 };
-const lockVer = readJson("package-lock.json")?.version;
+const lock = readJson("package-lock.json");
+const lockVersions = [lock?.version, lock?.packages?.[""]?.version].filter(Boolean);
+for (const v of new Set(lockVersions)) {
+  if (v !== VERSION) P("版本", `package-lock.json 版本 = ${v}，package.json = ${VERSION}`);
+}
 const ghostVer = readJson("ghost.json")?.version;
 const checks = [
-  ["package-lock.json", lockVer],
   ["ghost.json", ghostVer],
 ];
 for (const [f, v] of checks) {
   if (!v) P("版本", `${f} 读不到版本号`);
   else if (v !== VERSION) P("版本", `${f} = ${v}，package.json = ${VERSION}`);
 }
-const guideV = ((read("TRIGGER_GUIDE.md") || "").match(/\*\*版本\*\*\s*:\s*v?(\d+\.\d+\.\d+)/) || [])[1];
+// 版本号提取：冒号可能是半角 `:` 或全角 `：`（Markdown 里两种都常见）。
+// 旧实现只认半角，于是「**版本**：v2.6.0」这种全角写法会被**漏检** ——
+// 结果是升版本时只改了一半，文档里留下旧版本号。
+const guideText = read("TRIGGER_GUIDE.md") || "";
+const guideV = (guideText.match(/\*\*版本\*\*\s*[:：]\s*v?(\d+\.\d+\.\d+)/) || [])[1];
+const guideVs = [...guideText.matchAll(/\*\*版本\*\*\s*[:：]\s*v?(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
 if (guideV !== VERSION) P("版本", `TRIGGER_GUIDE.md = ${guideV}，package.json = ${VERSION}`);
+if (new Set(guideVs).size > 1) {
+  P("版本", `TRIGGER_GUIDE.md 出现多个版本号：${[...new Set(guideVs)].join(", ")}（升版本时漏改）`);
+}
 const changelogV = ((read("CHANGELOG.md") || "").match(/^## \[(\d+\.\d+\.\d+)\]/m) || [])[1];
 if (changelogV !== VERSION) P("版本", `CHANGELOG.md 顶部 = ${changelogV}，package.json = ${VERSION}`);
 for (const f of ["README.md", "README.zh.md", "README.en.md", "MIGRATION.md", "RELEASE_NOTES.md"]) {

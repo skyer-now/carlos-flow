@@ -5,6 +5,42 @@
 
 ---
 
+## [2.6.2] - 2026-11-07 — 对外产物全面排查：修掉 2 个严重 bug 与 5 类遗留
+
+### 🐛 修复 | Fixed
+
+> 这一版的每一项**都不会让任何测试变红**，但会直接让用户看到错误信息。
+> 单包合并后仓库里散落着大量双仓时代的遗留，为此新增 `scripts/full-audit.mjs`
+> 做独立的「对外产物体检」，首轮报出 49 项，本次修完归零。
+
+| # | 问题 | 影响 | 修复 |
+|---|------|------|------|
+| T-69 | `plugins/carlos-flow-trigger.js` 硬编码找 `node_modules/carlos-flow-opencode` | 单包化后该目录**根本不存在** → 除「插件就在包内」外的所有安装方式都找不到 MCP server → **OpenCode 的自动触发静默失效**（不报错，只是永远不触发） | 改为同时尝试 `carlos-flow` 与两个已弃用旧包名；实测真实 npm 安装下能定位到 `src/index.js` |
+| T-70 | `ghost.json` 只声明 12 个工具，缺 `flow_run_verify` / `flow_check_scope` / `flow_trigger_check` | **Cindy 用户根本看不到这三个工具** —— 服务端有、清单没有 | 补齐到 15 个，与服务端 `src/index.js` 逐一对齐；并新增「ghost.json 工具清单 vs 服务端实际工具」的一致性检查 |
+| T-71 | `scripts/verify-install-e2e.sh` 默认验证已废弃的旧包名 + 写死的旧版本号 | 该脚本验证的是一个**不存在的包** → 装包验收形同虚设 | 默认包名改为 `carlos-flow`，版本改为取自本仓 `package.json` |
+| T-72 | 该脚本的「包内无个人路径」审计，grep 模式里含字面量 | **必然检出自己** → 这项审计从来没通过过 | 模式改为变量拼接；`CHANGELOG.md` 例外（版本历史刻意保留被修复路径的原样描述，便于追溯） |
+| T-73 | `TRIGGER_GUIDE.md` 三处死链（`../README.md` 等，文件本身就在根目录） | 文档里的链接点不开 | 改为 `./` 相对路径 |
+| T-74 | `CONTRIBUTING.md` / `SECURITY.md` / `CODE_OF_CONDUCT.md` 指向已删除的旧仓库、保留双仓表述 | 社区文档与 Security Advisories 入口全部失效 | 全部改为单一仓库 `carlos-flow` |
+| T-75 | `settings.html` 示例路径用旧包名、`settings.js` 注释含开发者机路径 | Cindy 插件设置页给用户错误的安装路径示例 | 清理 |
+| T-76 | `scripts/verify-activation-e2e.sh` 与 `scripts/mutation-check.mjs` 注释含开发者机路径 | 随包分发的文件里出现开发者机路径 | 改为泛化表述 |
+| T-77 | `TRIGGER_GUIDE.md` 的版本号有两种写法（半角 `:` 与全角 `：`），升版本时只改了一半 | 文档里留下旧版本号；体检脚本因只认半角而**漏检** | 版本提取兼容两种冒号；并新增「同一文件出现多个版本号」检查 |
+
+### ✨ 新增 | Added
+
+- **`scripts/full-audit.mjs`（`npm run check:full`）** —— 「对外产物体检」：
+  旧引用 / 个人路径 / 版本一致性 / 文档死链 / npm 发布集合 / 模板占位符 /
+  package.json 关键字段 / 脚本与 CI 的双仓残留 / ghost.json 工具清单，9 类检查。
+- **CI 与 Release workflow 接入 `npm run check:full`** —— 上述遗留一旦复发立即红。
+
+### 🔬 验证 | Verification
+
+- `check:full` 通过（首轮 49 项 → 0）
+- `check:identity` / `check:lang` / `test:lang`（12/0）全部通过
+- 主测试 **129/0** 通过（smoke 4 / e2e 62 / p0 22 / trigger 29 / concurrency 3 / acceptance 13）
+- 插件路径修复用**真实 npm 安装**实测：能定位到 `node_modules/carlos-flow/src/index.js`
+
+---
+
 ## [2.6.1] - 2026-11-07 — 修复全局命令不可用（bin 缺 shebang）
 
 ### 🐛 修复 | Fixed

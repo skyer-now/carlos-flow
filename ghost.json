@@ -5,7 +5,7 @@
   "name": "Carlos 工作流",
   "description": "机械门禁 MCP：留痕/派发/裁定/审计/快照/免检/还原。自动管理 Bridge 后台常驻，首次调用 ~3-5s，后续 ~1s。",
   "whenToUse": "需要走 Carlos 工作流门禁时使用：留痕/派发/裁定/审计/快照/免检/还原",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "kind": "mcp",
   "entry": "client/carlos.js",
   "command": "门禁",
