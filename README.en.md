@@ -1,488 +1,269 @@
-# Carlos Flow — Cindy Edition
+# Carlos Flow — Unified Distribution (Cindy / OpenCode / Cursor / Cline / VS Code / Claude Desktop)
 
-> **Mechanical gatekeeping for AI coding agents**: Record → Dispatch → Verify → Verdict → Audit → Restore
-> Turns "trust the agent" into "verify the agent" — with machine-enforced scope limits, real command execution, and a tamper-proof audit chain.
-**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.9 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+> **Mechanical Gate Framework for AI Coding Agents**: Trace → Dispatch → Verify → Verdict → Audit → Revert  
+> **Turn "Trust the Agent" into "Verify the Agent"** — Machine-level scope limits, real command execution, tamper-proof audit chains, controlled bypass, honest dispatch quotas, independent review, snapshot restore.
 
----
-## 🆕 What's new in v2.5.5
-> In one line: **the workflow now recognises when it is its turn to step in.**
-
-### ✨ Smart trigger engine (brand new)
-No more manually saying "run the gate" every time. The engine reads your input, decides whether the Carlos workflow should start, and — crucially — **tells you why**.
-
-| Layer | Component | What it does | Why it matters |
-|-------|-----------|--------------|---------------|
-| **L1** | `DynamicTriggerManager` | Dynamically computes "how many triggers are left in this session" | A fixed cap is either noisy or too strict; longer sessions and complex tasks automatically raise the ceiling |
-| **L2** | `TriggerScorer` | Scores every message: keywords 50 + context 30 + intent 20, weighted to a **38**-point maximum | Whether to trigger must be **explainable** — you always see which words matched and how many points were scored |
-| **L3** | `TriggerDecisionEngine` | Four-way decision: `trigger` / `review` / `ignore` / `throttled` | Turns "should we trigger?" from a hunch into an explicit rule |
-
-**Key properties**
-- 🎚️ **Dynamic cap**: `5 + sessionHours×0.5 + complexity×2 − triggersInWindow×0.3`, capped at 15
-- 🛡️ **Non-intrusive**: 5-minute minimum interval per session; the more you trigger, the **lower** the cap (a penalty, not a bonus)
-- 📊 **Transparent scoring**: returns the full `breakdown` (matched keywords / context words / intent type)
-- ⚖️ **Honest under throttling**: even when throttled it returns the real score and confidence — it never pretends "0 points"
-- 🧠 **Learns from feedback**: accepted / rejected triggers are persisted; when negative feedback dominates, the **trigger threshold is raised automatically** (more conservative)
-- 📦 **Zero external dependencies**: plain JavaScript, no new npm packages
-
-#### 🔁 Decision → Judgment → Activation (the piece that matters most here)
-The earlier implementation only printed a log line when it hit — it never actually started the workflow. That gap is now closed:
-
-| Stage | Action | Real effect |
-|-------|--------|-------------|
-| **Judgment** | L1 cap → L2 scoring → L3 four-way decision | Yields `decision` + `score` + `confidence` + `breakdown` |
-| **Translation** | `buildActivationPlan()` | Turns the verdict into an **executable MCP action sequence** (each step tagged `auto`) |
-| **Activation ①** | `flow_add_user_msg` | The user's own words are recorded and become the anchor source for the card's `quote` |
-| **Activation ②** | `flow_submit_requirement` (`activation: true`) | Submits a `read_only` placeholder card — the session **enters the gated state** |
-| **Gate** | `activation_pending` | Until `scope` / `acceptance` / `verify.cmd` are filled in, `flow_claim`, `flow_dispatch` and `flow_verdict` all **refuse** (no "PASS without ever running it") |
-| **Release** | Resubmit the complete card | `activation_pending` clears → normal dispatch proceeds |
-
-> Safety constraint: when the session **already has a card**, auto-activation skips card creation (it never overwrites an existing task). Auto-activation only handles "record + enter the gate" — it **never decides which files may change** on the agent's behalf.
-
-##### 🔐 Four gate defenses (hardened after independent QA audit)
-| Defense | What it blocks | Outcome |
-|---|---|---|
-| **Field-by-field verification** | Submitting with only `scope` filled while `acceptance` / `verify.cmd` are still empty | The gate **keeps holding** (`activation_pending` lists exactly what is still missing) |
-| **No PASS without dispatch** | `verdict=PASS` on a card that was just submitted and never dispatched | Rejected; `completed_ok` stays `false` (`DIRECTION` / `LOCAL` are unaffected — rework notes are not blocked) |
-| **Empty scope fails closed** | Modifying any file while the card's `scope` is empty | `flow_check_scope` reports **every** path as out-of-scope (the early implementation failed *open*, i.e. "empty whitelist → change anything") |
-| **Dedicated audit events** | Asking afterwards "was this a placeholder card? was it ever released?" | `activation` / `activation_gate_activated` / `activation_gate_held` / `activation_gate_unlocked` / `activation_released` / `verdict_denied` are all queryable |
-
-> Every one of these defenses has a matching **mutation test** (inject the regression → confirm the suite fails). 13 injected mutations, **all 13 caught**.
-
->
-> Also fixed: trigger state was previously kept in **one shared file for all sessions**, so one session could throttle another — it is now stored per session.
-
-### 🐛 7 real defects fixed
-> These are all reproducible bugs, not "theoretical risks".
-
-| # | Defect | Impact | Fix |
-|---|--------|--------|-----|
-| 1 | `client/carlos.js` is ESM but loaded the trigger engine with `require()`; the error was swallowed by `catch` | **Integration silently dead** — the engine never ran | Switched to dynamic `import()` |
-| 2 | `canTrigger()` compared a 0–1 weighted average against a 5–15 cap | The cap check **could never fire** | Added `countTriggersInWindow()` returning the raw count |
-| 3 | The history factor in the dynamic-cap formula was an **additive** term | More triggers meant a *higher* cap — the cap cancelled itself out | Changed to a **penalty** term (subtraction) |
-| 4 | `processUserMessage()` hard-coded `sessionId='default'` | Ignored `context.sessionId`; sessions bled into each other | Session id now passed through from context |
-| 5 | `src/trigger.js` detected its CLI entry via `import.meta.url.endsWith(process.argv[1])` | The `file:///` prefix meant it **never matched** — the CLI was decorative | Switched to `fileURLToPath()` + `resolve()` |
-| 6 | `shouldTrigger()` returned early in the throttling branch | Score collapsed to `0` and confidence was lost | Score is now computed before throttling is judged |
-| 7 | `test:trigger` wrote its result file into the publish directory | Polluted the published npm package | Now written to the system temp directory |
-
-### 🔒 Security & hygiene
-- 🚨 **`.gitignore` rule collision**: the trailing `*.tar.gz.npmrc.local` line meant `.npmrc.local` (which contains an **npm token**) was never actually ignored → split into separate rules
-- 🏠 **State files no longer wander**: trigger state lands in `CARLOS_FLOW_HOME`, not the current working directory
-- 🌐 **No hard-coded machine paths**: `D:\opencode-backups` → `~/.carlos-flow` (cross-platform default)
-- 🧹 **42 one-off fix scripts and scratch files removed** (net −5325 lines)
-
-### 🚀 Release engineering
-- 🔑 **GitHub Actions OIDC publishing**: no npm token stored in the repository any more
-- 🧩 **`scripts/release.mjs`**: version checks / bilingual consistency / tests / build / publish in one command
-- 🛡️ **`npm run check:readme`**: prepublish hook keeps the three README files from drifting apart
-- 📋 **Independent QA report**: [`docs/QA_REPORT_v2.5.5.md`](https://github.com/skyer-now/carlos-flow-cindy/blob/main/docs/QA_REPORT_v2.5.5.md) — third-party read-only acceptance before release
-- 🧬 **Mutation report**: [`docs/MUTATION_REPORT_v2.5.5.md`](https://github.com/skyer-now/carlos-flow-cindy/blob/main/docs/MUTATION_REPORT_v2.5.5.md) — 13 injected mutations, **all 13 caught**
-
-### 📚 Documentation readability
-- Removed the repeated **language bar / version line noise** that was injected throughout the READMEs (24–26 occurrences per file → consolidated to 1 at the top); tables are no longer truncated
-- Added [`TRIGGER_GUIDE.md`](TRIGGER_GUIDE.md): the complete smart-trigger guide
+**Languages:** [中文](README.zh.md) | [English](README.en.md)  
+**Version:** 2.5.9 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+  
+**Package:** `carlos-flow` (single package, replaces `carlos-flow-cindy` & `carlos-flow-opencode`)
 
 ---
+
 ## 🎯 Why Carlos Flow?
-Most AI coding workflows are **advisory**. The prompt says "only touch these files" — and the agent politely agrees, then rewrites half the repository. The prompt says "run the tests" — and the agent reports "tests pass" without ever running them.
-Carlos Flow is **mechanical**. The constraints live in code, not in prose.
-### Pain points it removes
-| Pain | Typical state today | Carlos Flow's answer |
-|------|--------------------|---------------------|
-| **Scope creep** | "Only edit `src/auth.py`" — a suggestion, not a rule | `enforceScope()` compares real `git diff` output against the card's whitelist; out-of-scope files **block the dispatch** |
-| **Verification theatre** | Agent claims "tests pass"; nobody can prove it | `runVerifyCommand()` actually spawns `verify.cmd`, captures `stdout` / `stderr` / `exitCode`; a `PASS` verdict additionally **requires** a passing verification |
-| **Laundered audit logs** | Logs in a plain file — deletable, editable | SHA-256 **chained** audit log (`prevHash` → `hash`); altering one record breaks the chain |
-| **Runaway bypass mode** | One sentence ("skip the gate, it's urgent") disables everything | Bypass requires an explicit `confirmed=true` on the card and **auto-resets on every dispatch** |
-| **Infinite dispatch budget** | Claiming a slot resets the counter — unlimited retries | `dispatch_count` increments **only on dispatch**; quota exhaustion blocks both claim and dispatch |
-| **Forgotten daemons** | "Did you start the server?" / port already in use | Bridge is auto-launched on first call, health-checked, token-authenticated, rate-limited |
-| **Self-attested reviews** | Same agent implements *and* approves | Built-in `auditor` role with a separate contract; verdict is one of `PASS` / `DIRECTION` / `LOCAL` |
-| **No way back from a bad change** | Manual `git revert` only | Automatic snapshot before dispatch → `flow_revert_plan` produces an atomic restore plan |
-| **Manual kick-off every time** | "run the gate" — if you forget, you work unprotected | The **smart trigger engine** scores your input and only fires when the intent is clear |
-### How it differs
-| Capability | **Carlos Flow** | Raw MCP server | Prompt-only / scripts |
-|------------|-----------------|-----------------|----------------------|
-| **Scope enforcement** | ✅ runtime `git diff` level | ❌ none | ❌ relies on goodwill |
-| **Real verification** | ✅ spawns the command, captures output; `PASS` requires it to pass | ❌ none | ❌ agent self-reports |
-| **Tamper-proof audit** | ✅ SHA-256 chained | ❌ none | ❌ none |
-| **Controlled bypass** | ✅ explicit + auto-reset | ❌ none | ❌ one-liner disables all |
-| **Honest dispatch quota** | ✅ counts dispatch only | ❌ none | ❌ none |
-| **Independent review** | ✅ built-in `auditor` role | ❌ none | ❌ optional |
-| **Snapshot + restore** | ✅ automatic, atomic plan | ❌ none | ❌ manual `git revert` |
-| **Daemon lifecycle** | ✅ automatic (Cindy edition) | ❌ manual | ❌ manual |
+
+| Pain Point | Traditional AI Coding | Carlos Flow's Mechanical Answer |
+|------------|----------------------|--------------------------------|
+| **Out-of-scope edits** | "Only edit `src/auth.py`" is a suggestion; Agent rewrites half the repo | `enforceScope()` runs `git diff` against card whitelist at runtime — **out-of-scope blocks dispatch** |
+| **Verification theater** | Agent reports "tests passed"; no proof | `runVerifyCommand()` truly `spawn`s `verify.cmd`, captures stdout/stderr/exitCode; **PASS requires verification evidence** |
+| **Mutable audit logs** | Plain files — deletable, editable | SHA-256 **chained audit logs** (`prevHash`→`hash`); change one, whole chain breaks |
+| **Uncontrolled bypass** | One sentence disables all guards | Bypass requires explicit `confirmed=true` on card; **auto-cleared on every dispatch** |
+| **Unlimited retries** | Claim resets counter; infinite dispatches | `dispatch_count` increments only on dispatch; exhaustion blocks both claim and dispatch |
+| **Self-certified review** | Same Agent implements and approves | Built-in `auditor` role, independent contract, strict three-tier verdict `PASS/DIRECTION/LOCAL` |
+| **No rollback after damage** | Manual `git revert` only | Pre-dispatch auto-snapshot → `flow_revert_plan` generates atomic restore plan |
+| **Manual trigger every time** | No shout = no gate; forget = naked run | **Smart Trigger Engine** auto-detects intent, triggers on score, explains what matched |
 
 ---
-## 🚀 Quick start (30 seconds)
 
-### 1. Install
+## ⚡ Core Capability Comparison
+
+| Capability | Carlos Flow | Native MCP Server | Prompts / Scripts |
+|------------|-------------|-------------------|-------------------|
+| **Scope enforcement** | ✅ Runtime `git diff` | ❌ None | ❌ Honor system |
+| **Real verification** | ✅ `spawn` + capture; PASS needs proof | ❌ None | ❌ Agent says so |
+| **Tamper-proof audit** | ✅ SHA-256 chained hashes | ❌ None | ❌ None |
+| **Controlled bypass** | ✅ Explicit `confirmed=true` + auto-clear | ❌ None | ❌ One sentence kills all |
+| **Honest dispatch quota** | ✅ Counts only dispatches | ❌ None | ❌ None |
+| **Independent review** | ✅ Built-in `auditor` role | ❌ None | ❌ Optional |
+| **Snapshot + restore** | ✅ Auto, atomic plan | ❌ None | ❌ Manual `git revert` |
+| **Daemon lifecycle** | ✅ Fully auto (Cindy) | ❌ Manual | ❌ Manual |
+| **Smart triggering** | ✅ 3-layer scoring + explainable decision | ❌ None | ❌ None |
+
+> 📋 **Full QA Report**: [docs/QA_REPORT_v2.5.5.md](https://github.com/skyer-now/carlos-flow/blob/main/docs/QA_REPORT_v2.5.5.md) (3rd-party read-only audit, 13/13 mutants caught)  
+> 🧬 **Mutation Report**: [docs/MUTATION_REPORT_v2.5.5.md](https://github.com/skyer-now/carlos-flow/blob/main/docs/MUTATION_REPORT_v2.5.5.md)
+
+---
+
+## 🚀 30-Second Quick Start
+
+### 1. Install (Single package, zero conflicts)
 ```bash
-npm install -g carlos-flow-cindy
+npm install -g carlos-flow
 ```
-> ⚠️ **If you get `ETARGET: No matching version found`** — that is npm's **registry metadata cache** being stale,
-> not a missing version. Clear the cache and retry:
-> ```bash
-> npm cache clean --force
-> ```
-> To confirm the version really exists: `npm view carlos-flow-cindy versions`
+> ⚠️ `ETARGET` error? Clear cache: `npm cache clean --force && npm view carlos-flow versions`
 
-### 2. Configure
+### 2. One-Command Init (Pick your platform)
+| Platform | Command | Output |
+|----------|---------|--------|
+| **Cindy** | `carlos-flow init --target cindy` | `~/.cindy/ghosts/carlos-flow.json` |
+| **OpenCode** | `carlos-flow init --target opencode` | `~/.config/opencode/plugin/opencode.json` + project `.mcprc` |
+| **Cursor / Windsurf** | `carlos-flow init --target cursor` | Project `.cursor/mcp.json` |
+| **Cline** | `carlos-flow init --target cline` | Project `.cline/mcp.json` |
+| **VS Code (Copilot)** | `carlos-flow init --target vscode` | Project `.vscode/mcp.json` |
+| **Claude Desktop** | `carlos-flow init --target claude` | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)<br>`%APPDATA%\Claude\claude_desktop_config.json` (Windows) |
 
-The Cindy edition installs from the **plugin marketplace**: Cindy → Settings → Plugins → Browse marketplace →
-search `carlos-flow` → Install, then fill in the environment variables on the plugin settings page
-(equivalent to the repo's `.env.example`).
+> 💡 **Env vars** (optional, defaults work):  
+> `CARLOS_FLOW_HOME=~/.carlos-flow` — state/audit dir (cross-platform)  
+> `CARLOS_FLOW_MCP_ROOT=/path/to/carlos-flow` — repo root for source installs
 
+### 3. Restart & Verify
 ```bash
-# or from source
-cp .env.example .env      # edit: CARLOS_FLOW_MCP_ROOT, CARLOS_FLOW_HOME
-```
-
-### 3. Set the environment variables
-
-```bash
-# 把下面两行换成你自己的实际路径
-CARLOS_FLOW_MCP_ROOT=/opt/carlos-flow-cindy     # Windows 例：D:/apps/carlos-flow-cindy
-CARLOS_FLOW_HOME=~/.carlos-flow              # Windows 例：C:/Users/<你的用户名>/.carlos-flow
-BRIDGE_PORT=19099
-```
-
-### 4. Restart and verify
-
-```bash
-# ask Cindy “走门禁”, or verify via the CLI
+# CLI verify
 node client/carlos.js flow_status '{"sessionId":"probe"}'
+# Expect has_card: false = service healthy
 ```
-> Expected output contains `has_card: false`, which means the service is alive.
-
-> 📁 On first run a state directory is created under `CARLOS_FLOW_HOME` (default `~/.carlos-flow`),
-> holding the **audit log** and **file snapshots**. **Do not delete it manually** — that would break the audit chain.
 
 ---
-## 🌟 Core capabilities
-#### 🆕 Smart trigger engine — `src/trigger.js`
-> **Decision → judgment → activation**, end to end: decides *before* the workflow starts whether this is the moment to run the gate, then turns that verdict into **real gate actions**.
 
-##### 🔁 Decision & activation flow
-```mermaid
-flowchart LR
-    U[User input] --> L1{"L1 dynamic cap<br/>still allowed?"}
-    L1 -->|"throttled"| T["throttled<br/>reports the real score<br/>takes no action"]
-    L1 -->|"allowed"| L2{"L2 three-axis score<br/>keyword + context + intent"}
-    L2 -->|"< 10"| I["ignore"]
-    L2 -->|"10 ~ 15"| R["review<br/>suggest manual start"]
-    L2 -->|"≥ 15"| L3{"≥ 25 and<br/>confidence ≥ 0.8?"}
-    L3 -->|"no"| M["manual<br/>advice only<br/>no auto execution"]
-    L3 -->|"yes"| A["✅ activated"]
-    A --> A1["flow_add_user_msg<br/>record the user text"]
-    A1 --> A2["flow_submit_requirement<br/>submit a read_only placeholder card"]
-    A2 --> G{"Gate<br/>scope / acceptance / verify.cmd<br/>filled in?"}
-    G -->|"not yet"| B["flow_claim / flow_dispatch<br/>refuse to dispatch"]
-    G -->|"yes"| C["normal dispatch<br/>executor → auditor"]
+## 🧠 Smart Trigger Engine — "The Workflow Knows When to Show Up"
+
+### 3-Layer Architecture, Explainable Decisions
+
+```
+User Input
+    ↓
+L1: DynamicTriggerManager (Dynamic Limit)
+    - Computes current trigger limit: 5 + session_hrs×0.5 + complexity×2 − window_triggers×0.3, cap 15
+    - Min 5 min between triggers; more triggers → lower limit (penalty, not reward)
+    ↓
+L2: TriggerScorer (3-Dimensional Scoring, max 38)
+    - Keywords 50: Only workflow terms (workflow/gate/dispatch/audit/task-card…), NOT "implement/add/api"
+    - Context 30: Workflow-relevant context
+    - Intent 20: User behavior patterns
+    ↓
+L3: TriggerDecisionEngine (4-Tier Decision)
+    - trigger  (≥15 & confidence≥0.8) → Auto-activate
+    - review (10~15)                → Suggest manual start
+    - ignore  (<10)                 → Silent ignore
+    - throttled                     → Return real score, no action
+    ↓
+Activation (Auto Tier)
+    1. flow_add_user_msg     — User utterance stored, becomes quote anchor source
+    2. flow_submit_requirement (activation:true) — Submit read_only placeholder card, session enters gate state
+    3. activation_pending    — Missing scope/acceptance/verify.cmd blocks claim/dispatch/verdict
+    4. Resubmit complete card — Gate opens, normal dispatch
 ```
 
-##### What activation actually does (it is not just a log line)
-| Stage | Action | Effect |
-|-------|--------|--------|
-| **Judgment** | L1 cap → L2 scoring → L3 four-way decision | Produces `decision` + `score` + `confidence` + `breakdown` |
-| **Translation** | `buildActivationPlan()` | Turns the verdict into an **executable MCP action sequence** |
-| **Activation ①** | `flow_add_user_msg` | The user's own words become the anchor source for the card's `quote` |
-| **Activation ②** | `flow_submit_requirement` (`activation: true`) | Submits a `read_only` placeholder card — the session **enters the gated state** |
-| **Gate** | `activation_pending` | Until `scope` / `acceptance` / `verify.cmd` are filled in, `flow_claim`, `flow_dispatch` and `flow_verdict` all **refuse** (no "PASS without ever running it") |
-| **Release** | Resubmit the complete card | `activation_pending` clears → normal dispatch proceeds |
+### Key Features
+- 🎚️ **Dynamic Limit**: Longer session, complex task → higher limit; frequent triggers → tighter limit
+- 🛡️ **Non-Intrusive**: 5-min minimum interval; throttled still returns real score & confidence
+- 📊 **Transparent Scoring**: Every call returns full `breakdown` (matched keywords / context / intent)
+- 🧠 **Feedback Learning**: Majority negative feedback → auto-raises threshold, more conservative
+- 🇨🇳 **Chinese Ready**: Built-in Chinese workflow terms; ordinary dev requests **don't false-trigger**
 
-> Safety constraint: when the session **already has a card**, auto-activation skips card creation (it never overwrites an existing task). Auto-activation only handles "record + enter the gate" — it **never decides which files may change** on the agent's behalf.
+> 📖 **Full Guide**: [TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
 
-##### Code usage
-```javascript
-import TriggerEngine from './src/trigger.js';
+---
 
-const engine = TriggerEngine.create('session-123');
-const result = engine.shouldTrigger('run dispatch workflow', { complexity: 1.2 });
+## 🏗️ System Architecture
 
-// {
-//   shouldTrigger: true,
-//   decision: 'trigger',        // trigger | review | ignore | throttled
-//   score: 38,                  // weighted total, 0~38
-//   confidence: 0.9,
-//   breakdown: { keyword: {...}, context: {...}, intent: {...} },
-//   action: { type: 'workflow_trigger', recommendedAction: 'auto' },
-//   activationPlan: {           // ← the verdict translated into actions
-//     activated: true,
-//     steps: [
-//       { tool: 'flow_add_user_msg',      auto: true  },
-//       { tool: 'flow_submit_requirement', auto: true  },
-//       { tool: 'flow_submit_requirement', auto: false, needsFill: ['scope','acceptance','verify.cmd'] }
-//     ],
-//     pendingFields: ['scope', 'acceptance', 'verify.cmd'],
-//     prompt: '【Carlos 触发引擎已激活工作流】…'
-//   }
-// }
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      User / Agent                                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  MCP Client (client/carlos.js)                                   │
+│  - Smart trigger check (flow_trigger_check)                      │
+│  - Auto bridge launch, health check, token auth                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │ JSON-RPC (stdio)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  MCP Server (src/index.js) — Core Toolset                        │
+│  ├── flow_submit_requirement  — Trace / Submit task card         │
+│  ├── flow_claim / flow_dispatch — Claim / Dispatch (with snap)  │
+│  ├── flow_run_verify          — Real verify.cmd execution        │
+│  ├── flow_verdict             — Verdict PASS/DIRECTION/LOCAL     │
+│  ├── flow_check_scope         — Scope enforcement                │
+│  ├── flow_status / flow_audit — Status query / Audit stream      │
+│  ├── flow_bypass              — Controlled bypass                │
+│  ├── flow_revert_plan         — Atomic restore plan              │
+│  └── flow_trigger_check       — Smart trigger scoring            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+        ┌──────────┐   ┌──────────┐   ┌──────────┐
+        │ State    │   │ Audit    │   │ File     │
+        │ (gate-   │   │ (gate-   │   │ (snap-   │
+        │  state)  │   │  audit)  │   │  shots)  │
+        └──────────┘   └──────────┘   └──────────┘
+              │               │               │
+              └───────────────┼───────────────┘
+                              ▼
+                    ┌──────────────────┐
+                    │ Trigger Engine   │
+                    │ (trigger-state/) │
+                    └──────────────────┘
 ```
 
-##### One-line activation from the CLI
+---
+
+## 📦 Package Structure (Single Package, Zero Platform Coupling)
+
+```
+carlos-flow/
+├── client/carlos.js                    # CLI entry (init --target)
+├── src/index.js                        # Core MCP Server (stdio, std protocol)
+├── src/trigger.js                      # Smart Trigger Engine (3-layer)
+├── src/state.js                        # State / Audit / Anchor source (~ expansion)
+├── src/card.js / dispatch.js / protocol.js
+├── bridge/mcp-bridge.js                # Cindy: daemon + token auth
+├── plugins/carlos-flow-trigger.js      # OpenCode: chat.message hook
+├── ghost.json                          # Cindy manifest (__ROOT__ placeholder)
+├── opencode.json / .template           # OpenCode config (rendered + template)
+├── .mcprc.template                     # OpenCode MCP config template
+├── trigger-config.usable.json          # Trigger default config (Chinese terms)
+├── trigger-config.example.json         # Trigger config example
+├── templates/                          # 6 platform init templates
+│   ├── cursor/mcp.json
+│   ├── cline/mcp.json
+│   ├── vscode/mcp.json
+│   └── claude/claude_desktop_config.json
+└── test/                               # 128 test cases (all passing)
+    ├── smoke.js / e2e-carlos.mjs / p0-gates.mjs
+    ├── trigger-e2e.mjs / concurrency-e2e.mjs / e2e-acceptance.mjs
+    └── mutation-check.mjs
+```
+
+---
+
+## 🛠️ Development & Testing
+
 ```bash
-# pass the real user text via triggerMessage (or the CARLOS_TRIGGER_MESSAGE env var)
-node client/carlos.js flow_status '{"sessionId":"my-task","triggerMessage":"run dispatch workflow"}'
+# Clone source
+git clone https://github.com/skyer-now/carlos-flow.git
+cd carlos-flow
+
+# Install deps
+npm install
+
+# Full test suite (128 cases, all pass)
+npm run test:all
+
+# Individual suites
+npm run test:e2e        # E2E 61 cases
+npm run test:p0         # P0 Gates 22 cases
+npm run test:trigger    # Trigger Engine 29 cases
+npm run test:concurrency # Concurrency 3 cases (zero leak, zero exploit)
+npm run test:acceptance  # Acceptance 13 cases
+npm run test:mutation   # Mutation testing (13/13 mutants caught)
+
+# Local pack
+npm pack
 ```
-> ⚠️ `triggerMessage` **must be passed explicitly** — without it automatic triggering is **entirely off**.
-> Chinese workflow words are built in (工作流 / 门禁 / 派发 / 审计 / 复核 / 任务卡 …),
-> so Chinese requests trigger too; override the vocabulary via
-> `CARLOS_FLOW_HOME/trigger-config.json` (`keywordWeights`).
-
-##### MCP tool triggering (path ①)
-```jsonc
-// Call from any MCP host; it actually activates when the message qualifies
-{ "name": "flow_trigger_check",
-  "arguments": { "sessionId": "my-task", "message": "走门禁流程，执行 dispatch 任务" } }
-// → { "decision": "trigger", "score": 34, "activated": true, "has_card": true,
-//     "activation_pending": ["scope", "acceptance", "verify.cmd"] }
-```
-> Pass `execute: false` to score only, without taking any action.
-
-##### Custom trigger vocabulary (optional)
-**Chinese and English workflow words are built in** and work out of the box — Chinese requests
-("走门禁流程", "执行工作流") trigger normally, while ordinary development requests
-("给接口加个参数校验") do **not** misfire.
-
-To add your own words, edit `CARLOS_FLOW_HOME/trigger-config.json` (default `~/.carlos-flow/trigger-config.json`):
-
-```jsonc
-{
-  // Merged / overrides same-name entries — the default vocabulary (incl. built-in Chinese) is **kept**
-  "keywordWeights": { "评审": 3, "走查": 3 },
-  // Appended, de-duplicated
-  "readOnlyIntentWords": ["讲一下"],
-  "mutatingActionWords": ["改造一下"]
-}
-```
-
-> 📌 Merge semantics: **append, not replace**. Just write the entries you care about — no need to copy the whole default table.
-> Restart the host (MCP server / plugin) after editing for the config to be re-read.
-> Ready-made templates ship with the package: `trigger-config.usable.json` (drop-in) and `trigger-config.example.json` (documented).
-
-> **Cindy edition note**: the Cindy plugin is a `kind: "mcp"` package (a pure MCP tool set) — the host exposes no message-event hook,
-> so there is no "evaluate on every message" plugin here.
-> Use path ① (the agent calls `flow_trigger_check`) or path ② (the CLI) — the gate constraints
-> themselves (scope enforcement / real verification / rejected fake PASS) are identical either way.
-##### Engine highlights
-- **L1 dynamic cap** — `5 + sessionHours×0.5 + complexity×2 − triggersInWindow×0.3`, capped at 15
-- **L2 trigger scoring** — keywords (0–50, weight 0.5) + context (0–30, weight 0.3) + intent (0–20, weight 0.2), weighted maximum **38**
-- **L3 decision engine** — four outcomes: `trigger` / `review` (borderline, needs confirmation) / `ignore` (below 10) / `throttled` (rate-limited)
-- **Per-session isolation** — trigger history and throttling state are stored **per session file**, so sessions never throttle each other
-- **Tunable thresholds** — `triggerThreshold: 15`, `autoTriggerThreshold: 25`, `lowConfidenceThreshold: 10`
-- **Zero external dependencies** — plain JavaScript, no new npm packages
-- **Learns from feedback** — records accepted / rejected triggers (persisted); when negative feedback dominates, the **trigger threshold is raised automatically**
-
-> Full configuration and usage: [TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
-
-### 1️⃣ Real verification — `flow_run_verify`
-```typescript
-const result = await runVerifyCommand(card.verify.cmd, cwd);
-// { ok: boolean, exitCode: number, stdout: string, stderr: string, durationMs: number }
-```
-Actually spawns the command. Captures full output. 60-second circuit breaker. No "trust me, it passed."
-### 2️⃣ Scope enforcement — `flow_check_scope`
-```typescript
-const result = enforceScope(scopeWhitelist, changedFiles);
-// { ok: boolean, violations: string[] }
-```
-Machine-level comparison of the working tree against the card's whitelist. File-level precision, zero false positives on unchanged files.
-### 3️⃣ Tamper-proof audit chain — `verifyAuditChain`
-```typescript
-const result = verifyAuditChain({ sinceIndex: 0 });
-// { ok: boolean, brokenAt?: number, detail?: string }
-```
-Every record carries `prevHash`, `hash` and `seq`. A single edited byte invalidates everything downstream — mathematically, not administratively.
-### 4️⃣ Controlled bypass — `flow_bypass` + `isBypassed()`
-- Must be explicitly enabled (`bypass=true` **and** `confirmed=true`)
-- Auto-resets on every dispatch — you cannot "forget to turn it off"
-- Every toggle is written to the audit chain
-### 5️⃣ Honest dispatch budget — `dispatch_count`
-- Increments **only** in `flow_dispatch`; `flow_claim` / `flow_verdict` never count
-- Quota exhaustion blocks **both** claim and dispatch
-- No infinite-retry path
-### 6️⃣ Snapshot & restore — `flow_dispatch` → `flow_revert_plan`
-- Files in `scope` are snapshotted automatically before each dispatch
-- `flow_revert_plan` emits an atomic, ordered restore plan (newest first)
-- Partial rollback supported
-### 7️⃣ Independent review — `auditor` role
-- Separate four-part contract with an evidence-gathering mandate
-- Auditor must run `git status --porcelain` / `git diff` itself
-- Verdict enum is strict: `PASS` / `DIRECTION` / `LOCAL`
 
 ---
-## 📖 Use cases
-### Scenario 1 — New feature development
-```mermaid
-flowchart LR
-    A[Requirement] --> B[Submit card]
-    B --> C[Dispatch Executor]
-    C --> D[Implement]
-    D --> E[Save result]
-    E --> F[Real verify]
-    F --> G[Scope check]
-    G --> H[Dispatch Auditor]
-    H --> I[Independent review]
-    I --> J[Verdict PASS]
-```
-### Scenario 2 — Bug fix
-- Card `quote` is anchored to the user's original words — the agent cannot silently redefine the request
-- `scope` narrowed to the single file
-- `verify.cmd` runs the regression test, not a hand-written summary
-### Scenario 3 — Large refactor
-- Multi-file `scope` managed as one whitelist
-- Snapshots protect against a half-finished refactor
-- Restore plan is the safety net
-### Scenario 4 — Security audit / sensitive paths
-- T2 risk tier requires explicit `confirmed=true`
-- Sensitive paths (`config/`, `secrets/`, `infra/`, …) are flagged and gated
-- Audit chain provides tamper-evident evidence trail
-### Scenario 5 — CI / PR gating
-- Same flow, driven from CI
-- Verdict can block a merge
-- Audit log archived for compliance
+
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [TRIGGER_GUIDE.md](TRIGGER_GUIDE.md) | Smart Trigger Engine complete guide (config, scoring, activation, feedback learning) |
+| [CHANGELOG.md](CHANGELOG.md) | Version history (Keep a Changelog + SemVer) |
+| [QA Report](docs/QA_REPORT_v2.5.5.md) | 3rd-party read-only audit (13/13 mutants caught) |
+| [Mutation Report](docs/MUTATION_REPORT_v2.5.5.md) | Mutant injection details |
 
 ---
-## 🏗️ Architecture
-```mermaid
-flowchart TB
-    subgraph Cindy["Cindy App"]
-        UI[Plugin settings] --> ENV[Encrypted env vault]
-        ENV --> BR[Bridge daemon]
-    end
-    subgraph Server["MCP Server (src/)"]
-        T[14 tools] --> C[Card parse & validate]
-        C --> S[State & audit chain]
-        S --> D[Dispatch / snapshot / verify]
-    end
-    BR <-- "TCP 127.0.0.1:19099 · token · rate-limited" --> Server
-    CLI[CLI client] --> BR
-    REA[rea MCP] -. optional .-> BR
-```
-### Why a Bridge in the Cindy edition?
-|  | Cindy edition (this repo) | OpenCode edition |
-|---|---|---|
-| Transport | TCP Bridge on `127.0.0.1:19099` | Pure stdio |
-| Daemon lifecycle | **Automatic** — launched on first call, health-checked | Managed by OpenCode |
-| Configuration | Plugin settings page + env vars | `.mcprc` / `opencode.json` |
-| Secret storage | **Cindy encrypted vault** — no plaintext in code | Plaintext config (user-managed) |
-| rea integration | Built-in `client/rea.js` | Register a second MCP server |
-| Best for | Cindy App users | OpenCode 2.2.2+ users |
 
----
-## 🛠️ The 15 tools
-### 📝 Card & record
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_protocol` | Read the full protocol (tiers T0/T1/T2, contracts, error layers, state schema) | — |
-| `flow_add_user_msg` | Record the user's original words (anchor source) | `sessionId`, `text` |
-| `flow_submit_requirement` | Submit the task card (validate + record) | `goal`, `quote`, `scope`, `acceptance`, `confirmed` |
-### 🚀 Dispatch & execution
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_claim` | Claim a dispatch slot, get the four-part contract | `sessionId`, `role` (`executor`\|`auditor`) |
-| `flow_dispatch` | Generate the contract prompt + automatic file snapshot | `sessionId`, `role`, `message`, `run?` |
-| `flow_run_verify` | **Really execute `verify.cmd`** | `sessionId` |
-| `flow_check_scope` | **Machine-level scope enforcement** | `sessionId`, `paths[]` |
-### ⚖️ Verdict & status
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_verdict` | Record the verdict (`PASS`/`DIRECTION`/`LOCAL`) | `sessionId`, `verdict`, `notes` |
-| `flow_status` | Query the full gate state | `sessionId` |
-### 🔍 Audit & forensics
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_audit` | Read the audit trail (filter by type/time/session) | `sessionId`, `type?`, `since?` |
-| `flow_diff_hunks` | git diff hunk-level analysis | `sessionId`, `scope?` |
-| `flow_revert_plan` | Generate the atomic restore plan | `sessionId` |
-### 🛡️ Bypass & restore
-| Tool | Purpose | Key params |
-|------|---------|------------|
-| `flow_bypass` | Bypass switch (requires `confirmed`) | `sessionId`, `bypass`, `confirmed` |
-> Full tool reference: call `flow_protocol` at runtime — it is the authoritative, machine-readable spec.
+## 🔄 Migration Guide (From Legacy Packages)
 
----
-## ⚙️ Environment variables
-| Variable | Required | Description | Example |
-|----------|----------|-------------|---------|
-| `CARLOS_FLOW_MCP_ROOT` | ✅ | MCP source root (contains `src/` `bridge/` `client/`) | `/opt/carlos-flow-cindy` |
-| `CARLOS_FLOW_HOME` | ✅ | State / audit / snapshot root | `~/carlos-flow` |
-| `BRIDGE_PORT` | ❌ | Bridge listen port (default `19099`) | `19099` |
-| `REA_MCP_ROOT` | ❌ | rea MCP source root | `/opt/rea` |
-| `GHIDRA_HOME` | ❌ | Ghidra install dir | `/opt/ghidra_12.1.4_PUBLIC` |
-| `JAVA_HOME` | ❌ | JDK 21 install dir | `/usr/lib/jvm/java-21-openjdk` |
-| `NODE_PATH` | ❌ | Node.js executable path (default `node`) | `node` |
-> **Tip**: changes made on the Cindy plugin settings page require a **full Cindy restart** to take effect.
+| Legacy Package | New Command | Notes |
+|----------------|-------------|-------|
+| `carlos-flow-cindy` | `carlos-flow` / `carlos-flow-cindy` (alias) | Keeps `carlos-flow` generic name, adds alias |
+| `carlos-flow-opencode` | `carlos-flow-opencode` (only this) | OpenCode users switch to new command |
 
----
-## 🧪 Testing
 ```bash
-npm test              # smoke test — isolated temp dir, < 10s
-npm run test:e2e      # 16-case end-to-end suite
-npm run test:p0       # 10-case gate suite (role whitelist / scope / bypass confirmation …)
-npm run test:trigger  # 25-case trigger engine suite (incl. 10 regression cases)
-npm run test:all      # all four suites chained
+# Uninstall legacy
+npm uninstall -g carlos-flow-cindy carlos-flow-opencode
+
+# Install unified
+npm install -g carlos-flow
+
+# Re-init
+carlos-flow init --target cindy      # or opencode/cursor/cline/vscode/claude
 ```
-> No environment setup needed locally (the suites fall back to the repo root automatically). CI runs all four suites on **ubuntu-latest** and **windows-latest** for every push and pull request.
+
+> ⚠️ Legacy packages `carlos-flow-cindy` / `carlos-flow-opencode` are **Deprecated**; install warns to migrate to `carlos-flow`.
 
 ---
-## 📋 Changelog
-Full history → [CHANGELOG.md](CHANGELOG.md)
-### v2.5.5 — 2026-11-05 · Smart trigger engine + 7 real defects fixed
-| Type | Change |
-|------|--------|
-| ✨ New | Smart trigger engine (`src/trigger.js`): L1 dynamic cap / L2 three-axis scoring / L3 four-way decision |
-| ✨ New | `TRIGGER_GUIDE.md` complete usage guide (config, scoring formula, troubleshooting) |
-| ✨ New | `test/trigger-e2e.mjs` — 25 cases incl. 10 regression cases; `npm run test:all` chains all five suites |
-| ✨ New | `scripts/release.mjs` release script + `npm run check:readme` bilingual consistency hook |
-| ✨ New | `docs/QA_REPORT_v2.5.5.md` independent QA acceptance report (5 suites green) |
-| 🐛 Fixed | Trigger engine silently swallowed by `require()` in the ESM client → dynamic `import()` |
-| 🐛 Fixed | Trigger cap compared a 0–1 average against 5–15 → never fired → now uses the raw count |
-| 🐛 Fixed | History factor in the dynamic cap was additive (more triggers → higher cap) → now a penalty |
-| 🐛 Fixed | `processUserMessage()` hard-coded the session id → now passed through from context |
-| 🐛 Fixed | Trigger CLI entry never matched because of the `file:///` prefix → `fileURLToPath()` |
-| 🐛 Fixed | Score collapsed to 0 and confidence was lost while throttled → now reported honestly |
-| 🐛 Fixed | Test result file written into the publish directory → now the system temp directory |
-| 🔒 Security | `.gitignore` collision meant the npm-token-bearing `.npmrc.local` was never ignored → split rules |
-| 🔒 Security | Trigger state written to the CWD → unified under `CARLOS_FLOW_HOME` |
-| 🔒 Security | Hard-coded machine path → cross-platform `~/.carlos-flow` default |
-| 🧹 Cleanup | 42 one-off fix scripts and scratch files removed (net −5325 lines) |
-| 🔑 Release | GitHub Actions OIDC publishing — no npm token in the repo any more |
-| 📚 Docs | Removed README language-bar / version-line noise (24–26 per file → 1 at the top) |
 
-### v2.5.3 — 2026-11-04 · Fatal syntax fixes + verified gates
-| Type | Change |
-|------|--------|
-| ✨ New tools | `flow_run_verify`, `flow_check_scope` |
-| ✨ Core | `runVerifyCommand()` really executes `verify.cmd` |
-| ✨ Core | `enforceScope()` machine-level scope enforcement |
-| ✨ Core | `verifyAuditChain()` SHA-256 audit-chain validation |
-| ✨ Core | `isBypassed()` real bypass semantics |
-| 🐛 Fixed | role whitelist (only `executor`/`auditor`; typos now error) |
-| 🐛 Fixed | `dispatch_count` increments on dispatch only |
-| 🐛 Fixed | bypass auto-resets on new dispatch |
-| 🐛 Fixed | stale-card / quota / verdict-enum / param validation |
-> ⚠️ **v2.5.1 contained 18 P0 defects.** Upgrade to **v2.5.2 or later**.
-
----
-## ❓ FAQ
-| Symptom | Fix |
-|---------|-----|
-| Bridge port conflict (`EADDRINUSE`) | Change `BRIDGE_PORT`, or `lsof -ti:19099 \| xargs kill` |
-| Plugin settings changes have no effect | **Fully quit Cindy and restart** (not minimize-to-tray) |
-| Audit chain validation fails | Check `CARLOS_FLOW_HOME` permissions, or delete `audit/` and let it rebuild |
-| Verification command times out | `verify.cmd` is killed after 60s — split it into fast commands |
-| Scope violation false positive | Use relative paths in `scope`; `git diff --name-only` must match |
-| The trigger engine never fires | Check whether your input hits the `keywordWeights` vocabulary; the default list is English, so extend it for other languages |
-| The trigger engine fires too often | Raise `triggerThreshold`, increase `minTriggerIntervalSeconds`, or lower `historyCoeff` |
-| Where do trigger state files live? | Under `CARLOS_FLOW_HOME` (default `~/.carlos-flow`) — never in the current working directory |
-
----
-## 📄 License
-MIT — see [LICENSE](LICENSE)
-
----
 ## 🤝 Contributing
-PRs welcome! Please make sure `npm test` and `npm run test:e2e` pass first. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+PRs welcome! Run `npm run test:all` first — **128/0 must pass**.
 
 ---
-**Using OpenCode instead?** → [carlos-flow-opencode](https://github.com/skyer-now/carlos-flow-opencode) — pure stdio, no Bridge, configured via `.mcprc` / `opencode.json`.
+
+## 📄 License
+
+MIT © Carlos Flow Contributors
+
+---
+
+## 🔗 Links
+
+- **GitHub**: https://github.com/skyer-now/carlos-flow
+- **npm**: https://www.npmjs.com/package/carlos-flow
+- **Issues**: https://github.com/skyer-now/carlos-flow/issues
+- **Changelog**: [CHANGELOG.md](CHANGELOG.md)
