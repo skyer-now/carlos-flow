@@ -254,9 +254,15 @@ function callMCP(method, params) {
     const reqId = Math.floor(Math.random() * 100000000) + 2;
     let resolved = false;
 
+    // 超时必须大于服务端的最长执行时间：
+    //   · flow_run_verify 的服务端超时是 120s（verify.cmd 真实执行）
+    //   · 其余工具都是毫秒级
+    // 旧实现统一用 5s —— 结果是 CLI 调 flow_run_verify 永远超时失败，
+    // 而 MCP server 那边还在正常跑命令，用户只看到「超时」看不到真实退出码。
+    const timeoutMs = Number(process.env.CARLOS_MCP_TIMEOUT_MS) || 180000;
     const timer = setTimeout(() => {
-      if (!resolved) { resolved = true; socket.destroy(); reject(new Error("超时 (5s)")); }
-    }, 5000);
+      if (!resolved) { resolved = true; socket.destroy(); reject(new Error(`超时 (${Math.round(timeoutMs / 1000)}s)`)); }
+    }, timeoutMs);
 
     socket.on("connect", () => {
       socket.write(JSON.stringify({ jsonrpc: "2.0", id: reqId, method, params: { ...params, _token: BRIDGE_TOKEN } }) + "\n");

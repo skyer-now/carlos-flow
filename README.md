@@ -1,268 +1,468 @@
-# Carlos Flow — 统一分发版（Cindy / OpenCode / Cursor / Cline / VS Code / Claude Desktop）
+# Carlos Flow
 
-> **面向 AI 编码 Agent 的机械门禁框架**：留痕 → 派发 → 验证 → 裁定 → 审计 → 还原  
-> **把"相信 Agent"变成"验证 Agent"**——机器级 scope 限制、真实命令执行、防篡改审计链、可控免检、诚实派发配额、独立复核、快照还原。
+[![npm](https://img.shields.io/npm/v/carlos-flow.svg)](https://www.npmjs.com/package/carlos-flow)
+[![npm downloads](https://img.shields.io/npm/dm/carlos-flow.svg)](https://www.npmjs.com/package/carlos-flow)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org)
+[![MCP](https://img.shields.io/badge/MCP-1.29%2B-blue.svg)](https://modelcontextprotocol.io)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg)](./.github/workflows/ci.yml)
 
-**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)  
-**版本 / Version:** 2.5.9 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+  
-**包名:** `carlos-flow`（单一包，取代 `carlos-flow-cindy` 与 `carlos-flow-opencode`）
-
----
-
-## 🎯 为什么需要 Carlos Flow？
-
-| 痛点 | 传统 AI 编码现状 | Carlos Flow 的机械性答案 |
-|------|-----------------|--------------------------|
-| **越界改动** | "只改 `src/auth.py`" 是建议，Agent 照样改半个仓库 | `enforceScope()` 运行时 `git diff` 对比卡片白名单，**越界直接阻断派发** |
-| **验证表演** | Agent 汇报"测试通过"，无人能证明 | `runVerifyCommand()` 真实 `spawn` 执行 `verify.cmd`，捕获 stdout/stderr/exitCode；**记 PASS 前必须有验证通过证据** |
-| **可洗白的审计** | 普通文件日志——可删可改 | SHA-256 **链式审计日志**（`prevHash`→`hash`），改一条全链断裂 |
-| **失控的免检** | 一句话关闭所有防护 | 免检需卡片显式 `confirmed=true`，**每次派发自动清零** |
-| **无限重试** | 领卡即重置计数，可无限派发 | `dispatch_count` 只在派发时 +1，耗尽同时拦截 claim 和 dispatch |
-| **自证式复核** | 同一个 Agent 既实现又审批 | 内置 `auditor` 角色，独立合同，裁定严格三档 `PASS/DIRECTION/LOCAL` |
-| **改坏无法回退** | 只能手动 `git revert` | 派发前自动快照 → `flow_revert_plan` 生成原子还原计划 |
-| **每次手动喊话启动** | 不喊就不启动，忘了就裸奔 | **智能触发引擎**自动识别意图，评分达标才触发，且告诉你命中了什么 |
+**语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
 
 ---
 
-## ⚡ 核心能力对比
+> **AI 编码 Agent 的机械门禁（Mechanical Gate）**
+>
+> 留痕 → 派发 → 验证 → 裁定 → 审计 → 还原
+>
+> 把「相信 Agent」变成「**验证** Agent」——约束写在代码里，不写在提示词里。
+
+---
+
+## 📌 这是什么（TL;DR）
+
+Carlos Flow 是一个 **MCP Server**，为 AI 编码 Agent 提供**可执行、可审计、不可自欺**的工作流门禁。
+
+普通 Agent 工作流的问题在于：约束都是**建议性的**。
+
+| 你说 | Agent 实际做的 |
+|------|--------------|
+| "只改 `src/auth.py`" | 客气地点头，然后把半个仓库重写了 |
+| "跑一下测试" | 汇报"测试通过"，其实根本没跑 |
+| "记录一下过程" | 在普通文件里写几行日志 —— 可删可改 |
+
+Carlos Flow 的做法是：**约束全部落在代码里，用运行时事实校验，不信自述。**
+
+- 越界？→ 运行时 `git diff` 对比卡片白名单，**直接阻断派发**
+- 说测试通过？→ 真实 `spawn` 执行 `verify.cmd`，**记 PASS 前必须有通过的 exitCode**
+- 审计日志？→ SHA-256 **链式哈希**（`prevHash` → `hash`），**改一条全链断裂**
+- 想跳过？→ 免检需显式 `confirmed=true`，且**每次派发自动清零**
+
+**一句话**：它把「代码评审的门禁」搬到了 AI Agent 上，而且门禁本身是机器执行、不是人执行。
+
+---
+
+## 🎯 解决的 8 个真实问题
+
+| # | 问题 | 传统现状 | Carlos Flow 的机械化答案 |
+|---|------|---------|------------------------|
+| 1 | **越界改动** | "只改这些文件"是建议不是规则 | `enforceScope()` 运行时 `git diff` 比对白名单，越界**阻断派发** |
+| 2 | **验证表演** | Agent 自述"测试通过"，无人能证明 | `runVerifyCommand()` 真实执行，捕获 stdout/stderr/exitCode；**无验证证据不许记 PASS** |
+| 3 | **可洗白审计** | 普通文件日志 —— 可删可改 | SHA-256 链式哈希审计，**改一条全链断裂** |
+| 4 | **失控免检** | 一句话关闭所有防护 | 需卡片显式 `confirmed=true`，**每次派发自动清零** |
+| 5 | **无限派发** | 领卡即重置计数，可无限重试 | `dispatch_count` 仅在派发时 +1，耗尽同时拦截 claim / dispatch |
+| 6 | **自证式复核** | 同一 Agent 既实现又审批 | 内置 `auditor` 角色 + 独立合同，裁定严格三档 |
+| 7 | **改坏无法回退** | 只能手动 `git revert` | 派发前自动快照 → `flow_revert_plan` 生成原子还原计划 |
+| 8 | **每次手动喊话** | 不喊就不启动，忘了就裸奔 | **智能触发引擎**自动识别意图，评分达标才触发并解释命中了什么 |
+
+---
+
+## ✨ 核心亮点
+
+### 1. 零分叉的跨平台架构
+一套核心 MCP Server，**6 大平台**开箱即用。平台差异只在初始化模板，核心逻辑**零分叉**。
+
+```
+carlos-flow (单一 npm 包)
+├── src/index.js              ← 核心 MCP Server（纯标准协议，零平台耦合）
+├── client/carlos.js          ← CLI + init --target <平台>
+├── bridge/                   ← Cindy 专属：后台常驻 Bridge
+├── plugins/                  ← OpenCode 专属：chat.message 钩子
+└── templates/                ← Cursor / Cline / VS Code / Claude 模板
+```
+
+### 2. 智能触发引擎 —— 工作流会自己认出该上场的时候
+三层架构，**每次决策都给出可解释的 breakdown**（命中了哪些词、多少分、为什么）。
+
+- **L1 动态上限**：`5 + 会话时长×0.5 + 复杂度×2 − 窗口内已触发×0.3`，封顶 15
+- **L2 三维评分**：关键词 50 / 上下文 30 / 意图 20，加权满分 38
+- **L3 四档决策**：`trigger` / `review` / `ignore` / `throttled`
+
+中文流程词**内置**（工作流/门禁/派发/审计/任务卡/子代理…），普通开发需求**不会误触发**。
+
+### 3. 反自欺的激活闸门
+自动触发**不等于**直接放行。激活后进入 `activation_pending` 状态：
+在 `scope` / `acceptance` / `verify.cmd` 补齐之前，`flow_claim` / `flow_dispatch` / `flow_verdict` **一律拒绝**。
+
+> 防的是「占位卡 → 直接派发 → 直接记 PASS」的假闭环。
+
+### 4. Fail-closed 语义
+空 `scope` 判定为**全部越界**（而不是"白名单为空=随便改"）。这是安全默认值，不是业务默认值。
+
+### 5. 变异测试守护
+13 类变异体（注入退化）**13/13 全部被测试抓住**。锚点唯一性由 `npm run check:anchors` 守护，防止测试"静默失去守护作用"。
+
+### 6. 跨进程并发安全
+`flow_submit_requirement` 的读-改-写被包在**跨进程排他锁**里（`mkdir` 原子性）。
+红队实测 40 轮并发复现 4 次的状态丢失，现在**泄漏 0/453**。
+
+---
+
+## 🏗️ 技术框架
+
+### 整体架构
+
+```mermaid
+flowchart TB
+    subgraph Host["宿主 Agent 平台"]
+        Cindy[Cindy<br/>ghost.json]
+        OpenCode[OpenCode<br/>plugin + .mcprc]
+        Cursor[Cursor / Cline<br/>VS Code / Claude]
+    end
+
+    subgraph Client["客户端层"]
+        CLI["client/carlos.js<br/>CLI + init + 触发检查"]
+        Bridge["bridge/mcp-bridge.js<br/>常驻守护 + Token 认证"]
+        Plugin["plugins/carlos-flow-trigger.js<br/>chat.message 钩子"]
+    end
+
+    subgraph Core["核心 MCP Server (src/index.js) — 15 个工具"]
+        Protocol["flow_protocol"]
+        Submit["flow_submit_requirement"]
+        Dispatch["flow_claim / flow_dispatch"]
+        Verify["flow_run_verify / flow_check_scope"]
+        Verdict["flow_verdict"]
+        Audit["flow_status / flow_audit"]
+        Trigger["flow_trigger_check"]
+    end
+
+    subgraph Engine["智能触发引擎 (src/trigger.js)"]
+        L1["L1 DynamicTriggerManager"]
+        L2["L2 TriggerScorer"]
+        L3["L3 TriggerDecisionEngine"]
+    end
+
+    subgraph Storage["持久化层 (CARLOS_FLOW_HOME)"]
+        State["gate-state/runs/<sid>/"]
+        AuditLog["gate-audit/YYYY-MM-DD.jsonl<br/>SHA-256 链式"]
+        Snap["snapshots/"]
+        TrigState["trigger-state/"]
+    end
+
+    Cindy --> CLI
+    OpenCode --> Plugin
+    Cursor --> CLI
+    Plugin --> Trigger
+    CLI --> Bridge
+    Bridge --> Core
+    Core --> Engine
+    Core --> Storage
+    Engine --> TrigState
+```
+
+### 分层职责
+
+| 层 | 位置 | 职责 | 平台耦合 |
+|----|------|------|---------|
+| **宿主适配层** | `ghost.json` / `plugins/` / `templates/` | 发现、启动、配置、生命周期 | ⚠️ 唯一有平台差异的层 |
+| **客户端层** | `client/carlos.js` / `bridge/` | CLI、触发检查、Bridge 守护 | 仅 Cindy 需要 Bridge |
+| **协议层** | `src/index.js` | 15 个 MCP 工具 + 参数校验 + 门禁语义 | ✅ 零耦合，纯标准 MCP |
+| **引擎层** | `src/trigger.js` / `src/card.js` / `src/state.js` | 触发评分、卡片校验、状态/审计 | ✅ 零耦合，纯 JS 无依赖 |
+| **持久化层** | `~/.carlos-flow/` | 状态、审计链、快照、触发历史 | ✅ 跨平台路径约定 |
+
+> **核心设计原则**：MCP 协议是**被动**的 —— 服务端不能主动推送。
+> 因此「自动触发」必须由**能拿到用户消息的那一侧**发起（宿主插件钩子 或 Agent 主动调用 `flow_trigger_check`）。
+> 两条路径共用 `src/trigger.js` 同一份实现，**行为完全一致**。
+
+---
+
+## 📊 能力矩阵
 
 | 能力 | Carlos Flow | 原生 MCP Server | 提示词 / 手写脚本 |
 |------|-------------|-----------------|------------------|
-| **越界拦截** | ✅ 运行时 `git diff` 级 | ❌ 无 | ❌ 靠自觉 |
-| **真实验证** | ✅ spawn 执行并捕获输出，记 PASS 需验证通过 | ❌ 无 | ❌ Agent 自述 |
-| **防篡改审计** | ✅ SHA-256 链式哈希 | ❌ 无 | ❌ 无 |
-| **可控免检** | ✅ 显式开启 + 自动清零 | ❌ 无 | ❌ 一句话全关 |
-| **诚实派发配额** | ✅ 只计派发 | ❌ 无 | ❌ 无 |
-| **独立复核** | ✅ 内置 `auditor` 角色 | ❌ 无 | ❌ 可选 |
-| **快照 + 还原** | ✅ 自动、原子计划 | ❌ 无 | ❌ 手动 `git revert` |
-| **守护进程生命周期** | ✅ 全自动（Cindy 版） | ❌ 手动 | ❌ 手动 |
-| **智能触发** | ✅ 三层评分 + 可解释决策 | ❌ 无 | ❌ 无 |
+| 越界拦截 | ✅ 运行时 `git diff` 级 | ❌ | ❌ 靠自觉 |
+| 真实验证 | ✅ spawn + 捕获，无证据不许 PASS | ❌ | ❌ Agent 自述 |
+| 防篡改审计 | ✅ SHA-256 链式哈希 | ❌ | ❌ |
+| 可控免检 | ✅ 显式开启 + 自动清零 | ❌ | ❌ 一句话全关 |
+| 诚实派发配额 | ✅ 只计派发 | ❌ | ❌ |
+| 独立复核 | ✅ 内置 `auditor` 角色 | ❌ | ❌ 可选 |
+| 快照 + 还原 | ✅ 自动、原子计划 | ❌ | ❌ 手动 `git revert` |
+| 守护进程生命周期 | ✅ 全自动（Cindy） | ❌ 手动 | ❌ 手动 |
+| 智能触发 | ✅ 三层评分 + 可解释决策 | ❌ | ❌ |
+| 跨平台 | ✅ 单一包 6 平台 | ⚠️ 需自己写配置 | ❌ |
 
-> 📋 **完整 QA 验收报告**：[docs/QA_REPORT_v2.5.5.md](https://github.com/skyer-now/carlos-flow/blob/main/docs/QA_REPORT_v2.5.5.md)（第三方只读验收，13/13 变异体全抓住）  
-> 🧬 **变异测试报告**：[docs/MUTATION_REPORT_v2.5.5.md](https://github.com/skyer-now/carlos-flow/blob/main/docs/MUTATION_REPORT_v2.5.5.md)
+> **信任边界说明**：手工改 `state.json` 里的 verdict 能伪造 PASS —— 状态文件不在审计哈希链内。
+> 这是**本地文件系统权限**的信任边界，不是 MCP 工具面能被绕过的漏洞：
+> 能写 `CARLOS_FLOW_HOME` 的人本来就能改自己的代码。
+> 完整说明见 [QA 验收报告](./docs/QA_REPORT_v2.5.5.md) §六。
 
 ---
 
-## 🚀 30 秒快速开始
+## 📦 安装
 
-### 1. 安装（单一包，零依赖冲突）
 ```bash
 npm install -g carlos-flow
 ```
-> ⚠️ 报 `ETARGET`？清缓存：`npm cache clean --force && npm view carlos-flow versions`
 
-### 2. 一键初始化（按你的平台选一个）
-| 平台 | 命令 | 生成产物 |
-|------|------|----------|
-| **Cindy** | `carlos-flow init --target cindy` | `~/.cindy/ghosts/carlos-flow.json` |
-| **OpenCode** | `carlos-flow init --target opencode` | `~/.config/opencode/plugin/opencode.json` + 项目 `.mcprc` |
-| **Cursor / Windsurf** | `carlos-flow init --target cursor` | 项目 `.cursor/mcp.json` |
-| **Cline** | `carlos-flow init --target cline` | 项目 `.cline/mcp.json` |
-| **VS Code (Copilot)** | `carlos-flow init --target vscode` | 项目 `.vscode/mcp.json` |
-| **Claude Desktop** | `carlos-flow init --target claude` | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)<br>`%APPDATA%\Claude\claude_desktop_config.json` (Windows) |
+> ⚠️ 报 `ETARGET: No matching version found`？这是 npm 的 **registry 元数据缓存**没刷新：
+> ```bash
+> npm cache clean --force
+> npm view carlos-flow versions    # 验证版本存在
+> ```
 
-> 💡 **环境变量**（可选，有默认值）：  
-> `CARLOS_FLOW_HOME=~/.carlos-flow` 状态/审计目录（跨平台）  
-> `CARLOS_FLOW_MCP_ROOT=/path/to/carlos-flow` 源码安装时指向仓库根目录
+**兼容性要求**：Node.js ≥ 22.0.0 | MCP SDK ≥ 1.29.0 | 零运行时外部依赖
 
-### 3. 重启并验证
+---
+
+## 🖥️ 平台支持
+
+一个包，六个平台。初始化命令会生成对应平台的配置文件。
+
+| 平台 | 初始化命令 | 生成产物 | 平台专属能力 |
+|------|-----------|----------|-------------|
+| **Cindy** | `carlos-flow init --target cindy` | `~/.cindy/ghosts/carlos-flow.json` | Bridge 自动守护 + Settings UI |
+| **OpenCode** | `carlos-flow init --target opencode` | `~/.config/opencode/plugin/opencode.json`<br/>+ 项目 `.mcprc` | `chat.message` 钩子级自动触发 |
+| **Cursor / Windsurf** | `carlos-flow init --target cursor` | 项目 `.cursor/mcp.json` | — |
+| **Cline** | `carlos-flow init --target cline` | 项目 `.cline/mcp.json` | — |
+| **VS Code (Copilot)** | `carlos-flow init --target vscode` | 项目 `.vscode/mcp.json` | — |
+| **Claude Desktop** | `carlos-flow init --target claude` | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`<br/>Windows: `%APPDATA%\Claude\claude_desktop_config.json` | — |
+
+> 💡 所有平台共用同一套配置字段：`CARLOS_FLOW_HOME`（状态目录）+ `node <root>/src/index.js`（stdio 启动）。
+
+---
+
+## 🚀 快速开始
+
+### 1. 安装并初始化
+
 ```bash
-# CLI 验证
+npm install -g carlos-flow
+carlos-flow init --target <你的平台>     # cindy | opencode | cursor | cline | vscode | claude
+```
+
+### 2. 环境变量（可选，都有默认值）
+
+```bash
+CARLOS_FLOW_HOME=~/.carlos-flow           # 状态/审计目录（跨平台统一）
+CARLOS_FLOW_MCP_ROOT=/path/to/carlos-flow # 源码安装时指向仓库根目录
+BRIDGE_PORT=19099                         # Cindy Bridge 端口
+```
+
+> 路径一律用**正斜杠**（`/home/you/apps/carlos-flow`）或**双反斜杠**（`D:\\apps\\carlos-flow`）。
+> 单反斜杠在配置里会被当成转义符，`\c`、`\o` 会被吃掉，路径直接失效。
+
+### 3. 验证服务正常
+
+```bash
 node client/carlos.js flow_status '{"sessionId":"probe"}'
-# 期望输出里 has_card: false 即表示服务正常
 ```
 
----
+期望输出 `"has_card": false` 即表示服务正常。
 
-## 🧠 智能触发引擎 —「工作流会自己认出该上场的时候」
-
-### 三层架构，决策可解释
-
-```
-用户输入
-    ↓
-L1: DynamicTriggerManager (动态上限)
-    - 计算当前触发上限：5 + 会话时长×0.5 + 复杂度×2 − 窗口内已触发×0.3，封顶 15
-    - 同会话最短间隔 5 分钟；触发越多上限越低（惩罚项）
-    ↓
-L2: TriggerScorer (三维评分，满分 38)
-    - 关键词 50：只收流程性词（工作流/门禁/派发/审计/任务卡…），不收「实现/新增/接口」
-    - 上下文 30：工作流相关语境
-    - 意图 20：用户行为模式
-    ↓
-L3: TriggerDecisionEngine (四档决策)
-    - trigger  (≥15 且置信度≥0.8) → 自动激活
-    - review (10~15)               → 建议手动启动
-    - ignore  (<10)                → 静默忽略
-    - throttled                    → 如实返回评分，不动作
-    ↓
-激活机制（自动档）
-    1. flow_add_user_msg     — 用户原话入库，成为 quote 锚点数据源
-    2. flow_submit_requirement (activation:true) — 提交 read_only 占位卡，会话进入已留痕门禁态
-    3. activation_pending    — 缺 scope/acceptance/verify.cmd 时，claim/dispatch/verdict 全拦
-    4. 补齐后重新提交完整卡  — 闸门放行，正常派发
-```
-
-### 关键特性
-- 🎚️ **动态上限**：会话越长、任务越复杂 → 上限自动放宽；触发越频繁 → 上限收紧
-- 🛡️ **不打扰**：最短间隔 5 分钟，限流时照样返回真实评分与置信度
-- 📊 **评分透明**：每次返回完整 `breakdown`（命中关键词 / 上下文词 / 意图类型）
-- 🧠 **反馈学习**：负反馈占多数时自动抬高触发阈值，更保守
-- 🇨🇳 **中文开箱即用**：内置中文流程词；普通开发需求**不会误触发**
-
-> 📖 **完整使用指南**：[TRIGGER_GUIDE.md](TRIGGER_GUIDE.md)
-
----
-
-## 🏗️ 系统架构
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        用户 / Agent                               │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  MCP Client (client/carlos.js)                                   │
-│  - 智能触发检查 (flow_trigger_check)                              │
-│  - Bridge 自动拉起、健康检查、Token 认证                         │
-└─────────────────────────────────────────────────────────────────┘
-                              │ JSON-RPC (stdio)
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  MCP Server (src/index.js) — 核心工具集                          │
-│  ├── flow_submit_requirement  — 留痕/提交任务卡                   │
-│  ├── flow_claim / flow_dispatch — 领取/派发（含快照）            │
-│  ├── flow_run_verify          — 真实执行 verify.cmd              │
-│  ├── flow_verdict             — 裁定 PASS/DIRECTION/LOCAL        │
-│  ├── flow_check_scope         — 越界拦截                         │
-│  ├── flow_status / flow_audit — 状态查询 / 审计流水              │
-│  ├── flow_bypass              — 可控免检                         │
-│  ├── flow_revert_plan         — 原子还原计划                     │
-│  └── flow_trigger_check       — 智能触发评分                     │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-        ┌──────────┐   ┌──────────┐   ┌──────────┐
-        │ 状态持久化  │   │ 审计链     │   │ 文件快照   │
-        │ (gate-state)│   │ (gate-audit)│   │ (snapshots)│
-        └──────────┘   └──────────┘   └──────────┘
-              │               │               │
-              └───────────────┼───────────────┘
-                              ▼
-                    ┌──────────────────┐
-                    │  触发引擎状态     │
-                    │ (trigger-state/) │
-                    └──────────────────┘
-```
-
----
-
-## 📦 包结构（单一包，零平台耦合）
-
-```
-carlos-flow/
-├── client/carlos.js                    # CLI 入口（含 init --target）
-├── src/index.js                        # 核心 MCP Server（stdio，标准协议）
-├── src/trigger.js                      # 智能触发引擎（三层架构）
-├── src/state.js                        # 状态/审计/锚点数据源（含 ~ 展开）
-├── src/card.js / dispatch.js / protocol.js
-├── bridge/mcp-bridge.js                # Cindy 专用：后台常驻 + Token 认证
-├── plugins/carlos-flow-trigger.js      # OpenCode 专用：chat.message 钩子
-├── ghost.json                          # Cindy 清单（__ROOT__ 占位符）
-├── opencode.json / .template           # OpenCode 配置（已渲染 + 模板）
-├── .mcprc.template                     # OpenCode MCP 配置模板
-├── trigger-config.usable.json          # 触发器默认配置（含中文词表）
-├── trigger-config.example.json         # 触发器配置示例
-├── templates/                          # 6 平台初始化模板
-│   ├── cursor/mcp.json
-│   ├── cline/mcp.json
-│   ├── vscode/mcp.json
-│   └── claude/claude_desktop_config.json
-└── test/                               # 128 个测试用例（全部通过）
-    ├── smoke.js / e2e-carlos.mjs / p0-gates.mjs
-    ├── trigger-e2e.mjs / concurrency-e2e.mjs / e2e-acceptance.mjs
-    └── mutation-check.mjs
-```
-
----
-
-## 🛠️ 开发与测试
+### 4. 走一次完整门禁
 
 ```bash
-# 克隆源码
+# ① 留痕（记录用户原话，作为 quote 锚点数据源）
+node client/carlos.js flow_add_user_msg '{"sessionId":"demo","text":"给登录接口加参数校验"}'
+
+# ② 提交任务卡（scope 是白名单）
+node client/carlos.js flow_submit_requirement '{"sessionId":"demo","goal":"加参数校验","quote":"给登录接口加参数校验","scope":["src/auth.py"],"acceptance":["非法参数返回 400"],"verify":{"cmd":"npm test"},"cwd":"/path/to/project"}'
+
+# ③ 领取派发名额
+node client/carlos.js flow_claim '{"sessionId":"demo","role":"executor"}'
+
+# ④ 派发（自动快照 scope 内文件）
+node client/carlos.js flow_dispatch '{"sessionId":"demo","role":"executor"}'
+
+# ⑤ 真实执行验证命令
+node client/carlos.js flow_run_verify '{"sessionId":"demo","cwd":"/path/to/project"}'
+
+# ⑥ 记录裁定（没有验证通过证据不许记 PASS）
+node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes":"测试通过"}'
+```
+
+---
+
+## 🔧 MCP 工具参考（15 个）
+
+| 工具 | 作用 | 关键约束 |
+|------|------|---------|
+| `flow_protocol` | 读取完整门禁协议（档位、四段合同、错误分层） | — |
+| `flow_add_user_msg` | 写入用户原话 | **quote 锚点的唯一数据源** |
+| `flow_submit_requirement` | 提交/替换任务卡 | 按风险档强制必填项；伪填充被拒 |
+| `flow_claim` | 领取派发名额（executor / auditor） | 激活闸门未解时拒绝 |
+| `flow_dispatch` | 按四段合同派发子 Agent | 派发前自动快照 scope 内文件 |
+| `flow_save_result` | 保存子 Agent 执行结果 | — |
+| `flow_run_verify` | **真实执行** `verify.cmd` | 返回 exitCode / stdout / stderr |
+| `flow_check_scope` | 检查文件是否越界 | 空 scope → fail-closed 全部越界 |
+| `flow_verdict` | 记录裁定 PASS / DIRECTION / LOCAL | 未派发不许 PASS；验证未过不许 PASS |
+| `flow_status` | 查询门禁状态 | 暴露 `activation_pending` / `verify_passed` |
+| `flow_audit` | 读取审计流水 | 含 6 类激活相关事件 |
+| `flow_diff_hunks` | 解析 `git diff -U0` 的 hunk 范围 | — |
+| `flow_bypass` | 开关免检模式 | 需 `confirmed=true`；派发自动清零 |
+| `flow_revert_plan` | 生成原子还原计划 | 只返回计划，不自动执行 |
+| `flow_trigger_check` | 智能触发检查 | 达标即实际激活；未达标如实返回评分 |
+
+---
+
+## ⚙️ 配置
+
+### 触发器配置
+
+路径：`$CARLOS_FLOW_HOME/trigger-config.json`（首次 `init` 自动生成）
+
+```json
+{
+  "keywordWeights": {
+    "评审": 5
+  },
+  "readOnlyIntentWords": ["讲一下"],
+  "mutatingActionWords": ["重构一下"]
+}
+```
+
+**合并语义**（重要）：
+- `keywordWeights` → **对象合并**（自定义词覆盖同名默认词，其余默认词保留）
+- 词表数组 → **追加去重**（扩展，不是替换）
+- 其余标量 → 覆盖
+
+> 早期实现是浅合并，用户写一个自定义词就把整个默认词表（含内置中文流程词）丢掉 —— 中文场景重新变回 0 分。已修复。
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|-------|------|
+| `CARLOS_FLOW_HOME` | `~/.carlos-flow` | 状态 / 审计 / 快照目录。`~` 会被展开 |
+| `CARLOS_FLOW_MCP_ROOT` | 自动推导 | 源码安装时指向仓库根目录 |
+| `BRIDGE_PORT` | `19099` | Cindy Bridge 监听端口 |
+| `CARLOS_BRIDGE_TOKEN` | 内置默认值 | Bridge 本地认证 token |
+| `CARLOS_BRIDGE_TIMEOUT_MS` | `180000` | Bridge 请求超时（需 > 服务端 120s 验证上限） |
+| `CARLOS_MCP_TIMEOUT_MS` | `180000` | CLI 客户端 MCP 调用超时 |
+| `CARLOS_TRIGGER_MESSAGE` | — | CLI 模式下注入触发检查用的用户原话 |
+| `OPENCODE_DB_PATH` | 多路探测 | OpenCode 会话库路径（读用户原话用） |
+
+---
+
+## 🧪 开发
+
+```bash
 git clone https://github.com/skyer-now/carlos-flow.git
 cd carlos-flow
-
-# 安装依赖
 npm install
 
-# 跑全套测试（128 个用例，全通过）
+# 全套测试（129 个用例）
 npm run test:all
 
-# 单独跑
-npm run test:e2e        # 端到端 61 项
-npm run test:p0         # P0 门禁 22 项
-npm run test:trigger    # 触发引擎 29 项
-npm run test:concurrency # 并发 3 项（零泄漏、零利用）
-npm run test:acceptance  # 验收 13 项
-npm run test:mutation   # 变异测试（13/13 变异体全抓住）
+# 单项
+npm run test:e2e          # 端到端 62 项
+npm run test:p0           # P0 门禁 22 项
+npm run test:trigger      # 触发引擎 29 项
+npm run test:concurrency  # 跨进程并发 3 项
+npm run test:acceptance   # 验收 13 项
+npm run test:mutation     # 变异测试（13/13 变异体全抓住）
+npm run check:anchors     # 变异锚点唯一性守护
+npm run check:readme      # 双语 README 一致性
 
-# 本地打包
+# 打包
 npm pack
 ```
 
+### 测试覆盖矩阵
+
+| 套件 | 数量 | 覆盖内容 |
+|------|------|---------|
+| `smoke` | 4 | 卡片解析 / 校验 / 状态往返 |
+| `e2e-carlos` | 62 | 全流程 + 激活闸门 + 假闭环防护 + 越界拦截 |
+| `p0-gates` | 22 | P0 级门禁语义（伪填充、类型校验、fail-closed） |
+| `trigger-e2e` | 29 | 三层引擎 + 会话隔离 + 配置合并 + `~` 展开 |
+| `concurrency-e2e` | 3 | 跨进程并发零泄漏 / 零利用 |
+| `e2e-acceptance` | 13 | MCP 路径触发 + 中文词表 + 插件真实开卡 |
+| **合计** | **129** | **全部通过** |
+
 ---
 
-## 📚 详细文档
+## 📚 文档
 
 | 文档 | 说明 |
 |------|------|
-| [TRIGGER_GUIDE.md](TRIGGER_GUIDE.md) | 智能触发引擎完整使用指南（配置、评分、激活、反馈学习） |
-| [CHANGELOG.md](CHANGELOG.md) | 版本历史（遵循 Keep a Changelog + SemVer） |
-| [QA 验收报告](docs/QA_REPORT_v2.5.5.md) | 第三方只读验收（13/13 变异体全抓住） |
-| [变异测试报告](docs/MUTATION_REPORT_v2.5.5.md) | 变异体注入细节 |
+| [TRIGGER_GUIDE.md](./TRIGGER_GUIDE.md) | 智能触发引擎深度指南（配置、评分、激活、反馈学习） |
+| [CHANGELOG.md](./CHANGELOG.md) | 版本历史（Keep a Changelog + SemVer） |
+| [MIGRATION.md](./MIGRATION.md) | 从 `carlos-flow-cindy` / `carlos-flow-opencode` 迁移 |
+| [QA 验收报告](./docs/QA_REPORT_v2.5.5.md) | 第三方只读验收（13/13 变异体全抓住） |
+| [变异测试报告](./docs/MUTATION_REPORT_v2.5.5.md) | 变异体注入细节与结果 |
 
 ---
 
-## 🔄 迁移指南（从旧包升级）
+## ❓ 常见问题
 
-| 旧包 | 新命令 | 说明 |
-|------|--------|------|
-| `carlos-flow-cindy` | `carlos-flow` / `carlos-flow-cindy` (别名) | 保留 `carlos-flow` 通用名，新增别名兼容 |
-| `carlos-flow-opencode` | `carlos-flow-opencode` (仅此命令) | opencode 用户请改用新命令名 |
+<details>
+<summary><b>Q: 和普通 MCP Server 有什么区别？</b></summary>
 
-```bash
-# 卸载旧包
-npm uninstall -g carlos-flow-cindy carlos-flow-opencode
+普通 MCP Server 暴露工具，**但不施加约束** —— 它信任调用方会正确使用。
+Carlos Flow 的约束在 **服务端运行时强制执行**：越界文件会被 `enforceScope()` 拦下，
+没跑过验证就不许记 PASS，审计日志改一条就断链。
+</details>
 
-# 安装统一包
-npm install -g carlos-flow
+<details>
+<summary><b>Q: 只在 Cindy 用，还需要装这么多吗？</b></summary>
 
-# 重新初始化
-carlos-flow init --target cindy      # 或 opencode/cursor/cline/vscode/claude
-```
+不需要。单一包对所有用户都是**同一个安装体积**（~106 KB），
+不需要额外下载任何平台专属依赖 —— 只是模板文件不同。
+</details>
 
-> ⚠️ 旧包 `carlos-flow-cindy` / `carlos-flow-opencode` 已标记 **Deprecated**，安装时会提示迁移至 `carlos-flow`。
+<details>
+<summary><b>Q: 会拖慢我的 Agent 吗？</b></summary>
+
+不会。门禁状态是**文件级持久化**，无数据库、无网络、无常驻进程
+（除 Cindy 版的 Bridge，它只在首次调用时拉起）。
+触发引擎是纯 JS 计算，零依赖。
+</details>
+
+<details>
+<summary><b>Q: `CARLOS_FLOW_HOME=~/.carlos-flow` 里的 `~` 会展开吗？</b></summary>
+
+会。早期版本**不会展开** —— `path.normalize` 只换分隔符，路径仍是字面量，
+状态写到「当前目录下字面名为 `~` 的目录」里，位置诡异极易丢失。
+现已统一展开（`state.js` / `trigger.js` 共用 `expandHome()`），并有回归用例守护。
+</details>
+
+<details>
+<summary><b>Q: 免检模式会不会成为后门？</b></summary>
+
+免检需**卡片上显式** `confirmed=true`，且 `bypass_ts` 必须晚于 `card_ts`（旧卡的免检不能作用于新卡）。
+最关键的是：**每次派发后自动清零** —— 免检只对当次派发生效，不会变成长期开关。
+</details>
+
+<details>
+<summary><b>Q: 中文能用吗？</b></summary>
+
+完全支持。中文流程词内置（工作流/门禁/派发/审计/复核/任务卡/子代理/流程/触发/执行/调度/留痕/裁定），
+中文需求同样能触发；普通开发需求（「给接口加个参数校验」）不会误触发。
+</details>
+
+<details>
+<summary><b>Q: 旧包还能用吗？</b></summary>
+
+能，但已标记 **Deprecated**。迁移方式见 [MIGRATION.md](./MIGRATION.md)。
+</details>
+
+---
+
+## 🔗 链接
+
+| | |
+|---|---|
+| **仓库** | https://github.com/skyer-now/carlos-flow |
+| **npm** | https://www.npmjs.com/package/carlos-flow |
+| **问题反馈** | https://github.com/skyer-now/carlos-flow/issues |
+| **更新日志** | [CHANGELOG.md](./CHANGELOG.md) |
 
 ---
 
 ## 🤝 贡献
 
-欢迎 PR！请先跑 `npm run test:all` 确保 **128/0 全通过**。
+欢迎 PR！提交前请确保：
+
+```bash
+npm run test:all        # 129/0 全通过
+npm run check:anchors   # 变异锚点未失效
+npm run check:readme    # 双语 README 未漂移
+```
+
+详见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ---
 
 ## 📄 License
 
-MIT © Carlos Flow Contributors
-
----
-
-## 🔗 相关链接
-
-- **GitHub 仓库**: https://github.com/skyer-now/carlos-flow
-- **npm 包**: https://www.npmjs.com/package/carlos-flow
-- **问题反馈**: https://github.com/skyer-now/carlos-flow/issues
-- **更新日志**: [CHANGELOG.md](CHANGELOG.md)
+[MIT](./LICENSE) © Carlos Flow Contributors

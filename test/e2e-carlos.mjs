@@ -476,6 +476,30 @@ async function main() {
   check("23c. 验证失败时 DIRECTION 仍可记录（不误伤）", r.ok && r.data?.verdict === "DIRECTION",
     r.ok ? "" : r.error);
 
+  // 23d. run_verify 的工作目录优先级：显式 cwd > 卡片提交时的项目目录 > server 进程 cwd
+  //      旧实现只用 process.cwd() —— MCP server 是**常驻进程**，cwd 是启动时的目录
+  //      （可能是几个月前的旧仓库）→ verify.cmd 在错误目录跑，路径全错，
+  //      门禁把这种失败当成「验证不通过」→ 真 PASS 被误杀。
+  const VD_SID = SID + "-verifycwd";
+  await call("flow_add_user_msg", { sessionId: VD_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: VD_SID, goal: "verify 工作目录回落到卡片项目目录", quote: QUOTE,
+    scope: [ROOT + "/README.md"], acceptance: ["verify 在卡片项目目录执行"],
+    verify: { cmd: "node -e \"process.stdout.write(process.cwd())\"" }, confirmed: true,
+  });
+  const vdSubmitted = r.ok && r.data?.ok === true;
+  await call("flow_claim", { sessionId: VD_SID, role: "executor" });
+  await call("flow_dispatch", { sessionId: VD_SID, role: "executor", message: "只读检查", run: false });
+  r = await call("flow_run_verify", { sessionId: VD_SID });
+  const vdCwd = String(r.data?.stdout || "").trim();
+  // ROOT 可能是 `.../test/..` 形式（REPO_ROOT 推导），需 resolve 归一
+  const normRoot = resolve(ROOT).replace(/\\/g, "/").toLowerCase();
+  const normCwd = vdCwd.replace(/\\/g, "/").toLowerCase();
+  const vdFallbackOk = vdSubmitted && r.ok && r.data?.ok === true &&
+    (normCwd === normRoot || normCwd.endsWith("/" + normRoot.split("/").pop()));
+  check("23d. run_verify 工作目录回落到卡片项目目录（不用 server 的陈旧 cwd）", vdFallbackOk,
+    r.ok ? `cwd=${vdCwd} expected=${resolve(ROOT)}` : r.error);
+
   // 24. 从未跑过 flow_run_verify 就记 PASS → 必须被拒；跑通后放行
   const NV_SID = SID + "-noverify";
   await call("flow_add_user_msg", { sessionId: NV_SID, text: QUOTE });

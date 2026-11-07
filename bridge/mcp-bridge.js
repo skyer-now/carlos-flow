@@ -12,7 +12,13 @@ const TOKEN = process.env.CARLOS_BRIDGE_TOKEN;
 const MCP_SERVER = process.env.CARLOS_FLOW_MCP_ROOT + "/src/index.js";
 const MAX_REQUEST_SIZE = 1024 * 1024; // 1MB
 const RATE_LIMIT = 10; // 每秒最多请求数
-const REQUEST_TIMEOUT = 5000; // 5s
+// 请求超时：必须大于服务端的最长单次执行时间。
+// 服务端 flow_run_verify 的内部超时是 120s（真实 spawn verify.cmd），
+// 其它工具都是毫秒级。
+// 旧实现固定 5s —— 结果是任何耗时 >5s 的验证命令（如 `npm test`）必然超时失败，
+// 用户只看到「Timeout」，而服务端那边命令其实跑得好好的。
+// 现在默认 180s（> 服务端 120s 上限），可用 CARLOS_BRIDGE_TIMEOUT_MS 覆盖。
+const REQUEST_TIMEOUT = Number(process.env.CARLOS_BRIDGE_TIMEOUT_MS) || 180000; // 180s
 
 if (!TOKEN) {
   process.stderr.write("[bridge] ❌ CARLOS_BRIDGE_TOKEN 未设置（fail-closed）\n");

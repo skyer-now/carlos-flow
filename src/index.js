@@ -897,17 +897,27 @@ const TOOLS = [
         if (!state.card) return fail("没有留痕，无法执行验证。");
         if (!state.card.verify || !state.card.verify.cmd) return fail("卡片未指定验证命令。");
         
-        const result = await runVerifyCommand(state.card.verify.cmd, a.cwd);
+        // 工作目录优先级：显式 cwd > 卡片提交时的项目目录 > server 进程 cwd。
+        // 旧实现只用后两者中的 process.cwd() —— MCP server 是常驻进程，
+        // 它的 cwd 是**启动时**的目录（可能是几个月前的某个旧仓库），
+        // 于是 verify.cmd 会在错误的目录里跑，测试脚本找不到、路径全错，
+        // 而门禁把这种失败当成了「验证不通过」（真 PASS 被误杀）。
+        const cardProject = state.card.env && typeof state.card.env.project === "string"
+          ? state.card.env.project
+          : "";
+        const workdir = a.cwd || cardProject || undefined;
+        const result = await runVerifyCommand(state.card.verify.cmd, workdir);
         const state2 = loadState(sessionId);
         state2.last_verify = {
           ts: new Date().toISOString(),
           cmd: state.card.verify.cmd,
+          cwd: workdir || process.cwd(),
           exitCode: result.exitCode,
           ok: result.ok,
         };
         saveState(sessionId, state2);
         
-        return ok({ ok: result.ok, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr });
+        return ok({ ok: result.ok, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, cwd: workdir || process.cwd() });
       } catch (e) {
         return fail(e && e.message ? e.message : String(e));
       }

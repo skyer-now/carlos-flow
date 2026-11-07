@@ -1,5 +1,11 @@
 # Carlos Flow 智能触发引擎使用指南
 
+> **版本**：v2.6.0
+> **适用**：`carlos-flow` 单包架构（2.6.0+）
+> **代码位置**：`src/trigger.js`（零外部依赖的纯 JavaScript 实现）
+
+---
+
 ## 📋 概述
 
 Carlos Flow 智能触发引擎是一个三层智能系统，能够自动感知用户意图并在合适的时机触发工作流。它具备以下特点：
@@ -13,6 +19,22 @@ Carlos Flow 智能触发引擎是一个三层智能系统，能够自动感知�
 5. **会话隔离** - 触发历史与限流状态按 session 分文件存放，多会话互不干扰
 6. **用户反馈学习** - 记录用户接受/拒绝，持续优化触发
 7. **零外部依赖** - 纯 JavaScript 实现，无需 npm 包
+8. **可解释性** - 每次决策都返回完整 `breakdown`（命中词 / 语境词 / 意图类型 + 各维度得分）
+
+### 三层架构总览
+
+```mermaid
+flowchart LR
+    U["用户输入"] --> L1{"L1 DynamicTriggerManager<br/>还能触发吗？"}
+    L1 -->|"间隔不足 / 超上限"| T["throttled<br/>如实返回评分<br/>不动作"]
+    L1 -->|"可以"| L2{"L2 TriggerScorer<br/>三维评分"}
+    L2 --> L3{"L3 DecisionEngine<br/>四档决策"}
+    L3 -->|trigger| A["✅ 激活"]
+    L3 -->|review| R["给出建议<br/>不自动执行"]
+    L3 -->|ignore| I["静默忽略"]
+    A --> G["activation_pending<br/>闸门：claim/dispatch/verdict 全拦"]
+    G -->|"补齐后"| OK["放行"]
+```
 
 ### 系统架构
 
@@ -116,6 +138,10 @@ Carlos Flow 智能触发引擎是一个三层智能系统，能够自动感知�
 - `historyCoeff`: 历史触发频率系数
 - `decayRate`: 历史触发衰减率（随时间减弱）
 
+> ⚠️ **公式里 `historyCoeff` 是减项（惩罚），不是加项。**
+> 早期实现误写成加法 —— 触发越多上限反而越高，封顶逻辑自我抵消，
+> 于是「窗口内次数达上限」分支永远不可达。已修正并有回归用例守护。
+
 #### 评分参数
 - `keywordWeights`: 关键词权重配置
 - `contextRelevanceWeight`: 上下文相关性权重
@@ -125,6 +151,169 @@ Carlos Flow 智能触发引擎是一个三层智能系统，能够自动感知�
 - `triggerThreshold`: 最低触发阈值（15 分以上触发）
 - `autoTriggerThreshold`: 自动触发阈值（25 分以上自动）
 - `lowConfidenceThreshold`: 低置信度阈值（低于此忽略）
+
+---
+
+## 🧮 评分公式（完整推导）
+
+### 动态上限
+
+```
+rawLimit = baseTriggerLimit
+         + (sessionAgeHours × sessionLengthCoeff)
+         + (sessionComplexity × complexityCoeff)
+         - (triggersInWindow × historyCoeff)
+
+dynamicLimit = clamp(floor(rawLimit), 1, maxTriggerLimit)
+```
+
+**示例**（会话 2 小时、复杂度 1.5、窗口内已触发 3 次）：
+
+```
+rawLimit = 5 + (2 × 0.5) + (1.5 × 2) - (3 × 0.3)
+         = 5 + 1 + 3 - 0.9
+         = 8.1  →  floor = 8
+dynamicLimit = min(8, 15) = 8
+```
+
+### 三维评分
+
+```
+keywordScore   = min(Σ(命中词权重) × 5, 50)     // 关键词维度，满分 50
+contextScore   = min(Σ(命中语境词) × 3 × complexity, 30)  // 上下文维度，满分 30
+intentScore    = min(Σ(命中意图类型) × 20, 20)   // 意图维度，满分 20
+
+totalScore = round(
+    keywordScore × (1 - contextRelevanceWeight - userIntentWeight)
+  + contextScore × contextRelevanceWeight
+  + intentScore  × userIntentWeight
+)
+```
+
+默认权重（`contextRelevanceWeight=0.3`, `userIntentWeight=0.2`）下：
+
+```
+totalScore = keywordScore × 0.5 + contextScore × 0.3 + intentScore × 0.2
+```
+
+**理论满分**：`(50 × 0.5) + (30 × 0.3) + (20 × 0.2) = 25 + 9 + 4 = 38`
+
+> 这就是 README 里说的「加权后满分 **38**」—— 它不是拍脑袋的常数，而是三个维度的加权上限。
+
+### 置信度
+
+| 命中总数（关键词 + 语境 + 意图类型） | 置信度 |
+|-----------------------------------|-------|
+| 0 | 0.3 |
+| 1 ~ 2 | 0.6 |
+| ≥ 3 | 0.9 |
+
+### 决策
+
+```
+effectiveThreshold = max(1, threshold + feedbackAdjustment)
+
+threshold = (score ≥ autoTriggerThreshold && confidence ≥ 0.8)
+          ? autoTriggerThreshold   // 25
+          : triggerThreshold        // 15
+
+decision:
+  限流（间隔不足 / 窗口内超上限）    → throttled
+  score ≥ effectiveThreshold          → trigger
+  score <  lowConfidenceThreshold(10) → ignore
+  否则                                → review
+```
+
+---
+
+## 🔀 配置合并语义（重要）
+
+配置加载**不是**简单的 `{ ...DEFAULT, ...loaded }`。字段分三类处理：
+
+| 字段类型 | 语义 | 例子 |
+|---------|------|------|
+| **对象** | **合并**（用户覆盖同名默认项，其余默认项保留） | `keywordWeights` |
+| **数组** | **追加去重**（扩展，不是替换） | `readOnlyIntentWords` / `mutatingActionWords` |
+| **标量** | 覆盖 | 阈值、权重、系数 |
+
+### 为什么必须这样
+
+早期实现是**浅合并**。后果：
+
+```json
+{ "keywordWeights": { "评审": 5 } }
+```
+
+用户只想加一个词，结果**整个默认词表被丢掉** —— 包括内置的中文流程词。
+于是「我只是加一个自定义词」反而让所有默认词失效，中文场景重新变回 0 分。
+
+### 类型不合法时的兜底
+
+若用户写 `"keywordWeights": null` 或 `"keywordWeights": [1,2]`：
+
+- 浅合并会把非法值带进 `config.keywordWeights`
+- `buildKeywordIndex()` 的 `Object.entries(null)` 抛 TypeError
+- 触发引擎在该进程内**每次调用都失败**（客户端 catch 掉 → **静默失去自动触发**）
+
+现在：类型不对就**丢弃用户值 + 回退默认表 + 打印警告**，
+并且在合并后再兜一次底。
+
+```json
+{ "readOnlyIntentWords": "not-array" }
+```
+
+→ 警告 + 回退默认词表，引擎正常工作。
+
+### 非法 JSON
+
+配置文件损坏时 → 警告 + 全量回退默认配置，**引擎不崩**。
+
+---
+
+## 🔁 激活闸门时序（防假闭环）
+
+自动触发**不等于**直接放行。完整时序：
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant T as 触发引擎
+    participant S as MCP Server
+
+    U->>T: 用户消息
+    T->>T: L1 上限 → L2 评分 → L3 决策
+    alt decision = trigger
+        T->>S: flow_add_user_msg（写用户原话）
+        Note over S: quote 锚点的唯一数据源
+        T->>S: flow_submit_requirement (activation: true)
+        Note over S: 提交 read_only 占位卡<br/>会话进入已留痕门禁态
+        S->>S: activation_pending = [scope, acceptance, verify.cmd]
+        T-->>U: 提示补齐字段
+        U->>S: flow_submit_requirement（完整卡）
+        S->>S: activation_pending = []（闸门放行）
+    else decision = review / ignore / throttled
+        T-->>U: 如实返回评分与决策，不动作
+    end
+```
+
+### 闸门期间被拒绝的操作
+
+| 操作 | 拒绝原因 |
+|------|---------|
+| `flow_claim` | 激活占位卡尚未补齐（待补：scope、acceptance、verify.cmd） |
+| `flow_dispatch` | 同上 |
+| `flow_verdict` | 同上 —— **防未执行就记 PASS 的假闭环** |
+
+### 关键安全约束
+
+1. **会话已有任务卡时自动激活会跳过开卡** —— 不覆盖用户已有任务
+2. **自动激活只负责「留痕 + 进入门禁」** —— 绝不代替 Agent 决定改哪些文件
+3. **普通卡不上闸门** —— 未标 `activation` 且该会话从未被激活过的普通卡片，
+   `activation_pending` 保持为空（`read_only` 档只需 `goal` + `quote`，
+   否则会误伤 T1 只读调研场景）
+4. **待补项由服务端从卡片内容派生** —— 不是硬编码三项，而是根据当前卡片实际缺什么计算
+
+---
 
 ## 🚀 使用方式
 
@@ -576,11 +765,13 @@ node client/carlos.js flow_status '{"sessionId":"my-task"}'
 
 ## 📚 相关资源
 
-- [测试脚本](test/trigger-e2e.mjs) - E2E 测试套件（25 项，含 10 项回归用例）
+- [测试脚本](test/trigger-e2e.mjs) - E2E 测试套件（29 项，含 10 项回归用例）
 - [变异测试](scripts/mutation-check.mjs) - 注入退化验证测试套件真的能抓住（13 类变异）
 - [核心代码](src/trigger.js) - 触发引擎实现
 - [集成示例](client/carlos.js) - 客户端集成代码
-- [E2E 测试报告](../../trigger-e2e-test-report.md) - 详细测试报告
+- [完整 README](../README.md) - 项目总览与能力矩阵
+- [迁移指南](../MIGRATION.md) - 从旧包升级
+- [更新日志](../CHANGELOG.md) - 版本历史
 
 ## 📄 许可证
 
@@ -588,5 +779,5 @@ MIT License
 
 ---
 
-**版本**: v2.5.9  
-**更新日期**: 2026-11-05
+**版本**: v2.6.0  
+**更新日期**: 2026-11-07

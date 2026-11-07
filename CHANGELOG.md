@@ -5,6 +5,85 @@
 
 ---
 
+## [2.6.0] - 2026-11-07 — 单包统一分发（6 大平台）+ 文档全面重写
+
+### 🎯 架构重构 | Breaking Change
+
+> **两个包合并为一个**：`carlos-flow-cindy` + `carlos-flow-opencode` → **`carlos-flow`**
+>
+> 合并的根因不是“想统一”，而是**维护成本**：两套包共享 100% 的核心逻辑
+> （`state.js` / `trigger.js` / `card.js` / `dispatch.js` / `protocol.js` / `index.js`），
+> 却要各自发版、各自打 tag、各自跑 CI —— 版本漂移是必然结果
+> （合并前就出现过 `cindy@2.5.9` 与 `opencode@2.5.8` 并存）。
+> 合并后核心逻辑**零分叉**，版本永远一致。
+>
+> **迁移指南**：见 [MIGRATION.md](./MIGRATION.md)
+
+| 变更 | 之前 | 现在 |
+|------|------|------|
+| **npm 包名** | `carlos-flow-cindy` + `carlos-flow-opencode` | **`carlos-flow`**（单一包） |
+| **bin 命令** | `carlos-flow` / `carlos-flow-cindy` / `carlos-flow-opencode`（三个包九个入口） | `carlos-flow` + 两个兼容别名（一个包三个入口） |
+| **版本管理** | 双版本，易漂移 | 单版本，一致 |
+| **平台覆盖** | Cindy / OpenCode | Cindy / OpenCode / Cursor / Cline / VS Code / Claude Desktop |
+
+### ✨ 新增 | Added
+
+- **`carlos-flow init --target <platform>`** —— 一键生成对应平台的 MCP 配置：
+  - `cindy` → `~/.cindy/ghosts/carlos-flow.json`
+  - `opencode` → `~/.config/opencode/plugin/opencode.json` + 项目 `.mcprc`
+  - `cursor` → 项目 `.cursor/mcp.json`
+  - `cline` → 项目 `.cline/mcp.json`
+  - `vscode` → 项目 `.vscode/mcp.json`
+  - `claude` → `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
+    / `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
+- **`templates/` 目录** —— 4 套平台配置模板（Cursor / Cline / VS Code / Claude），
+  统一使用 `__ROOT__` 占位符，由 `init` 渲染成实际路径
+- **`MIGRATION.md`** —— 从旧包迁移的完整指南（命令对照、配置文件位置、行为差异）
+- **`package.json` `exports` 字段** —— `carlos-flow/cindy`、`carlos-flow/opencode`、
+  `carlos-flow/trigger-config` 子路径导出，宿主可按需引用清单与默认配置
+
+### 🐛 修复 | Fixed
+
+| # | 问题 | 影响 | 修复 |
+|---|------|------|------|
+| T-59 | `CARLOS_FLOW_HOME` 的 `~` 在 `OPENCODE_DB_PATH` 等环境变量上不展开 | Windows 下 `CARLOS_OPENCODE_DB=~/.opencode` 字面写入，OpenCode 用户拿不到原话 → quote 锚点校验失败 → 卡片无法提交 | `state.js` / `trigger.js` 统一走 `expandHome()`（`~`、`~/x`、`~\x` 三种写法全覆盖） |
+| T-60 | `release.mjs` 硬编码双仓身份（`carlos-flow-cindy` / `carlos-flow-opencode`） | 单包化后身份自检直接失败，**发不了版** | 重写为单包发布器：身份自检 → 版本/lock/CHANGELOG/ghost.json 一致性 → 测试 → 打包内容检查 → 推送 main + tag |
+| T-61 | `client/carlos.js` 的 `ROOT` 默认取 `process.cwd()` | 源码目录执行时找不到 `ghost.json` / `templates/`，`init` 报 ENOENT | 改为从脚本自身位置推导包根目录（`client/` → 上级），`CARLOS_FLOW_MCP_ROOT` 仍可覆盖 |
+| T-62 | `init` 的目标白名单只认 `cindy` / `opencode` | 新增平台的 `init --target cursor` 被拒 | 白名单扩展到 6 个平台，错误提示同步列出全部合法值 |
+| T-63 | 包的 `files` 白名单缺 `templates/` | 初始化模板不会进 tarball，`init --target cursor` 装完即失败 | `files` 补入 `templates/`，并用 `npm pack --dry-run` 逐项核对 |
+| T-64 | `ghost.json` / `opencode.json` 里的路径写死为仓库内相对路径 | 安装到 npm 全局目录后路径全错 | 统一改为 `__ROOT__` 占位符，由 `init` 渲染成实际绝对路径 |
+| T-65 | `flow_run_verify` 的工作目录只用 `process.cwd()` | MCP server 是**常驻进程**，它的 cwd 是**启动时**的目录（可能是几个月前的旧仓库）→ `verify.cmd` 在错误目录执行、路径全错 → 门禁把这种失败当成「验证不通过」→ **真 PASS 被误杀** | 工作目录优先级改为：显式 `cwd` > 卡片提交时的项目目录（`card.env.project`）> server 进程 cwd；新增回归用例 23d 守护 |
+| T-66 | Bridge 的 `REQUEST_TIMEOUT` 固定 **5s** | `flow_run_verify` 的服务端内部超时是 120s（真实 spawn `verify.cmd`），但 Bridge 5s 就断 —— **任何耗时 >5s 的验证命令必然超时失败**（如 `npm test`），用户只看到「Timeout」，而服务端那边命令其实跑得好好的 | 默认改为 180s（> 服务端 120s 上限），可用 `CARLOS_BRIDGE_TIMEOUT_MS` 覆盖 |
+| T-67 | CLI 客户端的 MCP 调用超时固定 **5s** | 同上，且比服务端短得多 → `flow_run_verify` 从命令行调用**永远失败** | 改为 180s，可用 `CARLOS_MCP_TIMEOUT_MS` 覆盖 |
+
+### 📚 文档 | Documentation
+
+> 全面重写，按顶级开源项目（React / Vue / TypeScript / Kubernetes）的文档标准组织信息架构。
+
+- **README** —— 全新信息架构：
+  - 徽章栏 + TL;DR（30 秒看懂这是什么、解决什么问题）
+  - **痛点对照表** —— 「你说 X / Agent 实际做 Y」直接展示约束从建议变机械
+  - **核心亮点** —— 6 大亮点（零分叉跨平台架构 / 智能触发引擎 / 反自欺激活闸门 /
+    Fail-closed 语义 / 变异测试守护 / 跨进程并发安全）
+  - **技术框架** —— Mermaid 分层架构图 + 五层职责表（哪层有平台耦合、哪层零耦合）
+  - **能力矩阵** —— 对比原生 MCP Server 与提示词方案，逐项标注 ✅/❌
+  - **15 个 MCP 工具参考表** —— 每个工具的作用与关键约束
+  - **配置说明** —— 触发器配置合并语义（追加≠替换）+ 7 个环境变量
+  - **测试覆盖矩阵** —— 6 个套件 128 个用例逐项说明
+  - **FAQ 7 问** —— 含信任边界、免检是否后门、中文支持、性能影响
+- **CHANGELOG** —— 按 Keep a Changelog 重构，2.5.9 明确标注 Breaking Change 与迁移指引
+- **TRIGGER_GUIDE** —— 补充三层架构详解、评分公式、配置合并语义、激活闸门时序
+- **MIGRATION** —— 新增：旧包 → 新包命令对照、配置文件位置对照、行为差异说明
+- 中英双语**零差异同步**（`npm run check:readme` 守护）
+
+### 🔬 验证 | Verification
+
+- 全套测试 **129/0 通过**（smoke 4 / e2e 62 / p0 22 / trigger 29 / concurrency 3 / acceptance 13）
+- 6 平台 `init --target` 命令逐个实测通过
+- 旧包 `carlos-flow-cindy@2.5.9` / `carlos-flow-opencode@2.5.9` 已标记 **Deprecated** 并提示迁移
+
+---
+
 ## [2.5.9] - 2026-11-06 — 清除全部个人私有路径（安装/分发可用性修复）
 
 ### 🐛 修复 | Fixed

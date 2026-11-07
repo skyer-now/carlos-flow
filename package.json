@@ -1,7 +1,7 @@
 {
   "name": "carlos-flow",
-  "version": "2.5.9",
-  "description": "Carlos 工作流 — 双生态统一分发（Cindy / OpenCode）。一次安装，按需初始化：`carlos-flow init --target cindy|opencode`",
+  "version": "2.6.0",
+  "description": "Carlos 工作流 — AI 编码 Agent 的机械门禁。留痕/派发/验证/裁定/审计/还原，约束写在代码里而非提示词里。单一包支持 Cindy/OpenCode/Cursor/Cline/VS Code/Claude Desktop。",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -82,6 +82,7 @@
     "README.zh.md",
     "README.en.md",
     "TRIGGER_GUIDE.md",
+    "MIGRATION.md",
     "CHANGELOG.md",
     "LICENSE"
   ]
