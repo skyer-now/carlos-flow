@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Carlos MCP 快速客户端 — 自包含，自动管理 Bridge 生命周期
 // 用法: node carlos.js <tool_name> [json_args]
 //        node carlos.js init --target cindy|opencode

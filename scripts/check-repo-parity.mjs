@@ -147,6 +147,27 @@ for (const f of REQUIRED_FILES) {
   else fail(`缺少 ${f}`);
 }
 
+// ---- 4b. bin 入口必须有 shebang ----
+section("bin 入口（必须有 shebang，否则全局命令不可用）");
+// npm 的 cmd-shim 会读目标文件的首行 shebang来决定怎么生成 shim。
+// **没有 shebang** 时它会把目标当成 shell 脚本直接 exec —— 于是在 Git Bash /
+// Linux 上 `carlos-flow init --target cindy` 会报
+//   「client/carlos.js: line 1: //: Is a directory」
+// （Windows 的 .cmd shim 反而正常，所以问题只在类 Unix 环境下暴露，容易漏测）。
+const binEntries = (pkg && pkg.bin) || {};
+for (const [name, rel] of Object.entries(binEntries)) {
+  const text = readText(join(ROOT, rel));
+  if (text == null) {
+    fail(`bin ${name} → ${rel} 不存在`);
+  } else if (text.startsWith("#!")) {
+    const line = text.split("\n")[0];
+    if (/node/.test(line)) pass(`bin ${name} → ${rel} 的 shebang 正确（${line}）`);
+    else fail(`bin ${name} → ${rel} 的 shebang 不是 node：${line}`);
+  } else {
+    fail(`bin ${name} → ${rel} 缺少 shebang（全局命令会不可用）`);
+  }
+}
+
 // ---- 5. 模板必须是合法 JSON ----
 section("模板合法性（必须是合法 JSON，不能带注释）");
 const JSON_FILES = [

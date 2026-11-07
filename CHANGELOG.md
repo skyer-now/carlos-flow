@@ -5,6 +5,21 @@
 
 ---
 
+## [2.6.1] - 2026-11-07 — 修复全局命令不可用（bin 缺 shebang）
+
+### 🐛 修复 | Fixed
+
+| # | 问题 | 影响 | 修复 |
+|---|------|------|------|
+| T-68 | `client/carlos.js` **缺 shebang**（`#!/usr/bin/env node`） | npm 的 `cmd-shim` 读首行决定 shim 类型 —— 没 shebang 就把目标当成 **shell 脚本**直接 exec → 类 Unix 环境（Git Bash / Linux / macOS）下 `carlos-flow init --target cindy` 直接报 `client/carlos.js: line 1: //: Is a directory`，**全局命令完全不可用**（Windows 的 `.cmd` shim 反而正常 → 问题只在类 Unix 暴露，极易漏测） | 补上 shebang；单包一致性守卫新增「bin 入口必须有 node shebang」检查项，回归即红 |
+
+> **为什么这个 bug 能在 2.6.0 发布出去**：2.6.0 的验证是在**源码目录**里跑的
+> （`node client/carlos.js ...`），完全绕过了 bin shim 这条路径。
+> 真正的暴露场景是**全局安装后直接敲命令** —— 已在 2.6.1 的发布验证里
+> 用 `npm install -g carlos-flow@2.6.1 && carlos-flow init --target <平台>` 走通。
+
+---
+
 ## [2.6.0] - 2026-11-07 — 单包统一分发（6 大平台）+ 文档全面重写
 
 ### 🎯 架构重构 | Breaking Change
