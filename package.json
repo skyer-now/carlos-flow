@@ -49,29 +49,5 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
-  },
-  "files": [
-    "src/",
-    "bridge/",
-    "client/",
-    "test/e2e-carlos.mjs",
-    "test/p0-gates.mjs",
-    "test/trigger-e2e.mjs",
-    "test/concurrency-e2e.mjs",
-    "test/e2e-acceptance.mjs",
-    "test/smoke.js",
-    "scripts/",
-    "ghost.json",
-    "settings.html",
-    "settings.js",
-    ".env.example",
-    "README.md",
-    "README.en.md",
-    "README.zh.md",
-    "LICENSE",
-    "CHANGELOG.md",
-    "TRIGGER_GUIDE.md",
-    "trigger-config.example.json",
-    "trigger-config.usable.json"
-  ]
+  }
 }
