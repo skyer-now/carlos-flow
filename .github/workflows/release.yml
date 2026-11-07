@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v2.5.1)'
+        description: 'Tag to release (e.g., v2.6.0)'
         required: true
         type: string
 
@@ -15,7 +15,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -25,12 +25,15 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: npm ci
       # 发布前跑**完整**测试套件，而不是只跑 smoke。
-      # test:all = smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency
+      # test:all = smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency + acceptance
       # （含跨进程并发回归——它曾抓出真实的激活闸门竞态绕过，不可省）
       - run: npm run test:all
         env:
           # 隔离状态目录：不给的话测试会写 runner 的 ~/.carlos-flow（runner home 可能是共享/缓存的）
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      # 单包一致性守卫：身份 / 版本 / 文档 / 产物 必须一致
+      - name: 单包一致性检查
+        run: node scripts/check-repo-parity.mjs
       # tag 与 package.json 版本必须一致，否则发出去的包版本对不上
       - name: 校验 tag 与 package.json 版本一致
         run: |
@@ -41,6 +44,34 @@ jobs:
             exit 1
           fi
           echo "✓ tag ${GITHUB_REF_NAME} == package.json ${PKG_VER}"
-      - run: npm publish --access public --provenance
+      # 发布到 npm（**幂等**）
+      #
+      # 为什么需要幂等：版本可能已经由维护者本地 `npm publish` 上线
+      # （网络受限 / 凭据配置差异时这是常见路径）。此时再跑一次 publish 会
+      # 直接 403「cannot publish over the previously published version」，
+      # 整个 workflow 红掉 —— 但包其实已经在 registry 里了。
+      # 所以先查 registry：已存在就跳过 publish（并明确告知），不存在才真发。
+      - name: 发布到 npm（已存在则跳过）
+        id: npm_publish
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "carlos-flow@${VERSION}" version >/dev/null 2>&1; then
+            echo "⏭  carlos-flow@${VERSION} 已在 registry 中，跳过 npm publish"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          else
+            npm publish --access public --provenance
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # 创建 GitHub Release（无论 npm 是否是本次发的，都要有 Release 记录）
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Carlos Flow ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
