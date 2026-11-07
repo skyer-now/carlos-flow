@@ -3,7 +3,7 @@
 > **面向 AI 编码 Agent 的机械门禁**：留痕 → 派发 → 验证 → 裁定 → 审计 → 还原
 > 把"相信 Agent"变成"验证 Agent"——机器级 scope 限制、真实命令执行、防篡改审计链。
 **语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.8 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.9 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🆕 v2.5.5 更新速览
@@ -158,14 +158,15 @@ Cindy 版走**插件市场**：Cindy → 设置 → 插件 → 浏览市场 → 
 # 源码安装时也可以直接用 .env
 cp .env.example .env      # 编辑：CARLOS_FLOW_MCP_ROOT、CARLOS_FLOW_HOME
 ```
-> **路径一律用正斜杠**（`D:/cindy/xxx`）或双反斜杠（`D:\\cindy\\xxx`）——
+> **路径一律用正斜杠**（如 `/home/you/apps/carlos-flow`）或双反斜杠（`D:\\apps\\carlos-flow`）——
 > 单反斜杠在配置里会被当成转义符，`\c`、`\o` 会被吃掉，路径直接失效。
 
 ### 3. 设置环境变量
 
 ```bash
-CARLOS_FLOW_MCP_ROOT=D:/cindy/publish-output/carlos-flow-cindy
-CARLOS_FLOW_HOME=C:/Users/EDY/.carlos-flow
+# 把下面两行换成你自己的实际路径
+CARLOS_FLOW_MCP_ROOT=/opt/carlos-flow-cindy     # Windows 例：D:/apps/carlos-flow-cindy
+CARLOS_FLOW_HOME=~/.carlos-flow              # Windows 例：C:/Users/<你的用户名>/.carlos-flow
 BRIDGE_PORT=19099
 ```
 
@@ -436,12 +437,12 @@ flowchart TB
 ## ⚙️ 环境变量
 | 变量 | 必填 | 说明 | 示例 |
 |------|------|------|------|
-| `CARLOS_FLOW_MCP_ROOT` | ✅ | MCP 源码根目录（含 `src/` `bridge/` `client/`） | `D:/cindy/carlos-flow-mcp` |
+| `CARLOS_FLOW_MCP_ROOT` | ✅ | MCP 源码根目录（含 `src/` `bridge/` `client/`） | `/opt/carlos-flow-cindy` |
 | `CARLOS_FLOW_HOME` | ✅ | 状态 / 审计 / 快照根目录 | `~/carlos-flow` |
 | `BRIDGE_PORT` | ❌ | Bridge 监听端口（默认 `19099`） | `19099` |
-| `REA_MCP_ROOT` | ❌ | rea MCP 源码根目录 | `D:/dev-env/rea` |
-| `GHIDRA_HOME` | ❌ | Ghidra 安装目录 | `D:/dev-env/ghidra/ghidra_12.1.4_PUBLIC` |
-| `JAVA_HOME` | ❌ | JDK 21 安装目录 | `D:/dev-env/jdk-21.0.12.1+1` |
+| `REA_MCP_ROOT` | ❌ | rea MCP 源码根目录 | `/opt/rea` |
+| `GHIDRA_HOME` | ❌ | Ghidra 安装目录 | `/opt/ghidra_12.1.4_PUBLIC` |
+| `JAVA_HOME` | ❌ | JDK 21 安装目录 | `/usr/lib/jvm/java-21-openjdk` |
 | `NODE_PATH` | ❌ | Node.js 可执行文件路径（默认 `node`） | `node` |
 > **提示**：插件设置页修改后需**完全退出 Cindy 重启**生效。
 

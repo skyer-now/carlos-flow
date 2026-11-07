@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # 端到端实测：激活 → 闸门 → 放行 → 不触发 → 审计链
 # 用法: bash scripts/verify-activation-e2e.sh [repo-root]
+#
+# 根目录默认从**脚本自身位置**推导（scripts/ → 仓库根），
+# 不写死任何开发者的本机路径 —— 旧实现写死 `D:/cindy/publish-output/carlos-flow-cindy`，
+# 在别人机器上会 cd 到不存在的路径；且在 opencode 包里还指向 cindy 仓（跨仓串味）。
 set -u
-ROOT="${1:-D:/cindy/publish-output/carlos-flow-cindy}"
-cd "$ROOT" || exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${1:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+cd "$ROOT" || { echo "✗ 无法进入仓库根目录: $ROOT"; exit 1; }
 
 export CARLOS_FLOW_HOME="$(mktemp -d)"
 export CARLOS_FLOW_MCP_ROOT="$ROOT"

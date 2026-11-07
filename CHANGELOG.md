@@ -5,6 +5,30 @@
 
 ---
 
+## [2.5.9] - 2026-11-06 — 清除全部个人私有路径（安装/分发可用性修复）
+
+### 🐛 修复 | Fixed
+
+> 这一版修的全是**会跟着包分发给所有人**的问题 —— 开发机路径被写进了产物里。
+> 用户按文档照抄必然失败，且无法自行察觉。
+
+| # | 问题 | 影响 | 修复 |
+|---|------|------|------|
+| T-52 | Cindy 插件设置页默认值写死 `D:/cindy/carlos-flow-mcp` | Cindy 用户**开箱即见**一个开发者本机的无效路径（目录名根本不存在） | 默认值改为空（留空即用插件自带 `src/`），placeholder 改为通用说明 |
+| T-53 | `scripts/verify-activation-e2e.sh` 写死 `D:/cindy/publish-output/carlos-flow-cindy` | 该脚本**随包分发**：用户跑会 `cd` 到不存在的路径；且在 **opencode 包里还指向 cindy 仓**（跨仓串味） | 根目录改为从**脚本自身位置**推导（`scripts/` → 仓库根），两仓一致 |
+| T-54 | README 安装示例写死 `D:/dev-env/node-v22.23.4-win-x64/...`、`C:/Users/EDY/.carlos-flow` | **用户照抄必失败**（路径不存在 / 指向别人的用户名目录） | 改为 `<npm 全局目录>` 占位符 + `npm root -g` 推导说明；`CARLOS_FLOW_HOME` 改用 `~/.carlos-flow` 平台无关写法 |
+| T-55 | README 环境变量表 / 路径说明 / QA 报告残留 `D:/dev-env/rea`、`D:/dev-env/ghidra/...`、`D:/dev-env/jdk-...`、`D:/cindy/.qa-logs/...` | 继续散落开发者本机路径 | 全部替换为通用示例（`/opt/rea`、`/opt/ghidra_*`、`/usr/lib/jvm/*`）；QA 报告改为指向 CI 输出 |
+
+### 🧪 新增 | Added
+
+- **`scripts/verify-install-e2e.sh`** —— 「从没见过本项目的用户」视角的安装验收：
+  从真实 npm registry 装包（独立 prefix，模拟干净环境）→ 检查包内容完整性 →
+  验证触发器模板是合法 JSON 且可被引擎读取 → 拉起 MCP server 走真实 JSON-RPC
+  （`tools/list` / `flow_status` / `flow_trigger_check`）→ 审计包内无个人私有路径。
+  跨平台（Windows / Linux 均实测通过）；路径一律经环境变量传给 node，**不内插进 `node -e` 字符串**
+  （Windows 路径含反斜杠与空格，内插会被拆坏）。
+
+
 ## [2.5.8] - 2026-11-06 — 修包内容与文档不一致 + 变异体锚点加固
 
 ### 🐛 修复 | Fixed

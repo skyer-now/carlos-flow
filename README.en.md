@@ -3,7 +3,7 @@
 > **Mechanical gatekeeping for AI coding agents**: Record → Dispatch → Verify → Verdict → Audit → Restore
 > Turns "trust the agent" into "verify the agent" — with machine-enforced scope limits, real command execution, and a tamper-proof audit chain.
 **语言 / Languages:** [中文](README.zh.md) | [English](README.en.md)
-**版本 / Version:** 2.5.8 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
+**版本 / Version:** 2.5.9 | **License:** MIT | **CI:** passing | **Node.js:** 22+ | **MCP:** 1.29+
 
 ---
 ## 🆕 What's new in v2.5.5
@@ -139,8 +139,9 @@ cp .env.example .env      # edit: CARLOS_FLOW_MCP_ROOT, CARLOS_FLOW_HOME
 ### 3. Set the environment variables
 
 ```bash
-CARLOS_FLOW_MCP_ROOT=D:/cindy/publish-output/carlos-flow-cindy
-CARLOS_FLOW_HOME=C:/Users/EDY/.carlos-flow
+# 把下面两行换成你自己的实际路径
+CARLOS_FLOW_MCP_ROOT=/opt/carlos-flow-cindy     # Windows 例：D:/apps/carlos-flow-cindy
+CARLOS_FLOW_HOME=~/.carlos-flow              # Windows 例：C:/Users/<你的用户名>/.carlos-flow
 BRIDGE_PORT=19099
 ```
 
@@ -403,12 +404,12 @@ flowchart TB
 ## ⚙️ Environment variables
 | Variable | Required | Description | Example |
 |----------|----------|-------------|---------|
-| `CARLOS_FLOW_MCP_ROOT` | ✅ | MCP source root (contains `src/` `bridge/` `client/`) | `D:/cindy/carlos-flow-mcp` |
+| `CARLOS_FLOW_MCP_ROOT` | ✅ | MCP source root (contains `src/` `bridge/` `client/`) | `/opt/carlos-flow-cindy` |
 | `CARLOS_FLOW_HOME` | ✅ | State / audit / snapshot root | `~/carlos-flow` |
 | `BRIDGE_PORT` | ❌ | Bridge listen port (default `19099`) | `19099` |
-| `REA_MCP_ROOT` | ❌ | rea MCP source root | `D:/dev-env/rea` |
-| `GHIDRA_HOME` | ❌ | Ghidra install dir | `D:/dev-env/ghidra/ghidra_12.1.4_PUBLIC` |
-| `JAVA_HOME` | ❌ | JDK 21 install dir | `D:/dev-env/jdk-21.0.12.1+1` |
+| `REA_MCP_ROOT` | ❌ | rea MCP source root | `/opt/rea` |
+| `GHIDRA_HOME` | ❌ | Ghidra install dir | `/opt/ghidra_12.1.4_PUBLIC` |
+| `JAVA_HOME` | ❌ | JDK 21 install dir | `/usr/lib/jvm/java-21-openjdk` |
 | `NODE_PATH` | ❌ | Node.js executable path (default `node`) | `node` |
 > **Tip**: changes made on the Cindy plugin settings page require a **full Cindy restart** to take effect.
 

@@ -63,7 +63,7 @@
 
 附带修复：只读调研意图不再进入工作流门禁（占位卡恒为 read_only 档，其待补项对只读任务永远无法满足 → 原本会永久锁死会话）。
 
-复验日志：`D:/cindy/.qa-logs/fixverify/fix-verify.log`
+复验日志：见 CI 的 test:e2e / test:p0 输出（本地复验请用 npm run test:all）
 
 ---
 
