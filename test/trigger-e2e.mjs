@@ -538,6 +538,38 @@ const testCases = [
     }
   },
   {
+    name: '回归: CARLOS_FLOW_HOME 的 ~ 会被展开（不落到字面 ~ 目录）',
+    test: () => {
+      // 背景：README 让用户写 CARLOS_FLOW_HOME=~/.carlos-flow，但此前**没有展开** ——
+      // path.normalize("~/.carlos-flow") 只是把斜杠换成反斜杠，路径仍是**字面量**，
+      // 于是状态/审计链被写到「当前工作目录下的一个名叫 ~ 的目录」里（Windows 实测
+      // FLOW_HOME = ~\\.carlos-flow），位置诡异、极易丢失。
+      const home = process.env.USERPROFILE || process.env.HOME || '';
+      const probe = `
+        import fs from 'node:fs';
+        import { pathToFileURL } from 'node:url';
+        const REPO = ${JSON.stringify(REPO_ROOT)};
+        const { FLOW_HOME } = await import(pathToFileURL(REPO + '/src/state.js').href);
+        console.log(JSON.stringify({
+          expanded: !FLOW_HOME.startsWith('~') && !FLOW_HOME.includes('/~'),
+          inHome: ${JSON.stringify(home)} ? FLOW_HOME.startsWith(${JSON.stringify(home)}) : true,
+          flowHome: FLOW_HOME,
+        }));
+      `;
+      const r = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+        env: { ...process.env, CARLOS_FLOW_HOME: '~/.carlos-flow' },
+        encoding: 'utf8',
+      });
+      if (!r.stdout || !r.stdout.trim()) {
+        console.log(`  [DEBUG] 子进程无输出: ${(r.stderr || '').slice(0, 160)}`);
+        return false;
+      }
+      const c = JSON.parse(r.stdout.trim().split('\n').pop());
+      console.log(`  [DEBUG] ~ 展开: ${JSON.stringify(c)}`);
+      return c.expanded && c.inHome;
+    }
+  },
+  {
     name: '回归: trigger-config 非法值不弄崩触发引擎',
     test: () => {
       // 背景：配置加载原为浅合并，null / 数组 / 非法 JSON 会让 config.keywordWeights

@@ -18,6 +18,14 @@
 | T-53 | `scripts/verify-activation-e2e.sh` 写死 `D:/cindy/publish-output/carlos-flow-cindy` | 该脚本**随包分发**：用户跑会 `cd` 到不存在的路径；且在 **opencode 包里还指向 cindy 仓**（跨仓串味） | 根目录改为从**脚本自身位置**推导（`scripts/` → 仓库根），两仓一致 |
 | T-54 | README 安装示例写死 `D:/dev-env/node-v22.23.4-win-x64/...`、`C:/Users/EDY/.carlos-flow` | **用户照抄必失败**（路径不存在 / 指向别人的用户名目录） | 改为 `<npm 全局目录>` 占位符 + `npm root -g` 推导说明；`CARLOS_FLOW_HOME` 改用 `~/.carlos-flow` 平台无关写法 |
 | T-55 | README 环境变量表 / 路径说明 / QA 报告残留 `D:/dev-env/rea`、`D:/dev-env/ghidra/...`、`D:/dev-env/jdk-...`、`D:/cindy/.qa-logs/...` | 继续散落开发者本机路径 | 全部替换为通用示例（`/opt/rea`、`/opt/ghidra_*`、`/usr/lib/jvm/*`）；QA 报告改为指向 CI 输出 |
+| T-56 | README 声称 Windows 配置目录是 `%APPDATA%opencode` | **实证是错的**：OpenCode 走 XDG 风格，Windows 上真正被读的是 `~/.config/opencode/`（`$env:USERPROFILE.configopencode`）。照 README 放到 `%APPDATA%` 的用户 → 配置读不到 → **MCP server 根本不启动** | README 统一改为「所有平台都是 `~/.config/opencode/`」，并给出 Windows 的 `$env:USERPROFILE.configopencode` 写法 + 明确警示「不是 %APPDATA%」（中文/英文 FAQ 同步） |
+| T-57 | `CARLOS_FLOW_HOME=~/.carlos-flow` **不会被展开** | `path.normalize` 只换分隔符不展开 `~` → 状态/审计链写到**当前工作目录下字面名为 `~` 的目录**（实测 `FLOW_HOME = ~.carlos-flow`），位置诡异极易丢失 | `state.js` / `trigger.js` 新增 `expandHome()`，统一展开 `~`、`~/...`（Windows 同时支持 `~`）；新增回归用例（trigger 29 项） |
+| T-58 | `scripts/verify-install-e2e.sh` 里路径内插进 `node -e` 字符串 | Windows 路径含**反斜杠与空格** → 被拆坏，测试在 Windows 上假失败（实测 tools/list 返回 0 个工具） | 路径一律经**环境变量**传给 node 进程；包目录布局多平台探测（lib/node_modules、node_modules、Lib/…） |
+
+> 补充：另修正 `verify-activation-e2e.sh` 的跨仓串味（opencode 包里原本指向 cindy 仓），
+> 以及 README 里 `D:/dev-env/rea`、`ghidra`、`jdk` 等开发机路径（全部换成通用示例）。
+
+
 
 ### 🧪 新增 | Added
 

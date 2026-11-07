@@ -5,7 +5,25 @@ import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
-export const FLOW_HOME = path.normalize(process.env.CARLOS_FLOW_HOME || path.join(os.homedir(), ".carlos-flow"));
+
+// 展开路径里的 `~`（家目录）。
+// 背景：README 让用户把 CARLOS_FLOW_HOME 写成 `~/.carlos-flow`，但此前**没有展开** ——
+// path.normalize("~/.carlos-flow") 只是把斜杠改成反斜杠，路径仍是**字面量**，
+// 于是状态/审计链被写到「当前工作目录下的一个名叫 ~ 的目录」里（Windows 实测
+// FLOW_HOME = ~\.carlos-flow），位置诡异、极易丢失。
+// 现在统一展开：`~` → homedir，`~/x` 与 `~\x` → homedir/x。
+export function expandHome(p) {
+  if (typeof p !== "string" || p === "") return p;
+  if (p === "~") return os.homedir();
+  if (p.startsWith("~/") || p.startsWith("~\\")) {
+    return path.join(os.homedir(), p.slice(2));
+  }
+  return p;
+}
+
+export const FLOW_HOME = path.normalize(
+  expandHome(process.env.CARLOS_FLOW_HOME) || path.join(os.homedir(), ".carlos-flow")
+);
 export const AUDIT_DIR = path.join(FLOW_HOME, "gate-audit");
 export const RUNS_DIR = path.join(FLOW_HOME, "gate-state", "runs");
 

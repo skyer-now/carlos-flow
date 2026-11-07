@@ -7,9 +7,15 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 
 // 触发器状态/配置目录：与 state.js 的 FLOW_HOME 保持同一约定，避免污染仓库目录
-const TRIGGER_HOME = process.env.CARLOS_FLOW_HOME
-  ? process.env.CARLOS_FLOW_HOME
-  : (process.env.CARLOS_FLOW_ROOT || join(os.homedir(), '.carlos-flow'));
+const TRIGGER_HOME = (() => {
+  // 与 state.js 同一套 `~` 展开：否则 CARLOS_FLOW_HOME=~/.carlos-flow 不会被展开，
+  // 触发器状态/配置会写到「当前目录下的一个名叫 ~ 的目录」里。
+  const raw = process.env.CARLOS_FLOW_HOME || process.env.CARLOS_FLOW_ROOT || join(os.homedir(), '.carlos-flow');
+  if (typeof raw !== 'string' || raw === '') return join(os.homedir(), '.carlos-flow');
+  if (raw === '~') return os.homedir();
+  if (raw.startsWith('~/') || raw.startsWith('~\\')) return join(os.homedir(), raw.slice(2));
+  return raw;
+})();
 const CONFIG_PATH = join(TRIGGER_HOME, 'trigger-config.json');
 const STATE_DIR = join(TRIGGER_HOME, 'trigger-state');
 const DEFAULT_STATE_PATH = join(TRIGGER_HOME, 'trigger-state.json');
