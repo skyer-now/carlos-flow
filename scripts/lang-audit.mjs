@@ -30,11 +30,53 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // 允许出现在中文语境里的英文词（标识符 / 专有名词 / 外部接口名）
-const ALLOW =
-  /(npm|MCP|Node|JSON|GitHub|CI|Carlos|README|CHANGELOG|TRIGGER_GUIDE|MIGRATION|ERROR|Timeout|OK|verify|scope|acceptance|sessionId|flow_[a-z_]+|init|target|git|commit|release|docs|fix|feat|chore|ci|test|npm run|node |yarn |npx |shell|stdin|stdout|stderr|json|yaml|yml|http|https|api|url|repo|src|lib|bin|tool|tools|service|server|client|bridge|plugin|template|templates|license|mit|apache|BSD|zh-CN|en-US|utf-8|Linux|Windows|macOS|OpenCode|Cursor|Cline|Claude|Copilot|version|SemVer|Keep a Changelog|monorepo|shim|shebang|validateCard|tier|read_only|goal|quote|cmd|argv|env|pkg|repoPathOf|args|opts|params|config|keywordWeights|readOnlyIntentWords|mutatingActionWords|trigger-config|carlos-flow|user_msgs|state\.json)/i;
+// 允许出现在中文语境里的英文词（标识符 / 专有名词 / 外部接口名）。
+// 注意：必须**按词排除**而不是整行排除 —— 否则
+//   「fix(release): add missing shebang to bin entry」
+// 里的 fix / release 会让整行被放行，英文叙述就漏检了。
+const ALLOWED_WORDS = new Set([
+  "npm", "mcp", "node", "json", "yaml", "yml", "github", "gitlab", "ci", "carlos",
+  "readme", "changelog", "trigger", "guide", "migration", "error", "timeout",
+  "ok", "verify", "scope", "acceptance", "sessionid", "init", "target", "git",
+  "commit", "release", "docs", "fix", "feat", "chore", "test", "yarn", "npx",
+  "shell", "stdin", "stdout", "stderr", "http", "https", "api", "url", "repo",
+  "src", "lib", "bin", "tool", "tools", "service", "server", "client", "bridge",
+  "plugin", "template", "templates", "license", "mit", "apache", "bsd", "utf",
+  "linux", "windows", "macos", "opencode", "cursor", "cline", "claude", "copilot",
+  "version", "semver", "keep", "monorepo", "shim", "shebang", "validatecard",
+  "tier", "read", "goal", "quote", "cmd", "argv", "env", "pkg", "args",
+  "opts", "params", "config", "keywordweights", "readonly", "intentwords",
+  "mutatingactionwords", "flow", "user", "msgs", "state",
+]);
 
 const MIN_WORDS = 5;          // 连续 5 个以上英文词才判定为「英文叙述」
 const MIN_COMMIT_WORDS = 3;   // 提交信息阈值低一点（正文段落更短）
+
+// 判定规则：**一行里只要有中文字符就算合规**（标识符、报错原文、引用的英文术语
+// 嵌在中文句子里是正常的）；只有**整行没有中文**、且英文词达到阈值时才算违规。
+// 之前的写法用「英文词数」直接判，会把
+//   「exitCode=127（command not found），记 PASS 的前置证据永远拿不到」
+// 这类「中文句子 + 引用的英文报错」误判 —— 那是合规的中文注释。
+const isEnglishNarration = (text, minWords) => {
+  if (/[一-鿿]/.test(text)) return false;      // 有中文 → 合规
+
+  // 剥离「引用的原文」：中文句子里的英文报错原文、代码块、标识符引用
+  let s = text
+    .replace(/[「」『』“”"'‘’`][^「」『』“”"'‘’`]*[「」『』“”"'‘’`]/g, " ")
+    .replace(/`[^`]*`/g, " ");
+
+  // 命令行 / 路径示例行：含 `--` 参数、以命令前缀开头、或形如 a/b/c
+  if (/^\s*(\$|>)?\s*(node|npm|npx|yarn|git|bash|sh|python3?|curl|cd|echo|export|carlos-flow|carlos)\b/i.test(s)) return false;
+  if (/\s--[a-z][\w-]*/i.test(s)) return false;
+  if (/^[A-Za-z0-9_.\-/]+\s*[=:]/i.test(s.trim()) && !/\s/.test(s.trim())) return false;
+
+  const words = (s.match(/[A-Za-z][A-Za-z'-]{2,}/g) || []).map((w) => w.toLowerCase());
+  if (words.length < minWords) return false;
+  // 去掉允许词后仍需达到足够密度，否则整句都是专有名词/标识符
+  const residual = words.filter((w) => !ALLOWED_WORDS.has(w));
+  if (residual.length < Math.max(3, Math.ceil(words.length * 0.4))) return false;
+  return true;
+};
 
 let problems = 0;
 const report = (where, text) => {
@@ -51,6 +93,7 @@ try {
     encoding: "utf8",
   });
   const parts = raw.split("\u0000").filter((s) => s.trim());
+  let commitProblems = 0;
   for (let i = 0; i < parts.length; i += 2) {
     const sha = (parts[i] || "").trim();
     const body = parts[i + 1] || "";
@@ -60,14 +103,12 @@ try {
       if (inCode) continue;
       const t = line.trim();
       if (!t) continue;
-      if (/[一-鿿]/.test(t)) continue;        // 含中文的行放行
-      const words = t.match(/[A-Za-z][A-Za-z'-]{2,}/g) || [];
-      if (words.length < MIN_COMMIT_WORDS) continue;
-      if (ALLOW.test(t)) continue;
+      if (!isEnglishNarration(t, MIN_COMMIT_WORDS)) continue;
       report(`提交 ${sha.slice(0, 7)}`, t);
+      commitProblems++;
     }
   }
-  if (problems === 0) console.log("  ✅ 提交信息均为中文");
+  if (commitProblems === 0) console.log("  ✅ 提交信息均为中文");
 } catch (e) {
   console.log("  ⏭  跳过（取不到 git 历史）");
 }
@@ -90,7 +131,7 @@ const walk = (dir, depth = 0) => {
   return out;
 };
 
-const codeProblems = 0;
+let codeProblems = 0;
 for (const f of walk(ROOT)) {
   const rel = f.slice(ROOT.length + 1).replace(/\\/g, "/");
   const text = readFileSync(f, "utf8");
@@ -98,10 +139,7 @@ for (const f of walk(ROOT)) {
     const m = line.match(/^\s*(?:\/\/|#)\s*(.+)$/);
     if (!m) return;
     const t = m[1].trim();
-    if (!/[一-鿿]/.test(t)) return;            // 只看本该有中文的注释
-    const words = t.match(/[A-Za-z][A-Za-z'-]{2,}/g) || [];
-    if (words.length < MIN_WORDS) return;
-    if (ALLOW.test(t)) return;
+    if (!isEnglishNarration(t, MIN_WORDS)) return;
     report(`${rel}:${i + 1}`, t);
     codeProblems++;
   });

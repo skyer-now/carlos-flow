@@ -17,7 +17,7 @@
 // 安装：
 //   方式 A（本地文件）：把本文件放到 OpenCode 的插件目录
 //        ~/.config/opencode/plugins/carlos-flow-trigger.js
-//        （Windows: %APPDATA%\opencode\plugins\carlos-flow-trigger.js）
+//        Windows 下则是 %APPDATA%\opencode\plugins\carlos-flow-trigger.js
 //        项目级则放 .opencode/plugins/carlos-flow-trigger.js
 //   方式 B（npm 包）：在 opencode.json 里加
 //        { "plugin": ["carlos-flow-opencode/plugins/carlos-flow-trigger.js"] }

@@ -1,5 +1,5 @@
-// Carlos Flow Protocol — single source of truth for routing tiers, contracts,
-// report specs, error layers, and state schema. Imported by coordinator + agents.
+// Carlos Flow 协议 — 路由档位 / 四段合同 / 报告规格 / 错误分层 / 状态字段的唯一真源。
+// 被协调器（coordinator）与各角色 Agent 共同引用。
 
 export const PROTOCOL = {
   ROUTE_TABLE: `| 档 | 场景 | 动作 |
@@ -34,7 +34,7 @@ auditor 报告 ≤200 字，五段式：裁定 / 失败类型 / scope 标注 / �
   CARD_TEMPLATE: `FLOW_CARD:{"goal":"一句话目标","quote":"用户原话摘录","scope":["只准改的文件"],"acceptance":["可判定的验收标准"],"unknowns":[],"assumptions":[],"files":[{"path":"a/b.py","line":1}],"verify":{"cmd":"pytest -q tests/x.py"},"confirmed":false}`,
 };
 
-// Sensitive file patterns (name match OR segment match OR extension match).
+// 敏感文件名单（三种匹配方式：文件名命中 / 路径段命中 / 扩展名命中）
 const SENSITIVE_NAMES = new Set([
   ".env", ".env.local", ".env.development", ".env.production", ".env.test",
   "settings.json", "settings.local.json",

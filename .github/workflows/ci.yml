@@ -86,6 +86,9 @@ jobs:
       # 靠人扫「回复」发现不了，必须机器单独检查产物。
       - name: 产物语言体检（提交信息 / 注释必须中文）
         run: npm run check:lang
+      # 语言体检的自检：验证体检脚本**真的能抓到英文**（避免引入一个假绿守卫）
+      - name: 语言体检自检（故意放英文必须被抓出）
+        run: npm run test:lang
       - name: 变异体锚点体检
         run: npm run check:anchors
 
