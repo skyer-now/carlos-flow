@@ -26,6 +26,7 @@
     "test:mutation": "node scripts/mutation-check.mjs",
     "sync:readme": "node scripts/sync-readme.mjs",
     "check:readme": "node scripts/sync-readme.mjs --check",
+    "check:identity": "node scripts/check-repo-parity.mjs",
     "check:parity": "node scripts/check-repo-parity.mjs",
     "clean:readme": "node scripts/clean-readme-noise.mjs README.md README.zh.md README.en.md && npm run sync:readme",
     "prepublishOnly": "npm run check:readme",

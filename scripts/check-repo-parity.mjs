@@ -1,293 +1,217 @@
 #!/usr/bin/env node
-// check-repo-parity.mjs — 双仓一致性守卫（cindy ↔ opencode）
+// check-repo-parity.mjs — 单包一致性守卫（v2.6.0+）
 //
-// 目的：防止「跨仓同步」时把某一版的文件整份覆盖到另一版，
+// 历史背景：v2.5.x 是「双仓架构」（carlos-flow-cindy + carlos-flow-opencode），
+// 这个脚本负责防止跨仓同步时把某一版的文件整份覆盖到另一版，
 // 导致两个适配版身份混淆（例如 opencode 仓的 README 变成「Cindy 适配版」）。
 //
-// 判定规则（与 scripts/release.mjs 的双仓发布链路配套）：
-//   1) 【必须逐字一致】核心逻辑 src/ + test/ + scripts/ + CI —— 任一不同即报错；
-//   2) 【必须各自不同】版本专属文件 —— 出现在对方仓里即报错（交叉污染）；
-//   3) 【必须指向自己】身份标识 —— README 标题 / package.json name / description
-//      若指向对方版本，即报错；
-//   4) 【允许不同】package.json 的 name/description/keywords/repository/files/scripts。
+// v2.6.0 起合并为**单一包** carlos-flow，双仓比对已无意义 ——
+// 跨版本漂移的根因（两份核心逻辑各自维护）已经消除。
+// 但「身份一致性」这个诉求依然成立，且更重要：单一包对外宣称自己是
+// 一个统一的六平台产品，任何一处版本号/文档/清单不一致都会直接暴露给用户。
+//
+// 所以本脚本从「双仓比对」重构为「单包身份与产物一致性守卫」：
+//   1) 【身份】package.json.name 必须是 carlos-flow（不是旧的 -cindy / -opencode）
+//   2) 【版本】package.json / package-lock.json / ghost.json / TRIGGER_GUIDE.md
+//      四处版本号必须完全一致
+//   3) 【文档】README.md 与 README.zh.md 必须逐字一致（双语不漂移）
+//      README.en.md 必须是英文版（不是中文副本）
+//   4) 【产物】npm 包内容必须包含 6 平台初始化所需的全部文件，
+//      且不含敏感/临时文件（.npmrc / secret / .bak / fix_ / debug_）
+//   5) 【模板】templates/ 下 4 套模板 + opencode.json.template + .mcprc.template
+//      必须存在且是合法 JSON
 //
 // 用法：
-//   node scripts/check-repo-parity.mjs            # 检查（默认对方仓在 ../carlos-flow-<other>）
+//   node scripts/check-repo-parity.mjs            # 检查
 //   node scripts/check-repo-parity.mjs --check    # 同上（默认即 check）
-//   node scripts/check-repo-parity.mjs <对方仓路径> --write
 //
-// 退出码：0 = 一致；1 = 发现不一致（并打印逐条明细）。
-//
-// 说明：比较时忽略行尾符（CRLF/LF）——两仓 .gitattributes / core.autocrlf 不同，
-//       同一份内容在不同机器上落盘可能行尾不同，那不是实质差异。
-import { readFileSync, existsSync } from "node:fs";
+// 退出码：0 = 一致；1 = 发现不一致（逐条打印明细）。
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join, resolve, dirname, relative, basename } from "node:path";
+import { join, resolve, dirname } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SELF_ROOT = resolve(HERE, "..");
-const SELF_NAME = basename(SELF_ROOT).replace(/^carlos-flow-/, "");
-const PEER_NAME = SELF_NAME === "cindy" ? "opencode" : "cindy";
+const ROOT = resolve(HERE, "..");
 
-// ---- 参数解析 ----
-const argv = process.argv.slice(2);
-const writeMode = argv.includes("--write");
-const peerArg = argv.find((a) => !a.startsWith("--"));
-const PEER_ROOT = resolve(peerArg || join(SELF_ROOT, "..", `carlos-flow-${PEER_NAME}`));
+let failed = 0;
+const pass = (msg) => console.log(`  ✅ ${msg}`);
+const fail = (msg) => { console.log(`  ❌ ${msg}`); failed++; };
+const section = (title) => console.log(`\n▶ ${title}`);
 
-// ---- 单仓降级 ----
-// npm 安装后只有**本仓**（对方仓不在同一个父目录），此时无法做双仓比对。
-// 这不是错误 —— 直接优雅跳过并 exit 0，否则用户误跑 npm run check:parity 会看到红色报错。
-// 需要真正检查时：显式传对方仓路径，或在本地双仓 checkout 的目录下跑。
-if (!existsSync(join(PEER_ROOT, "package.json"))) {
-  console.log("=".repeat(64));
-  console.log("Carlos Flow 双仓一致性守卫");
-  console.log(`  本仓: ${SELF_NAME.padEnd(8)} ${SELF_ROOT}`);
-  console.log(`  对方: ${PEER_NAME.padEnd(8)} ${PEER_ROOT}`);
-  console.log("=".repeat(64));
-  console.log(`⏭  跳过：找不到对方仓（${PEER_ROOT}）—— 单仓环境无法做双仓比对。`);
-  console.log("   需要检查时：npm run check:parity -- <对方仓路径>");
-  console.log("   或在本地双仓 checkout 的父目录下直接运行。");
-  process.exit(0);
-}
+console.log("=".repeat(64));
+console.log("Carlos Flow 单包一致性守卫（身份 / 版本 / 文档 / 产物）");
+console.log(`  仓库: ${ROOT}`);
+console.log("=".repeat(64));
 
-// ---- 必须逐字一致的文件清单（核心逻辑，双仓同源） ----
-const MUST_MATCH = [
-  "src/index.js",
-  "src/card.js",
-  "src/state.js",
-  "src/trigger.js",
-  "src/dispatch.js",
-  "src/protocol.js",
-  "test/e2e-carlos.mjs",
-  "test/p0-gates.mjs",
-  "test/trigger-e2e.mjs",
-  "test/concurrency-e2e.mjs",
-  "test/smoke.js",
-  "scripts/mutation-check.mjs",
-  "scripts/release.mjs",
-  "scripts/sync-readme.mjs",
-  "scripts/clean-readme-noise.mjs",
-  "scripts/verify-activation-e2e.sh",
-  ".github/workflows/ci.yml",
-  ".github/workflows/release.yml",
-  "TRIGGER_GUIDE.md",
-  "docs/QA_REPORT_v2.5.5.md",
-  "LICENSE",
-  "CODE_OF_CONDUCT.md",
-  // 守卫自身与本轮新增的 P0 回归测试 —— 也要纳入逐字一致范围，
-  // 否则单仓改这两个文件不会被 parity 守卫发现。
-  "scripts/check-repo-parity.mjs",
-  "scripts/check-mutant-anchors.mjs",
-  "test/e2e-acceptance.mjs",
-];
+const readText = (p) => { try { return readFileSync(p, "utf8"); } catch { return null; } };
+const readJson = (p) => { const t = readText(p); if (t == null) return null; try { return JSON.parse(t); } catch { return null; } };
 
-// ---- 版本专属文件：只能出现在自己这一侧 ----
-// 格式：[文件, 归属版本]  —— 归属版本出现在对方仓里 = 交叉污染
-const OWNED_BY = [
-  // Cindy 专属
-  ["ghost.json", "cindy"],
-  ["settings.html", "cindy"],
-  ["settings.js", "cindy"],
-  ["bridge", "cindy"],
-  // OpenCode 专属
-  [".mcprc.template", "opencode"],
-  ["opencode.json.template", "opencode"],
-  ["carlos.js", "opencode"],
-];
-
-// ---- 身份标识：README / package.json 必须指向自己 ----
-// 两仓共用同一套正则，靠 SELF_NAME 动态选择「自己」与「对方」。
-const labelZh = SELF_NAME === "cindy" ? "Cindy" : "OpenCode";
-const labelEn = labelZh;
-const peerLabelZh = PEER_NAME === "cindy" ? "Cindy" : "OpenCode";
-const peerLabelEn = peerLabelZh;
-
-const IDENTITY_CHECKS = [
-  {
-    file: "README.md",
-    selfMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${labelZh}\\s*适配版`),
-    peerMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${peerLabelZh}\\s*适配版`),
-    label: "README.md 标题",
-  },
-  {
-    file: "README.zh.md",
-    selfMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${labelZh}\\s*适配版`),
-    peerMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${peerLabelZh}\\s*适配版`),
-    label: "README.zh.md 标题",
-  },
-  {
-    file: "README.en.md",
-    selfMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${labelEn}\\s*Edition`),
-    peerMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${peerLabelEn}\\s*Edition`),
-    label: "README.en.md 标题",
-  },
-];
-
-// ---- 工具 ----
-const readText = (root, rel) => {
-  const p = join(root, rel);
-  if (!existsSync(p)) return null;
-  return readFileSync(p, "utf8");
-};
-// 归一化：去掉行尾符差异（CRLF → LF），其余原样保留
-const norm = (s) => (s === null ? null : s.replace(/\r\n/g, "\n"));
-
-const problems = [];
-const notes = [];
-const okCount = { match: 0, owned: 0, identity: 0 };
-
-// ---- 1) 核心逻辑必须逐字一致 ----
-for (const rel of MUST_MATCH) {
-  const a = norm(readText(SELF_ROOT, rel));
-  const b = norm(readText(PEER_ROOT, rel));
-  if (a === null && b === null) {
-    notes.push(`SKIP  ${rel}（两仓都不存在）`);
-    continue;
-  }
-  if (a === null || b === null) {
-    problems.push(`MISSING  ${rel}：只存在于 ${a === null ? PEER_NAME : SELF_NAME} 一侧 —— 核心逻辑文件必须两仓同时存在`);
-    continue;
-  }
-  if (a === b) {
-    okCount.match++;
-  } else {
-    problems.push(`DIFF    ${rel}：核心逻辑与 ${PEER_NAME} 不一致 —— 必须逐字相同（跨仓同步时只做定向补丁，禁止整份覆盖）`);
-  }
-}
-
-// ---- 2) 版本专属文件不得交叉 ----
-for (const [rel, owner] of OWNED_BY) {
-  const inSelf = existsSync(join(SELF_ROOT, rel));
-  const inPeer = existsSync(join(PEER_ROOT, rel));
-  if (owner === SELF_NAME) {
-    if (!inSelf) {
-      notes.push(`NOTE    ${rel}：${SELF_NAME} 版应有此文件但缺失`);
-    } else if (inPeer) {
-      problems.push(`POLLUTE ${rel}：属于 ${owner} 版，却出现在 ${PEER_NAME} 仓 —— 版本专属文件交叉污染`);
-    } else {
-      okCount.owned++;
-    }
-  } else {
-    if (inSelf) {
-      problems.push(`POLLUTE ${rel}：属于 ${owner} 版，却出现在 ${SELF_NAME} 仓 —— 版本专属文件交叉污染`);
-    } else if (!inPeer) {
-      notes.push(`NOTE    ${rel}：${owner} 版应有此文件但缺失`);
-    } else {
-      okCount.owned++;
-    }
-  }
-}
-
-// ---- 3) 身份标识必须指向自己 ----
-const pkg = JSON.parse(readText(SELF_ROOT, "package.json") || "{}");
-const peerPkg = JSON.parse(readText(PEER_ROOT, "package.json") || "{}");
-
-if (pkg.name && !pkg.name.endsWith(`-${SELF_NAME}`)) {
-  problems.push(`IDENT   package.json name="${pkg.name}" 与本仓身份（-${SELF_NAME}）不符`);
+// ---- 1. 身份 ----
+section("身份（package.json.name）");
+const pkg = readJson(join(ROOT, "package.json"));
+if (!pkg) {
+  fail("package.json 读不到或不是合法 JSON");
+} else if (pkg.name !== "carlos-flow") {
+  fail(`package.json.name = "${pkg.name}"，期望 "carlos-flow"（v2.5.x 的 carlos-flow-cindy / carlos-flow-opencode 已废弃）`);
 } else {
-  okCount.identity++;
-}
-if (peerPkg.name && peerPkg.name.endsWith(`-${SELF_NAME}`)) {
-  problems.push(`IDENT   对方 package.json name="${peerPkg.name}" 与 ${PEER_NAME} 身份不符`);
+  pass(`package.json.name = carlos-flow`);
 }
 
-for (const chk of IDENTITY_CHECKS) {
-  const txt = readText(SELF_ROOT, chk.file);
-  if (txt === null) {
-    problems.push(`MISSING ${chk.file}：本仓缺少该文件`);
-    continue;
+// ---- 2. 版本一致 ----
+section("版本一致性（package.json / lock / ghost.json / TRIGGER_GUIDE.md）");
+if (pkg) {
+  const ver = pkg.version;
+  const lock = readJson(join(ROOT, "package-lock.json"));
+  const lockVer = lock && (lock.version || (lock.packages && lock.packages[""] && lock.packages[""].version));
+  if (lockVer === ver) pass(`package-lock.json = ${lockVer}`);
+  else fail(`package-lock.json = ${lockVer || "(读不到)"}，期望 ${ver}（release.yml 的 npm ci 会因此失败）`);
+
+  const ghost = readJson(join(ROOT, "ghost.json"));
+  if (ghost) {
+    if (ghost.version === ver) pass(`ghost.json = ${ghost.version}`);
+    else fail(`ghost.json = ${ghost.version}，期望 ${ver}（Cindy 插件市场会显示这个版本号）`);
+  } else {
+    fail("ghost.json 读不到或不是合法 JSON");
   }
-  if (chk.peerMust.test(txt)) {
-    problems.push(`IDENT   ${chk.label} 写成了对方版本（${PEER_NAME}）—— 本仓必须声明自己是 ${SELF_NAME} 版`);
-    continue;
-  }
-  if (!chk.selfMust.test(txt)) {
-    problems.push(`IDENT   ${chk.label} 未声明本仓身份（${SELF_NAME}）—— 期望匹配 ${chk.selfMust}`);
-    continue;
-  }
-  okCount.identity++;
+
+  const guide = readText(join(ROOT, "TRIGGER_GUIDE.md")) || "";
+  const m = guide.match(/\*\*版本\*\*\s*:\s*v?(\d+\.\d+\.\d+)/);
+  if (m && m[1] === ver) pass(`TRIGGER_GUIDE.md = ${m[1]}`);
+  else fail(`TRIGGER_GUIDE.md 版本 = ${m ? m[1] : "(提取不到)"}，期望 ${ver}`);
+
+  const changelog = readText(join(ROOT, "CHANGELOG.md")) || "";
+  const topVer = (changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m) || [])[1];
+  if (topVer === ver) pass(`CHANGELOG.md 顶部 = ${topVer}`);
+  else fail(`CHANGELOG.md 顶部 = ${topVer || "(提取不到)"}，期望 ${ver}`);
 }
 
-// ---- 3b) 对方仓的身份也要检查（双向）----
-// 只查本仓是不够的：事故往往是「某一版被污染」，而从另一个方向跑守卫时
-// 同样必须能发现。否则 cindy 仓的 CI 看不到 opencode 仓被覆盖成 Cindy 版。
-const PEER_IDENTITY_CHECKS = [
-  {
-    file: "README.md",
-    peerSelfMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${peerLabelZh}\\s*适配版`),
-    peerPeerMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${labelZh}\\s*适配版`),
-    label: "README.md 标题",
-  },
-  {
-    file: "README.zh.md",
-    peerSelfMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${peerLabelZh}\\s*适配版`),
-    peerPeerMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${labelZh}\\s*适配版`),
-    label: "README.zh.md 标题",
-  },
-  {
-    file: "README.en.md",
-    peerSelfMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${peerLabelEn}\\s*Edition`),
-    peerPeerMust: new RegExp(`#\\s*Carlos Flow\\s*—\\s*${labelEn}\\s*Edition`),
-    label: "README.en.md 标题",
-  },
+// ---- 3. 文档一致性 ----
+section("文档一致性（中英双语零漂移）");
+const readme = readText(join(ROOT, "README.md"));
+const readmeZh = readText(join(ROOT, "README.zh.md"));
+const readmeEn = readText(join(ROOT, "README.en.md"));
+
+if (readme && readmeZh) {
+  if (readme === readmeZh) pass("README.md == README.zh.md");
+  else fail("README.md 与 README.zh.md 不一致（跑 npm run sync:readme）");
+} else {
+  fail("README.md 或 README.zh.md 缺失");
+}
+
+if (readme && readmeEn) {
+  const navOk = readme.includes("(README.en.md)") && readme.includes("(README.zh.md)");
+  if (navOk) pass("README.md 含语言切换导航栏");
+  else fail("README.md 缺语言切换导航栏");
+  const enLooksZh = /^#\s+.*(中文)/m.test(readmeEn.split("\n").slice(0, 12).join("\n"));
+  if (enLooksZh) fail("README.en.md 看起来是中文版（复制错了）");
+  else pass("README.en.md 是英文版");
+} else {
+  fail("README.en.md 缺失");
+}
+
+if (readme) {
+  for (const link of ["./MIGRATION.md", "./TRIGGER_GUIDE.md", "./CHANGELOG.md"]) {
+    if (readme.includes(link)) pass(`README.md 链接到 ${link}`);
+    else fail(`README.md 未链接到 ${link}`);
+  }
+}
+
+// ---- 4. 产物内容 ----
+section("产物内容（npm 包必须包含的文件）");
+const REQUIRED_FILES = [
+  "client/carlos.js",
+  "src/index.js",
+  "src/trigger.js",
+  "src/state.js",
+  "bridge/mcp-bridge.js",
+  "plugins/carlos-flow-trigger.js",
+  "ghost.json",
+  "opencode.json",
+  "opencode.json.template",
+  ".mcprc.template",
+  "trigger-config.usable.json",
+  "templates/cursor/mcp.json",
+  "templates/cline/mcp.json",
+  "templates/vscode/mcp.json",
+  "templates/claude/claude_desktop_config.json",
+  "README.md",
+  "README.zh.md",
+  "README.en.md",
+  "TRIGGER_GUIDE.md",
+  "MIGRATION.md",
+  "CHANGELOG.md",
+  "LICENSE",
 ];
-
-for (const chk of PEER_IDENTITY_CHECKS) {
-  const peerTxt = readText(PEER_ROOT, chk.file);
-  if (peerTxt === null) {
-    problems.push(`MISSING 对方仓 ${chk.file}：${PEER_NAME} 仓缺少该文件`);
-    continue;
-  }
-  if (chk.peerPeerMust.test(peerTxt)) {
-    problems.push(`IDENT   对方仓 ${chk.label} 写成了本仓版本（${SELF_NAME}）—— ${PEER_NAME} 仓的身份被污染了`);
-    continue;
-  }
-  if (!chk.peerSelfMust.test(peerTxt)) {
-    problems.push(`IDENT   对方仓 ${chk.label} 未声明自己是 ${PEER_NAME} 版 —— ${PEER_NAME} 仓的身份被污染了`);
-    continue;
-  }
-  okCount.identity++;
+for (const f of REQUIRED_FILES) {
+  if (existsSync(join(ROOT, f))) pass(f);
+  else fail(`缺少 ${f}`);
 }
 
-// ---- 4) package.json 描述不得指向对方 ----
-if (typeof pkg.description === "string") {
-  const otherLabel = SELF_NAME === "cindy" ? "OpenCode" : "Cindy";
-  const selfLabel = SELF_NAME === "cindy" ? "Cindy" : "OpenCode";
-  if (pkg.description.includes(otherLabel + " 适配版")) {
-    problems.push(`IDENT   package.json description 指向了 ${otherLabel} 版：「${pkg.description}」`);
-  } else if (!pkg.description.includes(selfLabel + " 适配版")) {
-    problems.push(`IDENT   package.json description 未声明 ${selfLabel} 版：「${pkg.description}」`);
-  }
+// ---- 5. 模板必须是合法 JSON ----
+section("模板合法性（必须是合法 JSON，不能带注释）");
+const JSON_FILES = [
+  "ghost.json",
+  "opencode.json",
+  "templates/cursor/mcp.json",
+  "templates/cline/mcp.json",
+  "templates/vscode/mcp.json",
+  "templates/claude/claude_desktop_config.json",
+  "trigger-config.usable.json",
+];
+for (const f of JSON_FILES) {
+  const j = readJson(join(ROOT, f));
+  if (j) pass(`${f} 是合法 JSON`);
+  else fail(`${f} 不是合法 JSON（含注释或语法错误）`);
 }
 
-// ---- 输出 ----
+// ---- 6. 敏感文件不得进包 ----
+section("敏感 / 临时文件（不得随包分发）");
+// 判定对象是「**实际会被发布的那批文件**」，而不是工作区里的所有文件 ——
+// 工作区可以有 .npmrc.local 这类本机凭据文件（已被 .gitignore 排除），
+// 但它们绝不能出现在 npm 包里。按 package.json 的 files 白名单推导发布集合。
+const publishedSet = (() => {
+  const out = [];
+  const filesList = Array.isArray(pkg && pkg.files) ? pkg.files : [];
+  const add = (rel) => {
+    const full = join(ROOT, rel);
+    if (!existsSync(full)) return;
+    let st;
+    try { st = statSync(full); } catch { return; }
+    if (st.isDirectory()) {
+      for (const e of readdirSync(full)) add(rel.replace(/\/$/, "") + "/" + e);
+    } else {
+      out.push(rel.replace(/\\/g, "/"));
+    }
+  };
+  for (const f of filesList) add(f);
+  return out;
+})();
+
+const FORBIDDEN = [/^\.npmrc$/, /^\.npmrc\.local$/, /secret\.json$/, /\.b64$/, /\.bak$/, /^fix_/, /^debug_/, /^\.mutation-report\.md$/, /\.pid$/];
+let bad = 0;
+for (const rel of publishedSet) {
+  if (FORBIDDEN.some((re) => re.test(rel))) {
+    fail(`发布集合里含敏感/临时文件：${rel}`);
+    bad++;
+  }
+}
+if (!bad) pass(`发布集合无敏感/临时文件（共 ${publishedSet.length} 个文件）`);
+
+// .npmrc 模板本身允许入库，但必须确认里面**没有真 token**
+const npmrcText = readText(join(ROOT, ".npmrc")) || "";
+if (/^\s*\/\/registry\.npmjs\.org\/:_authToken=\s*\$\{[^}]+\}/m.test(npmrcText) ||
+    (/^\s*#/m.test(npmrcText) && !/_authToken\s*=\s*npm_/m.test(npmrcText))) {
+  pass(".npmrc 是模板（无真实凭据）");
+} else {
+  fail(".npmrc 里出现了真实 token —— 不得入库");
+}
+
+console.log("\n" + "=".repeat(64));
+if (failed) {
+  console.log(`❌ 单包一致性检查失败：${failed} 项不通过`);
+  console.log("=".repeat(64));
+  process.exit(1);
+}
+console.log("✅ 单包一致性检查全部通过");
 console.log("=".repeat(64));
-console.log("Carlos Flow 双仓一致性守卫");
-console.log(`  本仓: ${SELF_NAME.padEnd(8)} ${SELF_ROOT}`);
-console.log(`  对方: ${PEER_NAME.padEnd(8)} ${PEER_ROOT}`);
-console.log("=".repeat(64));
-console.log(`核心逻辑一致: ${okCount.match}/${MUST_MATCH.length}`);
-console.log(`专属文件归属: ${okCount.owned}/${OWNED_BY.length}`);
-console.log(`身份标识:     ${okCount.identity}`);
-console.log("");
-
-if (notes.length) {
-  console.log("提示：");
-  for (const n of notes) console.log("  " + n);
-  console.log("");
-}
-
-if (problems.length === 0) {
-  console.log("✅ 两仓一致：核心逻辑逐字相同、版本专属文件无交叉、身份标识各自正确。");
-  process.exit(0);
-}
-
-console.log(`❌ 发现 ${problems.length} 处不一致：`);
-for (const p of problems) console.log("  " + p);
-console.log("");
-console.log("修复原则：");
-console.log("  · 核心逻辑（src/ test/ scripts/ CI）—— 以一版为准，逐字同步到另一版；");
-console.log("  · 身份与文档（README / SECURITY / CONTRIBUTING）—— 各自保留本版表述，禁止整份覆盖；");
-console.log("  · 版本专属文件—— 只留在属于自己的那一仓。");
-process.exit(1);
+process.exit(0);

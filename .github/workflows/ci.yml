@@ -66,28 +66,23 @@ jobs:
       - name: Lint (placeholder)
         run: npm run lint
 
-  # 双仓一致性守卫：防止 cindy ↔ opencode 两版身份混淆
-  # （历史上曾把 Cindy 版 README 整份覆盖到 opencode 仓，导致该仓对外宣称自己是 Cindy 版）。
-  #
-  # 关键：必须把**对方仓也检出**到相邻目录，否则守卫找不到 peer 会直接跳过（等于空转）。
-  parity:
+  # 单包一致性守卫：身份 / 版本 / 文档 / 产物 四类一致性。
+  # v2.5.x 的「双仓一致性」在 v2.6.0 单包化后已无意义（跨版本漂移的根因 ——
+  # 两份核心逻辑各自维护 —— 已被消除），但「对外宣称的身份与产物必须一致」
+  # 这个诉求更重要：单一包对外是一个统一的六平台产品，任何一处版本号 /
+  # 文档 / 清单不一致都会直接暴露给用户。
+  identity:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'cindy' || 'opencode' }}
-      - uses: actions/checkout@v4
-        with:
-          repository: skyer-now/carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'opencode' || 'cindy' }}
-          path: carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'opencode' || 'cindy' }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm install
-        working-directory: carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'cindy' || 'opencode' }}
-      - name: 双仓一致性检查
-        working-directory: carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'cindy' || 'opencode' }}
-        run: node scripts/check-repo-parity.mjs ../carlos-flow-${{ github.event.repository.name == 'carlos-flow-cindy' && 'opencode' || 'cindy' }}
+      - name: 单包一致性检查（身份 / 版本 / 文档 / 产物）
+        run: node scripts/check-repo-parity.mjs
+      - name: 变异体锚点体检
+        run: npm run check:anchors
 
   # 变异测试：验证测试套件本身能抓住退化（激活只打印日志 / 闸门失效 / 会话撞名 …）
   # 耗时较长，不在每次 push 跑；手动触发或发布前跑。
