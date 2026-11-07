@@ -30,7 +30,16 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // 允许出现在中文语境里的英文词（标识符 / 专有名词 / 外部接口名）
-// 允许出现在中文语境里的英文词（标识符 / 专有名词 / 外部接口名）。
+// 读文件并按行拆分。
+// ⚠️ 必须处理 CRLF：JavaScript 正则的 `.` **不匹配 `\r`**（它是行终止符），
+// 所以「按 \n 拆分」在 Windows 上会留下一行尾的 `\r`，
+// 导致 `(.+)$` 完全匹配不上 —— 注释扫描会**静默扫不到任何一行**，
+// 体检结果就是假绿。
+// 这正是 2026-11-07 实际发生的事：本地（CRLF）全部通过，CI（LF）却报出真问题。
+const readLines = (file) => {
+  const raw = readFileSync(file, "utf8");
+  return raw.split(/\r?\n/);
+};
 // 注意：必须**按词排除**而不是整行排除 —— 否则
 //   「fix(release): add missing shebang to bin entry」
 // 里的 fix / release 会让整行被放行，英文叙述就漏检了。
@@ -134,8 +143,8 @@ const walk = (dir, depth = 0) => {
 let codeProblems = 0;
 for (const f of walk(ROOT)) {
   const rel = f.slice(ROOT.length + 1).replace(/\\/g, "/");
-  const text = readFileSync(f, "utf8");
-  text.split("\n").forEach((line, i) => {
+  const lines = readLines(f);
+  lines.forEach((line, i) => {
     const m = line.match(/^\s*(?:\/\/|#)\s*(.+)$/);
     if (!m) return;
     const t = m[1].trim();

@@ -131,6 +131,33 @@ try {
   }
   check("纯中文注释仓库体检通过", zhCode === 0, `退出码=${zhCode}`);
   check("中文注释未被误报", !zhOut.includes("❌"));
+
+  // 2e. CRLF 回归：Windows 下文件是 \r\n 行尾。
+  //     JavaScript 正则的 `.` **不匹配 `\r`**（它算行终止符），
+  //     所以「按 \n 拆分」会留下一行尾 \r，让 `(.+)$` 完全匹配不上 ——
+  //     注释扫描会静默扫不到任何一行，体检变假绿。
+  //     这正是 2026-11-07 实际发生的事：本地（CRLF）全绿，CI（LF）却报真问题。
+  //     必须用 CRLF 文件验证：若扫描退化为空，这里会红。
+  const crlfDir = join(tmp2, "crlf");
+  execFileSync("node", ["-e", "require('fs').mkdirSync(process.argv[1],{recursive:true})", crlfDir], { stdio: "ignore" });
+  writeFileSync(
+    join(crlfDir, "sample-crlf.js"),
+    "// This CRLF comment is entirely in English and must still be detected\r\n" +
+      "// 这一行是中文注释，应当放行\r\n",
+    "utf8"
+  );
+  let crlfOut = "";
+  let crlfCode = 0;
+  try {
+    crlfOut = execFileSync("node", [join(scriptsDir, "lang-audit.mjs")], { cwd: tmp2, encoding: "utf8" });
+  } catch (e) {
+    crlfOut = `${e.stdout || ""}${e.stderr || ""}`;
+    crlfCode = e.status ?? 1;
+  }
+  check("CRLF 文件里的英文注释仍被抓出（不因 \\r 漏检）",
+    crlfCode !== 0 && crlfOut.includes("sample-crlf.js"),
+    `退出码=${crlfCode}`);
+  check("CRLF 文件里的中文注释不误报", !crlfOut.includes("这一行是中文注释，应当放行"));
 } finally {
   rmSync(tmp2, { recursive: true, force: true });
 }

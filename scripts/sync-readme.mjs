@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// sync-readme.mjs — keep the bilingual README set consistent.
+// sync-readme.mjs — 保持多语言 README 集合一致
 //
-// Layout (scheme A — separate language files):
+// 文件布局（方案 A —— 三份独立文件）：
 //   README.md      ← 中文主文档（GitHub 首页 / npm 渲染页默认展示）
 //   README.zh.md   ← 中文副本（保证 /README.zh.md 直链可用，与主文档一致）
 //   README.en.md   ← 英文完整版（顶部语言栏切换目标）
 //
-// Usage:
-//   node scripts/sync-readme.mjs          # sync + verify (exit 1 on drift)
-//   node scripts/sync-readme.mjs --check  # verify only, never writes
+// 用法：
+//   node scripts/sync-readme.mjs          # 同步并校验（发现漂移时退出码 1）
+//   node scripts/sync-readme.mjs --check  # 只校验，绝不写文件
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
