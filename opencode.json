@@ -1,0 +1,32 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "carlos-flow": {
+      "type": "local",
+      "command": [
+        "node",
+        "__ROOT__/src/index.js"
+      ],
+      "enabled": true,
+      "environment": {
+        "CARLOS_FLOW_HOME": "<CARLOS_FLOW_HOME>"
+      }
+    }
+  },
+  "instructions": [
+    "__ROOT__/README.md"
+  ],
+  "model": "<YOUR_PREFERRED_MODEL>",
+  "agent": {
+    "carlos": {
+      "permission": {
+        "question": "allow",
+        "*": "allow"
+      }
+    }
+  },
+  "permission": {
+    "question": "allow",
+    "*": "allow"
+  }
+}

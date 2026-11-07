@@ -10,7 +10,7 @@
   "entry": "client/carlos.js",
   "command": "门禁",
   "node": {
-    "entry": "bridge/mcp-bridge.js",
+    "entry": "__ROOT__/bridge/mcp-bridge.js",
     "protocol": "json-rpc-stdio",
     "lifecycle": "on-demand",
     "idleTimeoutSeconds": 300

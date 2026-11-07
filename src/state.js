@@ -29,10 +29,11 @@ export const RUNS_DIR = path.join(FLOW_HOME, "gate-state", "runs");
 
 // OpenCode 会话库路径：环境变量优先，回落到跨平台默认
 // OPENCODE_DB_PATH / OPENCODE_DB 与插件侧同一套约定
+// ~ 路径同样需要展开（Windows PowerShell 下 CARLOS_OPENCODE_DB=~/.opencode 会字面写入）
 const OPENCODE_DB = path.normalize(
-  process.env.OPENCODE_DB_PATH ||
-    process.env.OPENCODE_DB ||
-    process.env.CARLOS_OPENCODE_DB ||
+  expandHome(process.env.OPENCODE_DB_PATH) ||
+    expandHome(process.env.OPENCODE_DB) ||
+    expandHome(process.env.CARLOS_OPENCODE_DB) ||
     path.join(os.homedir(), ".local", "share", "opencode", "opencode.db")
 );
 

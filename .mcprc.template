@@ -1,0 +1,28 @@
+# Carlos 工作流 - OpenCode MCP 配置模板
+# 复制为 ~/.config/opencode/.mcprc 并修改路径
+
+mcpServers:
+  carlos-flow:
+    command: "node"
+    args: ["__ROOT__/src/index.js"]
+    env:
+      CARLOS_FLOW_HOME: "<CARLOS_FLOW_HOME>"
+      # 可选：如需使用 rea 工具
+      # REA_MCP_ROOT: "<REA_MCP_ROOT>"
+      # GHIDRA_INSTALL_DIR: "<GHIDRA_HOME>"
+      # JAVA_HOME: "<JAVA_HOME>"
+      # NODE_PATH: "node"
+
+  # 可选：rea 逆向分析工具（需单独安装 Ghidra + JDK 21）
+  # rea:
+  #   command: "node"
+  #   args: ["<REA_MCP_ROOT>/node_modules/rea-agents/scripts/rea.mjs", "mcp"]
+  #   env:
+  #     GHIDRA_INSTALL_DIR: "<GHIDRA_HOME>"
+  #     JAVA_HOME: "<JAVA_HOME>"
+
+# 说明：
+# - __ROOT__ 替换为本仓库根目录绝对路径（含 src/）
+# - <CARLOS_FLOW_HOME> 替换为状态/审计目录，如 ~/carlos-flow 或 ~/opencode-backups
+# - Windows 路径用正斜杠 / 或双反斜杠 \
+# - OpenCode 2.2.2+ 读取此文件或 opencode.json（二选一生效）

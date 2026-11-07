@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "carlos-flow": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["__ROOT__/src/index.js"],
+      "env": {
+        "CARLOS_FLOW_HOME": "<CARLOS_FLOW_HOME>"
+      }
+    }
+  }
+}

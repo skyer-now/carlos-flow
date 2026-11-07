@@ -1,11 +1,12 @@
 // Carlos MCP 快速客户端 — 自包含，自动管理 Bridge 生命周期
 // 用法: node carlos.js <tool_name> [json_args]
+//        node carlos.js init --target cindy|opencode
 // 首次调用自动启动 Bridge，后续直连复用
 
 import { createConnection, createServer } from "node:net";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { resolve, join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import os from "node:os";
 
@@ -13,7 +14,9 @@ import os from "node:os";
 const DEFAULT_FLOW_HOME = join(os.homedir(), ".carlos-flow");
 
 const BRIDGE_PORT = parseInt(process.env.BRIDGE_PORT || "19099", 10);
-const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || ".";
+// 优先用环境变量；否则从脚本位置推导包根目录（client/ 同级）
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || resolve(SCRIPT_DIR, "..");
 const ROOT_ABS = resolve(ROOT);
 // Bridge 脚本位置：优先 bridge/mcp-bridge.js（发布版布局），回退到根目录 mcp-bridge.js（扁平布局）
 const BRIDGE_SCRIPT = [
@@ -38,8 +41,24 @@ try {
 const toolName = process.argv[2];
 const argsJson = process.argv[3] || "{}";
 
+// ===== init 命令：一键生成宿主配置 =====
+if (toolName === "init") {
+  const target = process.argv.includes("--target")
+    ? process.argv[process.argv.indexOf("--target") + 1]
+    : process.env.CARLOS_INIT_TARGET;
+  const VALID_TARGETS = ["cindy", "opencode", "cursor", "cline", "vscode", "claude"];
+  if (!target || !VALID_TARGETS.includes(target)) {
+    console.error("用法: node carlos.js init --target cindy|opencode|cursor|cline|vscode|claude");
+    console.error("  或设置环境变量 CARLOS_INIT_TARGET=<target>");
+    process.exit(1);
+  }
+  await runInit(target);
+  process.exit(0);
+}
+
 if (!toolName) {
   console.error("用法: node carlos.js <tool_name> [json_args]");
+  console.error("      node carlos.js init --target cindy|opencode|cursor|cline|vscode|claude");
   console.error("工具: flow_protocol flow_submit_requirement flow_claim flow_dispatch flow_run_verify flow_check_scope flow_verdict flow_status flow_audit flow_diff_hunks flow_bypass flow_add_user_msg flow_save_result flow_revert_plan");
   process.exit(1);
 }
@@ -113,7 +132,7 @@ async function checkTrigger(message = '') {
         const isErr = r.result?.isError === true;
         const txt = r.result?.content?.[0]?.text || '';
         if (isErr) {
-          console.error(`[Carlos Trigger] 激活步骤 ${step.tool} 失败：${txt.split('\n')[0]}`);
+          console.error(`[Carlos Trigger] 激活步骤 ${step.tool} 失败：${txt.split('\\n')[0]}`);
         } else {
           executed.push(step.tool);
           console.error(`[Carlos Trigger] 已执行激活步骤：${step.tool}（${step.reason}）`);
@@ -267,6 +286,111 @@ function callMCP(method, params) {
       if (!resolved) { resolved = true; clearTimeout(timer); reject(new Error("连接已关闭")); }
     });
   });
+}
+
+// ===== init 命令实现 =====
+async function runInit(target) {
+  const home = resolve(os.homedir());
+  
+  // 通用：先生成触发器配置
+  const flowHome = process.env.CARLOS_FLOW_HOME || join(home, ".carlos-flow");
+  mkdirSync(flowHome, { recursive: true });
+  const tcPath = join(flowHome, "trigger-config.json");
+  if (!existsSync(tcPath)) {
+    const tcTemplate = readFileSync(resolve(ROOT_ABS, "trigger-config.usable.json"), "utf8");
+    writeFileSync(tcPath, tcTemplate, "utf8");
+    console.log(`✅ 触发器配置已写入: ${tcPath}`);
+  }
+  
+  if (target === "cindy") {
+    // --- Cindy: 生成 ghost.json 到 ~/.cindy/ghosts/ ---
+    const ghostsDir = join(home, ".cindy", "ghosts");
+    mkdirSync(ghostsDir, { recursive: true });
+    const ghostPath = join(ghostsDir, "carlos-flow.json");
+    
+    const ghostTemplate = readFileSync(resolve(ROOT_ABS, "ghost.json"), "utf8");
+    const ghostContent = ghostTemplate.replace(/__ROOT__/g, ROOT_ABS);
+    writeFileSync(ghostPath, ghostContent, "utf8");
+    console.log(`✅ Cindy ghost 已写入: ${ghostPath}`);
+    console.log(`   重启 Cindy 后即可在侧栏看到 "Carlos 工作流" 插件`);
+  } else if (target === "opencode") {
+    // --- OpenCode: 生成 opencode.json 到 ~/.config/opencode/plugin/ ---
+    const pluginDir = join(home, ".config", "opencode", "plugin");
+    mkdirSync(pluginDir, { recursive: true });
+    const pluginPath = join(pluginDir, "opencode.json");
+    
+    const pluginTemplate = readFileSync(resolve(ROOT_ABS, "opencode.json.template"), "utf8");
+    const pluginContent = pluginTemplate.replace(/__ROOT__/g, ROOT_ABS);
+    writeFileSync(pluginPath, pluginContent, "utf8");
+    console.log(`✅ OpenCode 插件配置已写入: ${pluginPath}`);
+    
+    // 同时生成 .mcprc 到项目根目录（用户可手动复制）
+    const mcprcTemplate = readFileSync(resolve(ROOT_ABS, ".mcprc.template"), "utf8");
+    const mcprcContent = mcprcTemplate.replace(/__ROOT__/g, ROOT_ABS);
+    const mcprcPath = join(process.cwd(), ".mcprc");
+    writeFileSync(mcprcPath, mcprcContent, "utf8");
+    console.log(`✅ MCP 配置模板已写入: ${mcprcPath}`);
+    console.log(`   请将其内容合并到您的项目 .mcprc 中（或直接使用该文件）`);
+  } else if (target === "cursor" || target === "cline") {
+    // --- Cursor / Cline / Windsurf: 生成 .cursor/mcp.json 或 .cline/mcp.json ---
+    const configDir = join(process.cwd(), target === "cursor" ? ".cursor" : ".cline");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, "mcp.json");
+    
+    const templatePath = resolve(ROOT_ABS, "templates", target, "mcp.json");
+    const template = readFileSync(templatePath, "utf8");
+    const content = template.replace(/__ROOT__/g, ROOT_ABS);
+    writeFileSync(configPath, content, "utf8");
+    console.log(`✅ ${target.charAt(0).toUpperCase() + target.slice(1)} 配置已写入: ${configPath}`);
+  } else if (target === "vscode") {
+    // --- VS Code (GitHub Copilot): 生成 .vscode/mcp.json ---
+    const configDir = join(process.cwd(), ".vscode");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, "mcp.json");
+    
+    const templatePath = resolve(ROOT_ABS, "templates", "vscode", "mcp.json");
+    const template = readFileSync(templatePath, "utf8");
+    const content = template.replace(/__ROOT__/g, ROOT_ABS);
+    writeFileSync(configPath, content, "utf8");
+    console.log(`✅ VS Code (Copilot) 配置已写入: ${configPath}`);
+  } else if (target === "claude") {
+    // --- Claude Desktop: 追加到 ~/Library/Application Support/Claude/claude_desktop_config.json ---
+    let configDir;
+    if (process.platform === "darwin") {
+      configDir = join(home, "Library", "Application Support", "Claude");
+    } else if (process.platform === "win32") {
+      configDir = join(process.env.APPDATA || join(home, "AppData", "Roaming"), "Claude");
+    } else {
+      configDir = join(home, ".config", "Claude");
+    }
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, "claude_desktop_config.json");
+    
+    let existing = {};
+    if (existsSync(configPath)) {
+      try { existing = JSON.parse(readFileSync(configPath, "utf8")); } catch {}
+    }
+    if (!existing.mcpServers) existing.mcpServers = {};
+    
+    const templatePath = resolve(ROOT_ABS, "templates", "claude", "claude_desktop_config.json");
+    const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    existing.mcpServers["carlos-flow"] = template.mcpServers["carlos-flow"];
+    
+    // 替换 __ROOT__
+    if (existing.mcpServers["carlos-flow"].args) {
+      existing.mcpServers["carlos-flow"].args = existing.mcpServers["carlos-flow"].args.map(a => a.replace(/__ROOT__/g, ROOT_ABS));
+    }
+    if (existing.mcpServers["carlos-flow"].env) {
+      for (const k of Object.keys(existing.mcpServers["carlos-flow"].env)) {
+        existing.mcpServers["carlos-flow"].env[k] = existing.mcpServers["carlos-flow"].env[k].replace(/__ROOT__/g, ROOT_ABS);
+      }
+    }
+    
+    writeFileSync(configPath, JSON.stringify(existing, null, 2), "utf8");
+    console.log(`✅ Claude Desktop 配置已更新: ${configPath}`);
+  }
+  console.log(`\n🎉 初始化完成！现在可以使用 carlos-flow 了。`);
+  console.log(`   提示: 设置环境变量 CARLOS_FLOW_HOME 可自定义状态目录（默认 ~/.carlos-flow）`);
 }
 
 async function main() {

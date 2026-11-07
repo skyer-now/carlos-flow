@@ -502,23 +502,21 @@ async function main() {
   check("24c. flow_status 暴露 verify_passed（验证是否真的通过）",
     r.ok && r.data?.verify_passed === true, r.ok ? `verify_passed=${r.data?.verify_passed}` : r.error);
 
-  // 25. 发布推送顺序守护：opencode 必须先于 cindy
-  // （顺序被误改会重新出现「cindy 已打 tag 而 opencode 失败」的半发布）
+  // 25. 发布推送序列守护：单包统一发布 carlos-flow
   const relOut = await runNodeScript(path.join(ROOT, "scripts", "release.mjs"), ["--print-push-sequence"]);
   let pushSeq = [];
   try {
     pushSeq = JSON.parse(String(relOut.stdout || "").trim() || "[]");
   } catch {
-    /* 解析失败 → 25a/25b 会红 */
+    /* 解析失败 → 25a 会红 */
   }
   const pushRepos = Array.isArray(pushSeq) ? pushSeq.map((x) => x && x.repo) : [];
-  const ocIdx = pushRepos.indexOf("opencode");
-  const cindyIdx = pushRepos.indexOf("cindy");
+  const cindyIdx = pushRepos.indexOf("carlos-flow");
   check("25a. release.mjs 暴露有序推送序列（--print-push-sequence）",
-    relOut.ok && Array.isArray(pushSeq) && pushSeq.length >= 2 && ocIdx >= 0 && cindyIdx >= 0,
+    relOut.ok && Array.isArray(pushSeq) && pushSeq.length >= 1 && cindyIdx >= 0,
     relOut.ok ? `order=${pushRepos.join(",")}` : String(relOut.stderr || relOut.error || "").slice(0, 160));
-  check("25b. 推送顺序：opencode 先于 cindy（防半发布）",
-    ocIdx >= 0 && cindyIdx >= 0 && ocIdx < cindyIdx, `order=${pushRepos.join(",")}`);
+  check("25b. 推送序列包含 carlos-flow（单包统一发布）",
+    cindyIdx >= 0, `order=${pushRepos.join(",")}`);
 
   // 26. MCP 路径的智能触发（历史缺陷：触发引擎只接在 CLI 客户端上，
   //     MCP server 根本不接触发引擎 —— 在 OpenCode / Cindy 里直接用 MCP 工具时，

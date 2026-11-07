@@ -1,12 +1,19 @@
 {
-  "name": "carlos-flow-cindy",
+  "name": "carlos-flow",
   "version": "2.5.9",
-  "description": "Carlos 工作流 MCP - Cindy 适配版（自动管理 Bridge，内置密钥库集成）",
+  "description": "Carlos 工作流 — 双生态统一分发（Cindy / OpenCode）。一次安装，按需初始化：`carlos-flow init --target cindy|opencode`",
   "type": "module",
   "main": "src/index.js",
   "bin": {
     "carlos-flow": "client/carlos.js",
-    "carlos-flow-cindy": "client/carlos.js"
+    "carlos-flow-cindy": "client/carlos.js",
+    "carlos-flow-opencode": "client/carlos.js"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./cindy": "./ghost.json",
+    "./opencode": "./opencode.json",
+    "./trigger-config": "./trigger-config.usable.json"
   },
   "scripts": {
     "test": "node test/smoke.js",
@@ -24,30 +31,58 @@
     "prepublishOnly": "npm run check:readme",
     "start:bridge": "node bridge/mcp-bridge.js",
     "lint": "echo \"no linter configured\"",
-    "check:anchors": "node scripts/check-mutant-anchors.mjs"
+    "check:anchors": "node scripts/check-mutant-anchors.mjs",
+    "init:cindy": "node client/carlos.js init --target cindy",
+    "init:opencode": "node client/carlos.js init --target opencode",
+    "init:cursor": "node client/carlos.js init --target cursor",
+    "init:cline": "node client/carlos.js init --target cline",
+    "init:vscode": "node client/carlos.js init --target vscode",
+    "init:claude": "node client/carlos.js init --target claude"
   },
   "keywords": [
     "carlos",
     "workflow",
     "mcp",
     "cindy",
+    "opencode",
     "gate",
-    "audit"
+    "audit",
+    "trigger"
   ],
   "author": "Carlos Flow Contributors",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/skyer-now/carlos-flow-cindy.git"
+    "url": "https://github.com/skyer-now/carlos-flow.git"
   },
   "bugs": {
-    "url": "https://github.com/skyer-now/carlos-flow-cindy/issues"
+    "url": "https://github.com/skyer-now/carlos-flow/issues"
   },
-  "homepage": "https://github.com/skyer-now/carlos-flow-cindy#readme",
+  "homepage": "https://github.com/skyer-now/carlos-flow#readme",
   "engines": {
     "node": ">=22.0.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
-  }
+  },
+  "files": [
+    "client/",
+    "src/",
+    "bridge/",
+    "plugins/",
+    "scripts/",
+    "templates/",
+    "ghost.json",
+    "opencode.json",
+    "opencode.json.template",
+    ".mcprc.template",
+    "trigger-config.usable.json",
+    "trigger-config.example.json",
+    "README.md",
+    "README.zh.md",
+    "README.en.md",
+    "TRIGGER_GUIDE.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
 }
