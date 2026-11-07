@@ -400,6 +400,82 @@
           "sessionId"
         ]
       }
+    },
+    {
+      "name": "flow_run_verify",
+      "description": "执行卡片中指定的验证命令，返回执行结果（退出码、stdout、stderr）。用于在派发 executor 后验证其工作成果，或手动触发验证。记 PASS 裁定前必须先跑通本工具。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "工作目录，默认 process.cwd()"
+          }
+        }
+      }
+    },
+    {
+      "name": "flow_check_scope",
+      "description": "检查指定文件列表是否在卡片 scope 范围内。用于在提交裁定前自查越界改动。空 scope 判定为全部越界（fail-closed）。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "要检查的文件路径列表"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "仓库工作目录，默认 process.cwd()"
+          }
+        },
+        "required": [
+          "sessionId"
+        ]
+      }
+    },
+    {
+      "name": "flow_trigger_check",
+      "description": "智能触发检查：判断当前这条用户消息是否应该启动 Carlos 工作流，并在达标时实际完成激活（写入用户原话 + 开占位卡 → 会话进入门禁态）。宿主在收到用户消息时调用本工具，就能获得与命令行客户端完全一致的自动触发行为。未达阈值时只如实返回评分与决策，不做任何动作；被限流时也如实返回真实评分。中文流程词（工作流/门禁/派发/审计…）已内置，中文需求同样能触发。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "message": {
+            "type": "string",
+            "description": "用户本轮消息原文（必须是真实原话，用于 quote 锚点）"
+          },
+          "complexity": {
+            "type": "number",
+            "description": "任务复杂度系数，默认 1.0"
+          },
+          "execute": {
+            "type": "boolean",
+            "description": "true = 达标时实际执行激活步骤（默认 true）；false = 只评分不动作"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "工作目录，默认 process.cwd()"
+          }
+        },
+        "required": [
+          "message"
+        ]
+      }
     }
   ]
 }

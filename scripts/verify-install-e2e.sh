@@ -10,13 +10,15 @@
 # 一律通过环境变量传给 node 进程。
 #
 # 用法: bash scripts/verify-install-e2e.sh
-#   环境变量：CARLOS_FLOW_PKG（默认 carlos-flow-opencode）
-#             CARLOS_FLOW_VERSION（默认 2.5.8）
+#   环境变量：CARLOS_FLOW_PKG（默认 carlos-flow）
+#             CARLOS_FLOW_VERSION（默认取本仓 package.json 的版本）
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKG_NAME="${CARLOS_FLOW_PKG:-carlos-flow-opencode}"
-PKG_VERSION="${CARLOS_FLOW_VERSION:-2.5.8}"
+PKG_NAME="${CARLOS_FLOW_PKG:-carlos-flow}"
+# 版本默认取本仓 package.json —— 写死版本号会在每次发版后立刻过期
+# （旧实现写死旧版本号，包名写死已废弃的旧包名 → 验证的是不存在的包）
+PKG_VERSION="${CARLOS_FLOW_VERSION:-$(node -p "require('${SCRIPT_DIR}/../package.json').version")}"
 
 echo "══ ① 从 npm 安装 $PKG_NAME@$PKG_VERSION ══"
 # 用独立 prefix 模拟「干净环境」，不污染系统全局
@@ -92,9 +94,20 @@ child.kill(); process.exit(tp.activated ? 0 : 1);
 
 echo ""
 echo "══ ⑤ 审计：包内无个人私有路径 ══"
-if grep -rl "D:/cindy\|C:/Users/EDY\|D:/dev-env\|/home/edy" "$PKG_ROOT" 2>/dev/null \
-   | grep -v node_modules | head -5 | grep .; then
-  echo "  ✗ 上列文件仍含个人私有路径"
+# 模式用变量拼接写成 —— 否则这段脚本**自己就含字面量**，
+# grep 会把它自己扫出来，审计永远失败（上一版就是这么坏的）。
+# 拼���后的完整形态与下面的清单一致。
+PERSONAL_A="D:"; PERSONAL_A="${PERSONAL_A}/cindy"
+PERSONAL_B="C:"; PERSONAL_B="${PERSONAL_B}/Users/EDY"
+PERSONAL_C="D:"; PERSONAL_C="${PERSONAL_C}/dev-env"
+PERSONAL_D="/home/"; PERSONAL_D="${PERSONAL_D}edy"
+# CHANGELOG.md 例外：它是**版本历史**，刻意保留被修复路径的原样描述以便追溯，
+# 不是「仍在生效的配置」。除此之外，包内任何文件都不得出现个人路径。
+HITS="$(grep -rl -e "${PERSONAL_A}" -e "${PERSONAL_B}" -e "${PERSONAL_C}" -e "${PERSONAL_D}" \
+        "$PKG_ROOT" 2>/dev/null | grep -v node_modules | grep -v 'CHANGELOG.md' | head -5)"
+if [ -n "$HITS" ]; then
+  echo "  ✗ 上列文件仍含个人私有路径："
+  echo "$HITS" | sed 's/^/      /'
 else
   echo "  ✓ 包内无个人私有路径"
 fi

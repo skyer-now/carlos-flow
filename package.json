@@ -40,7 +40,8 @@
     "init:vscode": "node client/carlos.js init --target vscode",
     "init:claude": "node client/carlos.js init --target claude",
     "check:lang": "node scripts/lang-audit.mjs",
-    "test:lang": "node test/lang-audit.test.mjs"
+    "test:lang": "node test/lang-audit.test.mjs",
+    "check:full": "node scripts/full-audit.mjs"
   },
   "keywords": [
     "carlos",

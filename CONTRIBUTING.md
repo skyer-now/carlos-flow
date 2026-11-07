@@ -5,10 +5,8 @@
 ## 🚀 快速开始
 
 ```bash
-# 1. Fork 并克隆
-git clone https://github.com/skyer-now/carlos-flow-cindy.git
-# 或
-git clone https://github.com/skyer-now/carlos-flow-opencode.git
+# 1. Fork 并克隆（单一仓库，Cindy / OpenCode / Cursor / Cline / VS Code / Claude Desktop 共用）
+git clone https://github.com/skyer-now/carlos-flow.git
 
 # 2. 安装依赖
 npm install
@@ -72,4 +70,4 @@ npm run test:e2e  # 端到端测试（需配置环境变量）
 
 ---
 
-**两版仓库通用**：本文件同时适用于 `carlos-flow-cindy` 和 `carlos-flow-opencode`。
+**单一仓库**：v2.6.0 起已合并为单一仓库 `carlos-flow`，本文件适用于全部支持的平台。

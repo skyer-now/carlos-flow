@@ -3,7 +3,7 @@
 # 用法: bash scripts/verify-activation-e2e.sh [repo-root]
 #
 # 根目录默认从**脚本自身位置**推导（scripts/ → 仓库根），
-# 不写死任何开发者的本机路径 —— 旧实现写死 `D:/cindy/publish-output/carlos-flow-cindy`，
+# 不写死任何开发者的本机路径 —— 旧实现写死了某台开发机的本机路径，
 # 在别人机器上会 cd 到不存在的路径；且在 opencode 包里还指向 cindy 仓（跨仓串味）。
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

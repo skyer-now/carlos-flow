@@ -48,4 +48,4 @@
 
 ---
 
-**两版仓库通用**：本文件同时适用于 `carlos-flow-cindy` 和 `carlos-flow-opencode`。
+**单一仓库**：v2.6.0 起已合并为单一仓库 `carlos-flow`，本文件适用于全部支持的平台。

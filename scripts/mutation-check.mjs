@@ -5,7 +5,7 @@
 // 用法: node scripts/mutation-check.mjs [源仓路径]
 // 产物: <仓库>/.mutation-report.md（可用 MUTATION_REPORT 覆盖）
 //
-// 跨平台：原先硬编码 D:/cindy/... 与 Git Bash 路径，CI（ubuntu）必失败。
+// 跨平台：原先硬编码了某台开发机的本机路径与 Git Bash 路径，CI（ubuntu）必失败。
 // 现在：源仓默认取当前仓库根目录；工作副本/报告路径走临时目录或环境变量；
 // shell 按平台选择（Windows 用 cmd，POSIX 用默认 sh）。
 import { execSync } from "node:child_process";

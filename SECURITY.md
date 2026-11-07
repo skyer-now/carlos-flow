@@ -13,7 +13,7 @@
 
 请通过以下方式私下报告：
 - 📧 邮件：security@<YOUR_DOMAIN>
-- 🔐 GitHub Security Advisories：[私下报告](https://github.com/skyer-now/carlos-flow-cindy/security/advisories/new)
+- 🔐 GitHub Security Advisories：[私下报告](https://github.com/skyer-now/carlos-flow/security/advisories/new)
 
 报告请包含：
 1. 漏洞描述与影响范围
@@ -63,4 +63,4 @@
 
 ---
 
-**两版仓库通用**：本文件同时适用于 `carlos-flow-cindy` 和 `carlos-flow-opencode`。
+**单一仓库**：v2.6.0 起已合并为单一仓库 `carlos-flow`，本文件适用于全部支持的平台。

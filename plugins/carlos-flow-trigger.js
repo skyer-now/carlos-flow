@@ -20,7 +20,7 @@
 //        Windows 下则是 %APPDATA%\opencode\plugins\carlos-flow-trigger.js
 //        项目级则放 .opencode/plugins/carlos-flow-trigger.js
 //   方式 B（npm 包）：在 opencode.json 里加
-//        { "plugin": ["carlos-flow-opencode/plugins/carlos-flow-trigger.js"] }
+//        { "plugin": ["carlos-flow/plugins/carlos-flow-trigger.js"] }
 //   然后重启 OpenCode。
 //
 // 可选环境变量：
@@ -45,16 +45,27 @@ const ENABLED = process.env.CARLOS_FLOW_TRIGGER !== "off";
 //   1) <pkg>/plugins/carlos-flow-trigger.js（npm 包内，方式 B）
 //   2) ~/.config/opencode/plugins/carlos-flow-trigger.js（本地文件，方式 A）
 //   3) <repo>/plugins/carlos-flow-trigger.js（源码 checkout）
+//
+// ⚠️ 包名是 **carlos-flow**（v2.6.0 起统一单包）。
+// 旧版这里硬编码的是 carlos-flow-opencode —— 单包化之后那个目录根本不存在，
+// 于是除「方式 B」（插件就在包内）外的所有安装方式都**找不到 MCP server**，
+// 自动触发**静默失效**。
+// 现在同时接受新包名与两个已弃用的旧包名（兼容老用户尚未迁移的 node_modules）。
+const PKG_NAMES = ["carlos-flow", "carlos-flow-opencode", "carlos-flow-cindy"];
 function findMcpServer() {
   const here = new URL(".", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
   const dir = resolve(here);
   const candidates = [
     join(dir, "..", "src", "index.js"),                                    // <pkg>/plugins/ → <pkg>/src/
-    join(dir, "..", "..", "node_modules", "carlos-flow-opencode", "src", "index.js"),
-    join(dir, "..", "..", "..", "node_modules", "carlos-flow-opencode", "src", "index.js"),
-    join(homedir(), ".config", "opencode", "node_modules", "carlos-flow-opencode", "src", "index.js"),
-    join(homedir(), "AppData", "Roaming", "opencode", "node_modules", "carlos-flow-opencode", "src", "index.js"),
   ];
+  for (const name of PKG_NAMES) {
+    candidates.push(
+      join(dir, "..", "..", "node_modules", name, "src", "index.js"),
+      join(dir, "..", "..", "..", "node_modules", name, "src", "index.js"),
+      join(homedir(), ".config", "opencode", "node_modules", name, "src", "index.js"),
+      join(homedir(), "AppData", "Roaming", "opencode", "node_modules", name, "src", "index.js"),
+    );
+  }
   for (const p of candidates) {
     try {
       if (existsSync(p)) return p;
@@ -157,7 +168,7 @@ export const CarlosFlowTriggerPlugin = async ({ client, $, worktree, directory }
   const serverPath = findMcpServer();
   if (!serverPath) {
     console.error("[carlos-flow-trigger] 未找到 MCP server（src/index.js），自动触发未启用");
-    console.error("[carlos-flow-trigger] 请确认已全局安装：npm install -g carlos-flow-opencode");
+    console.error("[carlos-flow-trigger] 请确认已全局安装：npm install -g carlos-flow");
   }
   if (DEBUG) {
     console.error("[carlos-flow-trigger] server:", serverPath, "cwd:", worktree || directory);
