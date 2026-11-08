@@ -105,8 +105,9 @@ check("指向不同 ROOT 的客户端能正常拿到结果（未挂死）",
   out1.status === 0 && outB.includes("ok"),
   `status=${out1.status} stdout=${outB.slice(0, 100)} stderr=${errB.slice(0, 200)}`);
 // 关键：请求必须落到 **homeB**（客户端自己的 HOME），而不是 homeA（别人的 bridge）
-const homeBHasRun = existsSync(join(homeB, "gate-state"));
-const homeAHasRun = existsSync(join(homeA, "gate-state"));
+// flow_add_user_msg 会创建 HOME/gate-state/runs/<sessionId>/user_msgs.jsonl
+const homeBHasRun = existsSync(join(homeB, "gate-state", "runs", "probe-b"));
+const homeAHasRun = existsSync(join(homeA, "gate-state", "runs", "probe-b"));
 check("状态写入客户端自己的 HOME（homeB），不是别人的（homeA）",
   homeBHasRun && !homeAHasRun,
   `homeB=${homeBHasRun} homeA=${homeAHasRun}`);
