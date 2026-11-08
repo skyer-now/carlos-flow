@@ -12,7 +12,7 @@
 //
 // 跑法：node test/bridge-identity.mjs
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync as rf, readdirSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync as rf, readdirSync, existsSync, symlinkSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,6 +38,27 @@ function makeFakeRoot(name) {
   writeFileSync(join(dir, "bridge", "mcp-bridge.js"), rf(join(ROOT, "bridge", "mcp-bridge.js")));
   // package.json：src/index.js 是 ESM（依赖 package.json 的 "type": "module"）
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fake-root", version: "1.0.0", type: "module" }, null, 2));
+  // node_modules：MCP server 依赖 @modelcontextprotocol/sdk。
+  //
+  // 为什么必须显式带过去：Node 解析依赖是**从脚本所在目录一路向上找 node_modules**。
+  // 假根目录在系统临时目录下（Windows: %TEMP%；Linux: /tmp），向上再也找不到
+  // 仓库的 node_modules → `import { Server } from "@modelcontextprotocol/sdk/..."`
+  // 直接解析失败 → MCP server 起不来 → bridge 不响应 → 客户端挂死到超时。
+  //
+  // 本地能过是**假象**：开发机用户目录下恰好有一份 node_modules（向上回溯命中），
+  // CI 的纯净环境没有 → 只在 CI 红。这类「本地绿、CI 红」的根因必须消除。
+  //
+  // 用链接而不是复制：SDK 体积大，复制会拖慢每次测试；Windows 用 junction
+  // （不需要管理员权限），POSIX 用目录软链。
+  const nmSrc = join(ROOT, "node_modules");
+  if (existsSync(nmSrc)) {
+    try {
+      symlinkSync(nmSrc, join(dir, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      // 链接失败（权限/文件系统不支持）时退化为复制，保证测试仍能跑
+      try { cpSync(nmSrc, join(dir, "node_modules"), { recursive: true }); } catch {}
+    }
+  }
   return dir;
 }
 

@@ -5,11 +5,18 @@
 
 ---
 
-## [2.8.0] - 2026-11-08 — 角色门禁绑定会话 claimed_role + auditor 复核流程
+## [2.8.0] - 2026-11-08 — 角色门禁绑定会话 claimed_role + auditor 复核流程 + CI 修复
 
 - flow_verdict PASS 现在必须由已 claim "auditor" 角色的会话落下（claimed_role 绑定会话 ID，而非调用方自述字符串）。
 - executor 负责做事，auditor 负责复核裁定，测试脚本已同步更新（e2e-carlos、scope-enforcement、package-e2e）。
 - 强版 falsify + output_hash 比对继续保留，整体无回归。
+- **CI 修复（v2.7.0 引入的「本地绿、CI 红」）**：`test/bridge-identity.mjs` 造假的仓库根目录在系统临时目录下，
+  Node 从那里向上找不到仓库的 `node_modules`，`@modelcontextprotocol/sdk` 解析失败 →
+  MCP server 起不来 → bridge 不响应 → 客户端挂死到 60s 超时（表现为 `status=null`、无输出）。
+  本地能过是假象：开发机用户目录下恰好有一份 `node_modules` 被向上回溯命中。
+  现在假根目录会带上 `node_modules`（Windows 用 junction、POSIX 用目录软链，失败退化为复制）。
+- **审计链测试日期一致性**：第 5、6 节原先用 `toISOString()`（UTC 日期），与第 1 节和
+  `state.js` 的本地日期不一致 —— 在 UTC+8 的 00:00–08:00 会读写到另一天的文件。统一改用本地日期。
 
 ## [2.7.0] - 2026-11-07 — 第三方审查全线修复：核心承诺终于成立 + 安全承诺降级为准确表述
 

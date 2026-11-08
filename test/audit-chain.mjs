@@ -22,6 +22,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 
+// 审计文件按**本地日期**分文件（state.js 的 localDate）。
+// 这里必须用本地日期而不是 toISOString()（UTC）—— 在 UTC+8 的 00:00–08:00，
+// UTC 日期比本地日期慢一天，用 UTC 会读到/写到**另一天**的文件。
+const localDateStr = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
 let pass = 0, fail = 0;
 const check = (n, ok, d = "") => {
   if (ok) { pass++; console.log(`  ✓ ${n}`); }
@@ -91,8 +97,7 @@ check("未篡改的链校验通过", v.ok === true && v.broken === 0, JSON.strin
 const auditDir = join(home, "gate-audit");
 // 审计文件按**本地日期**分文件（state.js 的 localDate），
 // 不能用 toISOString()（UTC）—— 两者在时区边界会差一天。
-const now = new Date();
-const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+const localDate = localDateStr();
 const file = join(auditDir, `${localDate}.jsonl`);
 check("审计文件存在", existsSync(file), file);
 const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
@@ -147,7 +152,7 @@ check("date=2020-01-01 校验的是那一天的文件（broken=0）", v.chainBro
 
 // ---- 5. 跨天断链回连：今天第一条记录的 prevHash 必须来自昨天的 tail ----
 console.log("\n> 5. 跨天链");
-const YESTERDAY = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+const YESTERDAY = (n) => localDateStr(new Date(Date.now() - n * 86400000));
 rmSync(join(home, "gate-audit"), { recursive: true, force: true });
 // 写种子：一条昨天的记录（格式与 audit() 完全一致）
 const YESTERDAY_SCRIPT = `
@@ -174,12 +179,11 @@ check("手动种子：昨天写入一条记录", r.stdout.includes("yesterday wr
 const TODAY_SCRIPT = `
 import { verifyAuditChain, audit } from ${JSON.stringify(pathToFileURL(join(ROOT, "src", "state.js")).href)};
 const v = verifyAuditChain({ date: ${JSON.stringify(YESTERDAY(1))}, fullChain: false });
-const t = new Date().toISOString().slice(0, 10);
 audit("run", "sess-crossday", { kind: "record" });
 audit("run", "sess-crossday2", { kind: "record" });
-const vT = verifyAuditChain({ date: t, fullChain: false });
+const vT = verifyAuditChain({ date: ${JSON.stringify(localDateStr())}, fullChain: false });
 const vF = verifyAuditChain({ fullChain: true });
-console.log(JSON.stringify({ y: ${JSON.stringify(YESTERDAY(1))}, t, v: v.ok, vT: vT.ok, vTbroken: vT.broken, vF: vF.ok, vFbroken: vF.broken }));
+console.log(JSON.stringify({ y: ${JSON.stringify(YESTERDAY(1))}, t: ${JSON.stringify(localDateStr())}, v: v.ok, vT: vT.ok, vTbroken: vT.broken, vF: vF.ok, vFbroken: vF.broken }));
 `;
 r = runInChild("plain", TODAY_SCRIPT);
 v = JSON.parse(r.stdout.trim().split("\n").pop());
@@ -219,7 +223,7 @@ check("card.verify.cmd 脱敏", state.card.verify.cmd !== hasSecret && !state.ca
 check("card.password 脱敏", state.card.password === "[脱敏]", JSON.stringify(state.card));
 check("card.token 脱敏", typeof state.card.token === "string" && !state.card.token.includes("1234567890abcdef"), JSON.stringify(state.card));
 const AUDIT_DIR = join(home, "gate-audit");
-const today = readFileSync(join(AUDIT_DIR, new Date().toISOString().slice(0, 10) + ".jsonl"), "utf8").trim();
+const today = readFileSync(join(AUDIT_DIR, localDateStr() + ".jsonl"), "utf8").trim();
 const last = JSON.parse(today.split("\n").filter(Boolean).pop());
 check("audit 字段脱敏（不含 sk_live 等密钥）", !today.includes(hasSecret), JSON.stringify(last));
 check("audit 仍然拥有合法 hash（脱敏后参与链计算）", last.hash && last.hash.length === 64, JSON.stringify(last));
