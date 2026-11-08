@@ -1,6 +1,6 @@
 {
   "name": "carlos-flow",
-  "version": "2.6.3",
+  "version": "2.7.0",
   "description": "Carlos 工作流 — AI 编码 Agent 的机械门禁。留痕/派发/验证/裁定/审计/还原，约束写在代码里而非提示词里。单一包支持 Cindy/OpenCode/Cursor/Cline/VS Code/Claude Desktop。",
   "type": "module",
   "main": "src/index.js",
@@ -42,7 +42,13 @@
     "check:lang": "node scripts/lang-audit.mjs",
     "test:lang": "node test/lang-audit.test.mjs",
     "check:full": "node scripts/full-audit.mjs",
-    "test:package": "node test/package-e2e.mjs"
+    "test:package": "node test/package-e2e.mjs",
+    "check:claims": "node scripts/check-claims.mjs",
+    "check:params": "node scripts/check-params.mjs",
+    "check:no-dead-handler": "node scripts/check-no-dead-handler.mjs",
+    "test:scope": "node test/scope-enforcement.mjs",
+    "test:audit": "node test/audit-chain.mjs",
+    "test:bridge": "node test/bridge-identity.mjs"
   },
   "keywords": [
     "carlos",
@@ -89,6 +95,7 @@
     "TRIGGER_GUIDE.md",
     "MIGRATION.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "AGENTS.md"
   ]
 }

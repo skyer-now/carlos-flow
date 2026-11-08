@@ -35,7 +35,8 @@ Carlos Flow 的做法是：**约束全部落在代码里，用运行时事实校
 
 - 越界？→ 运行时 `git diff` 对比卡片白名单，**直接阻断派发**
 - 说测试通过？→ 真实 `spawn` 执行 `verify.cmd`，**记 PASS 前必须有通过的 exitCode**
-- 审计日志？→ SHA-256 **链式哈希**（`prevHash` → `hash`），**改一条全链断裂**
+- 审计日志？→ **链式哈希**（`prevHash` → `hash`），改一条全链断裂。
+  设了 `CARLOS_FLOW_AUDIT_KEY` 时用 **HMAC-SHA256**（带密钥）→ 攻击者重算不出，只能发现不能隐藏
 - 想跳过？→ 免检需显式 `confirmed=true`，且**每次派发自动清零**
 
 **一句话**：它把「代码评审的门禁」搬到了 AI Agent 上，而且门禁本身是机器执行、不是人执行。
@@ -48,7 +49,7 @@ Carlos Flow 的做法是：**约束全部落在代码里，用运行时事实校
 |---|------|---------|------------------------|
 | 1 | **越界改动** | "只改这些文件"是建议不是规则 | `enforceScope()` 运行时 `git diff` 比对白名单，越界**阻断派发** |
 | 2 | **验证表演** | Agent 自述"测试通过"，无人能证明 | `runVerifyCommand()` 真实执行，捕获 stdout/stderr/exitCode；**无验证证据不许记 PASS** |
-| 3 | **可洗白审计** | 普通文件日志 —— 可删可改 | SHA-256 链式哈希审计，**改一条全链断裂** |
+| 3 | **可洗白审计** | 普通文件日志 —— 可删可改 | 链式哈希审计，**改一条全链断裂**；配 `CARLOS_FLOW_AUDIT_KEY` 启用 HMAC 后，**攻击者没有密钥就无法重算掩盖** |
 | 4 | **失控免检** | 一句话关闭所有防护 | 需卡片显式 `confirmed=true`，**每次派发自动清零** |
 | 5 | **无限派发** | 领卡即重置计数，可无限重试 | `dispatch_count` 仅在派发时 +1，耗尽同时拦截 claim / dispatch |
 | 6 | **自证式复核** | 同一 Agent 既实现又审批 | 内置 `auditor` 角色 + 独立合同，裁定严格三档 |
@@ -170,9 +171,9 @@ flowchart TB
 
 | 能力 | Carlos Flow | 原生 MCP Server | 提示词 / 手写脚本 |
 |------|-------------|-----------------|------------------|
-| 越界拦截 | ✅ 运行时 `git diff` 级 | ❌ | ❌ 靠自觉 |
+| 越界拦截 | ✅ 自己跑 `git diff`；执行者动了 scope 外的文件 → **阻断 PASS** | ❌ | ❌ 靠自觉 |
 | 真实验证 | ✅ spawn + 捕获，无证据不许 PASS | ❌ | ❌ Agent 自述 |
-| 防篡改审计 | ✅ SHA-256 链式哈希 | ❌ | ❌ |
+| 审计链完整性 | ✅ 链式哈希（+ 可选 HMAC 密钥） | ❌ | ❌ |
 | 可控免检 | ✅ 显式开启 + 自动清零 | ❌ | ❌ 一句话全关 |
 | 诚实派发配额 | ✅ 只计派发 | ❌ | ❌ |
 | 独立复核 | ✅ 内置 `auditor` 角色 | ❌ | ❌ 可选 |
@@ -325,11 +326,75 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `CARLOS_FLOW_HOME` | `~/.carlos-flow` | 状态 / 审计 / 快照目录。`~` 会被展开 |
 | `CARLOS_FLOW_MCP_ROOT` | 自动推导 | 源码安装时指向仓库根目录 |
 | `BRIDGE_PORT` | `19099` | Cindy Bridge 监听端口 |
-| `CARLOS_BRIDGE_TOKEN` | 内置默认值 | Bridge 本地认证 token |
+| `CARLOS_BRIDGE_TOKEN` | 随机生成落盘 | Bridge 本地认证 token（自动生成，存 0600） |
+| `CARLOS_FLOW_AUDIT_KEY` | — | 设置它（≥16 字符）启用 **HMAC** 审计链 —— 发现**有意篡改**必须配它 |
 | `CARLOS_BRIDGE_TIMEOUT_MS` | `180000` | Bridge 请求超时（需 > 服务端 120s 验证上限） |
 | `CARLOS_MCP_TIMEOUT_MS` | `180000` | CLI 客户端 MCP 调用超时 |
 | `CARLOS_TRIGGER_MESSAGE` | — | CLI 模式下注入触发检查用的用户原话 |
 | `OPENCODE_DB_PATH` | 多路探测 | OpenCode 会话库路径（读用户原话用） |
+
+---
+
+## 🛡️ 门禁体系 —— 门禁自己也要被门禁
+
+> 「项目说自己有门禁」是最容易说的一句话，也最容易被证伪。
+> 所以本项目的门禁**自己也有一套门禁**，且分两类：
+
+### 一、静态一致性（东西对不对得上）
+
+| 脚本 | 查什么 |
+|------|--------|
+| `npm run check:full` | 旧引用 / 个人路径 / 版本号一致性 / 文档死链 / npm 发布集合 / 模板占位符 / package.json 字段 / 双仓残留 / ghost.json 工具清单 |
+| `npm run check:identity` | 身份、版本、文档、产物、安全五类一致性 |
+| `npm run check:lang` | 提交信息与源码注释是否中文（产物语言体检） |
+| `npm run check:readme` | 中英双语 README 是否漂移 |
+| `npm run check:anchors` | 变异体的注入锚点是否仍能命中（防止测试**静默失去守护作用**） |
+
+### 二、行为兑现（说了的做到了吗）—— 这一类才是关键
+
+| 脚本 | 查什么 | 为什么需要 |
+|------|--------|-----------|
+| `npm run check:claims` | README/工具描述里的每个能力声明，是否都有对应的代码路径 | 静态检查查不出「承诺 vs 实现」的落差 |
+| `npm run check:params` | `inputSchema` 声明的每个参数，是否在 handler 里**真的被读取**；以及有没有「算出却从未使用」的死变量 | 静默失效型 bug（如 `date` 参数）不报错、测试全绿，只是安静地返回错数据 |
+| `npm run check:no-dead-handler` | 同一 request schema 是否被**重复注册** | 重复注册时后注册的覆盖先注册的 → 先注册的是永不执行的死代码，靠注册顺序维持的正确性会被一次重排静默破坏 |
+
+### 三、变异测试 —— 用注入退化撞自己最自豪的代码
+
+```bash
+npm run test:mutation    # 17 类变异体，必须 17/17 全部被抓住
+```
+
+变异体不是随机造的，每一条都对应一个**真实退化**，且必须有测试能抓住它：
+
+| 变异体 | 注入的退化 | 抓住它的测试 |
+|--------|-----------|-------------|
+| M1 | 激活只打印日志、不真的激活 | e2e |
+| M2 / M3 | claim / verdict 的闸门失效 | e2e |
+| M4 | 会话撞名（清洗后同形共用状态） | trigger |
+| M5 / M6 | scope 不算补齐项 / 半补齐绕过 | e2e |
+| M7 | 空 scope 退回 fail-open | e2e |
+| M8 | 未派发可记 PASS | e2e |
+| M9 | 闸门派生回退（用上一轮 pending 传递） | e2e 19d-3 |
+| M10 / M11 | 普通卡也上闸 / 占位卡硬编码三项 | e2e |
+| M12 | 跨进程锁失效（`wx` → `a`） | concurrency |
+| M13 | 只读意图误判 | trigger |
+| **M14** | **审计链断链**（去掉 prevHash 链接） | audit-chain |
+| **M15** | **审计链校验恒真** | audit-chain |
+| **M16** | **越界检查退回 fail-open** | scope-enforcement |
+| **M17** | **date 参数失效** | audit-chain |
+
+### 四、专项真实验证（不靠 mock）
+
+| 脚本 | 验什么 |
+|------|--------|
+| `npm run test:scope` | 在**真实 git 仓库**里改文件 → scope 外改动**真的被阻断**；派发前就有的改动**不误伤** |
+| `npm run test:audit` | **真实篡改**审计记录 → hmac 模式必须发现；plain 模式如实标注局限；legacy 记录不误报；date 参数真的生效 |
+| `npm run test:bridge` | 端口上是**别人的 bridge** 时不得复用（否则状态会写到别人的 HOME） |
+| `npm run test:package` | `npm pack` → 装到干净目录 → 从 `node_modules` 拉起 MCP server 走真实握手 |
+| `npm run test:lang` | 语言体检脚本**真的能抓到英文**（防假绿） |
+
+> 💡 **给质疑者的可执行入口**：上面每一条命令都可以自己跑一遍。
+> 一个项目宣称「我的门禁是机械的」，最好的证明不是文档，是**让对方自己跑一遍**。
 
 ---
 
@@ -378,6 +443,8 @@ npm pack
 | [TRIGGER_GUIDE.md](./TRIGGER_GUIDE.md) | 智能触发引擎深度指南（配置、评分、激活、反馈学习） |
 | [CHANGELOG.md](./CHANGELOG.md) | 版本历史（Keep a Changelog + SemVer） |
 | [MIGRATION.md](./MIGRATION.md) | 从 `carlos-flow-cindy` / `carlos-flow-opencode` 迁移 |
+| [AGENTS.md](./AGENTS.md) | 变更前置索引：改哪类东西先读哪份权威契约 |
+| [docs/AUDIT_REVIEW.md](./docs/AUDIT_REVIEW.md) | 第三方审查报告的逐条核实与决策记录 |
 | [QA 验收报告](./docs/QA_REPORT_v2.5.5.md) | 第三方只读验收（13/13 变异体全抓住） |
 | [变异测试报告](./docs/MUTATION_REPORT_v2.5.5.md) | 变异体注入细节与结果 |
 

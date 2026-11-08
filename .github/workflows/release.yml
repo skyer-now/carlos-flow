@@ -39,6 +39,15 @@ jobs:
       # 但会直接让用户看到错误信息。
       - name: 产物全面体检（对外产物是否正确）
         run: npm run check:full
+      # 行为兑现类门禁 + 专项真实验证：发布前最后一道闸
+      - name: 行为兑现门禁 + 专项真实验证
+        run: |
+          npm run check:claims
+          npm run check:params
+          npm run check:no-dead-handler
+          npm run test:scope
+          npm run test:audit
+          npm run test:bridge
       # 产物语言体检：发布前最后一道闸。提交信息 / 注释必须是中文 ——
       # 产物会进 GitHub、进 npm 包，影响面比一次对话大得多。
       - name: 产物语言体检（提交信息 / 注释必须中文）

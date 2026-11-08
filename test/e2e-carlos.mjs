@@ -1,6 +1,7 @@
 // Carlos 工作流 · 完整端到端测试（12 工具 + 审计链验证）
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 
 import os from 'node:os';
 import { join, resolve, dirname } from 'node:path';
@@ -363,6 +364,67 @@ async function main() {
   const fullyCleared = r.ok && Array.isArray(r.data?.activation_pending) && r.data.activation_pending.length === 0;
   check("19d. 三项补齐后闸门解除", fullyCleared,
     r.ok ? `pending=${(r.data?.activation_pending || []).join(",")}` : r.error);
+
+  // 19d-2. 闸门解除后**再提交一张普通卡**，不得重新上闸。
+  //
+  // 这一条专门盯住「普通卡分支的 activationPending」那几行：
+  // 正确实现是 `activationPending = currentMissing`（按**当前卡片内容**派生），
+  // 而变异体 M9 把它退回 `prevPendingBefore`（传递上一轮的 pending）。
+  // 两者在「激活 → 补齐 → 再提交普通卡」这个序列下才会分岔：
+  //   正确 → 当前卡齐备 → pending=[] → 放行
+  //   M9   → 沿用上一轮 pending → 又被锁住 → 用户永远解不开闸
+  // 缺了这一条，M9 就会一直 NOT CAUGHT（历史守护缺口）。
+  const AFTER_SID = SID + "-after-clear";
+  await call("flow_add_user_msg", { sessionId: AFTER_SID, text: QUOTE });
+  // 先开一张占位卡（激活过 → 标记 activation_activated）
+  await call("flow_submit_requirement", {
+    sessionId: AFTER_SID, goal: "占位", quote: QUOTE,
+    scope: [], acceptance: [], confirmed: true, activation: true,
+  });
+  // 再提交一张字段齐全的普通卡
+  r = await call("flow_submit_requirement", {
+    sessionId: AFTER_SID, goal: "齐全的普通卡", quote: QUOTE,
+    scope: [ROOT + "/README.md"], acceptance: ["验收标准"],
+    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
+  });
+  r = await call("flow_status", { sessionId: AFTER_SID });
+  const afterClearPending = r.ok && Array.isArray(r.data?.activation_pending) ? r.data.activation_pending : [];
+  check("19d-2. 激活过之后提交齐全的普通卡，不得重新上闸（M9 守护）",
+    r.ok && afterClearPending.length === 0,
+    r.ok ? `pending=${afterClearPending.join(",")}` : r.error);
+
+  // 19d-3. 状态文件出现**不一致组合**（pending 非空但 activation_activated=false）时，
+  //         提交普通卡必须能**自愈**（清空 pending），而不是把用户永久锁死。
+  //
+  // 这一条专门盯住「普通卡分支」的 activationPending 赋值：
+  //   正确实现 → activationPending = []      （普通卡不上闸）
+  //   变异体 M9 → activationPending = prevPendingBefore （沿用上一轮的 pending）
+  // 在正常流程下两者等价（未激活过的会话本就没有 pending），
+  // 只有在「状态文件被写成不一致组合」时才会分岔 —— 而那正是用户被锁死、
+  // 门禁变成死锁的场景。所以直接构造这个状态来验证。
+  const INCONSIST_SID = SID + "-inconsistent";
+  const stateDir = join(FLOW_HOME, "gate-state", "runs", INCONSIST_SID);
+  mkdirSync(stateDir, { recursive: true });
+  // state.json 可能还不存在（新会话）—— 用 defaultState 的字段集打底
+  const statePath = join(stateDir, "state.json");
+  const prevState = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8") || "{}") : {};
+  writeFileSync(statePath, JSON.stringify({
+    ...prevState,
+    activation_pending: ["scope", "acceptance", "verify.cmd"],
+    activation_activated: false,
+    card: null,
+  }, null, 2), "utf8");
+  await call("flow_add_user_msg", { sessionId: INCONSIST_SID, text: QUOTE });
+  r = await call("flow_submit_requirement", {
+    sessionId: INCONSIST_SID, goal: "自愈用的普通卡", quote: QUOTE,
+    scope: [ROOT + "/README.md"], acceptance: ["验收标准"],
+    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
+  });
+  r = await call("flow_status", { sessionId: INCONSIST_SID });
+  const inconsistPending = r.ok && Array.isArray(r.data?.activation_pending) ? r.data.activation_pending : [];
+  check("19d-3. 不一致状态下提交普通卡能自愈，不被旧 pending 锁死（M9 守护）",
+    r.ok && inconsistPending.length === 0,
+    r.ok ? `pending=${inconsistPending.join(",")}` : r.error);
 
   // 19e. 占位卡的待补项必须由**服务端从卡片内容派生**，而不是硬编码三项。
   // 这一条专门盯住「activationPending = currentMissing」这一行：

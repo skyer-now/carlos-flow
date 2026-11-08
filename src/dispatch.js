@@ -1,7 +1,7 @@
 // dispatch.js — Carlos 工作流：四段合同 prompt / 文件快照 / opencode 子进程 / 验证执行 / scope 校验（Node ESM）
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { RUNS_DIR, sanitizeId } from "./state.js";
 
@@ -178,6 +178,30 @@ export async function runVerifyCommand(cmd, cwd) {
   if (!cmd || !cmd.trim()) {
     return { ok: false, exitCode: -1, stdout: "", stderr: "验证命令为空" };
   }
+  // 可选：拦截高危命令模式。
+  //
+  // 威胁模型说明（重要，不要夸大）：
+  //   · verify.cmd 本质上就是「执行用户指定的验证命令」—— 它的设计目标就是能跑任意命令
+  //     （`npm test` / `pytest` / `cargo build` …），所以**默认不拦**。
+  //   · 真正的风险来源是「verify.cmd 的来源可信度」：
+  //     - 人工填写的任务卡 → 可信，是用户/Agent 的本意
+  //     - 自动激活产生的占位卡 → activation 时 scope/acceptance 为空、**没有 verify.cmd**，
+  //       必须人工补齐才能过闸门 → 自动触发路径已被 activation 闸门挡住
+  //   · 因此默认不拦是对的；把黑名单默认打开会误伤合法脚本
+  //     （比如 `rm -rf node_modules` 出现在清理步骤里是完全合法的）。
+  //   · 需要更严的用户可以打开 CARLOS_FLOW_BLOCK_DANGEROUS=1。
+  if (process.env.CARLOS_FLOW_BLOCK_DANGEROUS === "1") {
+    const dangerous = /\b(rm\s+-[rRf]{1,2}[^\s]*\s+\/|sudo\s|curl\s+[^|]*\|\s*(ba)?sh|mkfs(\.|\s)|dd\s+if=|:\(\)\{|>\s*\/dev\/sd[a-z])/i;
+    if (dangerous.test(cmd)) {
+      return {
+        ok: false,
+        exitCode: -1,
+        stdout: "",
+        stderr: `验证命令包含高危模式，已拒绝执行：${cmd}\n` +
+          "（CARLOS_FLOW_BLOCK_DANGEROUS=1 已开启；确认该命令安全后可关闭此开关）",
+      };
+    }
+  }
   const isWindows = process.platform === "win32";
   const shell = isWindows ? process.env.COMSPEC || "cmd.exe" : "/bin/sh";
   const shellArgs = isWindows ? ["/c", cmd] : ["-c", cmd];
@@ -208,10 +232,43 @@ export async function runVerifyCommand(cmd, cwd) {
 }
 
 // Phase 1-1: scope 机器校验 - 对比 diff 与 card.scope
-export function enforceScope(scope, diffFiles) {
+//
+// 用法：enforceScope(scope, cwd, diffFiles?)
+//   - scope: 卡片中的 scope 白名单
+//   - cwd:   仓库根目录（用于跑 git diff）
+//   - diffFiles?: 可选，外部传入的改动文件列表；不传则自动跑 `git diff --name-only`
+// 返回：{ ok, violations[], message? }
+//
+// 设计：
+//   · 空 scope = 白名单为空 = fail-closed（所有变更都算越界）
+//   · 无变更（diffFiles 为空）= 直接 ok
+//   · 自动跑 `git diff --name-only`：派发前快照 vs 当前工作区
+//   · 精确匹配 + 父目录匹配：scope 内文件及其子目录均算通过
+export function enforceScope(scope, cwd, diffFiles) {
+  // diffFiles 可选：外部传入的改动文件列表；不传则自动跑 `git diff --name-only`
+  // cwd: 仓库根目录（用于跑 git diff）
+  let autoCollected = false;
+  if (!diffFiles) {
+    autoCollected = true;
+    diffFiles = [];
+    try {
+      const proc = spawnSync("git", ["diff", "--name-only"], {
+        cwd: cwd || process.cwd(),
+        encoding: "utf8",
+        // git 不在 PATH / 不是仓库 / 超时 → 一律当作「无改动」而非抛错，
+        // 避免把环境问题变成门禁误报（fail-closed 只针对 scope 语义，不针对环境）
+        timeout: 10000,
+        windowsHide: true,
+      });
+      if (proc.status === 0 && typeof proc.stdout === "string") {
+        diffFiles = proc.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+      }
+    } catch { diffFiles = []; }
+  }
+
   // 没有任何变更 → 无需判定
   if (!Array.isArray(diffFiles) || diffFiles.length === 0) {
-    return { ok: true, violations: [] };
+    return { ok: true, violations: [], checked: [] };
   }
 
   // 空 scope = 白名单为空 = **不允许改动任何文件**。
@@ -221,6 +278,7 @@ export function enforceScope(scope, diffFiles) {
     return {
       ok: false,
       violations: diffFiles.slice(),
+      checked: diffFiles.slice(),
       message: `越界改动（卡片 scope 为空，不允许修改任何文件）：${diffFiles.join(", ")}`,
     };
   }
@@ -245,8 +303,8 @@ export function enforceScope(scope, diffFiles) {
   }
   
   if (violations.length > 0) {
-    return { ok: false, violations, message: `越界改动（超出 scope）：${violations.join(", ")}` };
+    return { ok: false, violations, checked: diffFiles.slice(), message: `越界改动（超出 scope）：${violations.join(", ")}` };
   }
-  return { ok: true };
+  return { ok: true, violations: [], checked: diffFiles.slice() };
 }
 

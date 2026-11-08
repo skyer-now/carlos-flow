@@ -7,6 +7,7 @@
 import { createConnection, createServer } from "node:net";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import os from "node:os";
@@ -27,7 +28,49 @@ const BRIDGE_SCRIPT = [
 const MCP_SERVER = ROOT_ABS + "/src/index.js";
 // PID 文件按端口区分：多 Bridge 并存（测试用独立端口）时不会互相覆盖
 const PID_FILE = ROOT_ABS + "/bridge-" + BRIDGE_PORT + ".pid";
-const BRIDGE_TOKEN = process.env.CARLOS_BRIDGE_TOKEN || "carlos-local-token-2026";
+// 实际使用的 bridge 端口：pickBridgePort 选定后写入，后续 callMCP 一律用它。
+// 早先 callMCP 写死 BRIDGE_PORT，而 bridge 可能起在别的端口 → 连不上。
+let ACTIVE_PORT = BRIDGE_PORT;
+const BRIDGE_TOKEN_FILE = () => join(DEFAULT_FLOW_HOME, "bridge-token");
+
+// 读取或生成 Bridge token。
+//
+// 早先这里是 `process.env.CARLOS_BRIDGE_TOKEN || "carlos-local-token-2026"` ——
+// 一个**硬编码的默认值**。任何本机进程都知道这个字符串，都能连上本机 bridge
+// （虽然只监听 127.0.0.1，但「本机任意进程可连」本身就是一道没关的门），
+// 而且它与 bridge 侧的 fail-closed 行为不一致（bridge 没设环境变量就拒绕）。
+//
+// 现在：
+//   1) 优先用环境变量 CARLOS_BRIDGE_TOKEN；
+//   2) 没有则首次运行生成随机 token 落到 $CARLOS_FLOW_HOME/bridge-token（0600），
+//      之后跨进程复用同一个（client 与 bridge 必须用同一把钥匙）；
+//   3) 文件权限设 0600（POSIX）；Windows 上靠 ACL 默认保护。
+//
+// 这样既没有硬编码默认值，也不需要用户手工配置环境变量。
+function resolveBridgeToken() {
+  const fromEnv = process.env.CARLOS_BRIDGE_TOKEN;
+  if (fromEnv && String(fromEnv).trim()) return String(fromEnv).trim();
+
+  const file = BRIDGE_TOKEN_FILE();
+  try {
+    if (existsSync(file)) {
+      const t = readFileSync(file, "utf8").trim();
+      if (t.length >= 32) return t;
+    }
+  } catch { /* 读不到 → 重新生成 */ }
+
+  const token = randomBytes(32).toString("hex");
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, token + "\n", { encoding: "utf8", mode: 0o600 });
+  } catch {
+    // 落盘失败（只读 HOME 等）→ 退化为进程级临时 token：
+    // 本进程内 client 与 bridge 仍然一致，只是重启后失效。
+  }
+  return token;
+}
+
+const BRIDGE_TOKEN = resolveBridgeToken();
 
 // 智能触发引擎（本文件是 ESM，必须用动态 import；require 在 ESM 中不存在）
 // 加载失败时降级为「不触发」，不影响主流程
@@ -154,8 +197,27 @@ async function checkTrigger(message = '') {
   }
 }
 
+// 路径归一化比较：判断两个路径是否指向同一个目录。
+// 为什么要归一化：同一个目录在不同环境下可能是 POSIX 形式（Git Bash 的 /tmp/x）、
+// Windows 形式、带不带尾斜杠、大小写差异 —— 直接字符串比较会把
+// 「同一个目录」判成「不同身份」，于是永远不复用、每次都另起一个 bridge。
+function samePath(a, b) {
+  if (!a || !b) return true;          // 对方没报 → 不以此为拒理由
+  const norm = (p) => {
+    try {
+      let s = resolve(String(p));
+      // 去掉尾分隔符（根目录除外）
+      if (s.length > 1) s = s.replace(/[\\/]+$/, "");
+      return process.platform === "win32" ? s.toLowerCase() : s;
+    } catch {
+      return String(p);
+    }
+  };
+  return norm(a) === norm(b);
+}
+
 // 检查 bridge 是否已在运行（先读 PID，再 TCP 探测）
-function isBridgeRunning() {
+function isBridgeRunning(port = BRIDGE_PORT) {
   return new Promise((resolve) => {
     // 先检查 PID 文件
     if (existsSync(PID_FILE)) {
@@ -172,7 +234,7 @@ function isBridgeRunning() {
     }
 
     // TCP 探测
-    const s = createConnection(BRIDGE_PORT, "127.0.0.1");
+    const s = createConnection(port, "127.0.0.1");
     s.on("connect", () => {
       // 发送健康检查
       s.write("GET /health\n");
@@ -181,7 +243,31 @@ function isBridgeRunning() {
       const resp = data.toString().trim();
       try {
         const json = JSON.parse(resp);
-        if (json.status === "ok") { s.end(); resolve(true); return; }
+        if (json.status !== "ok") { s.end(); resolve(false); return; }
+        // ⚠️ 身份校验：端口上跑的 bridge 必须是**我这份代码 + 我这个 HOME**。
+        //
+        // 早先只判 status==ok 就复用 —— 于是端口上是**另一个 ROOT** 的 bridge 时
+        // （比如开发机上的旧仓库那份），本进程会静默连过去：
+        //   · 它启动时的 CARLOS_FLOW_HOME 生效 → 本次传入的 HOME 完全失效，
+        //     状态/审计写到**别人的目录**（测试污染生产状态的真凶）；
+        //   · 协议/版本可能不匹配 → 调用挂死。
+        // 现在比对 root 与 flow_home，不符就当“未运行”，另起一个自己的 bridge。
+        //
+        // 路径必须**归一化**后再比：同一个目录在不同环境下可能是
+        // POSIX 形式（Git Bash：/tmp/x）、Windows 形式（D:\\x）、带不带尾斜杠、
+        // 大小写差异 —— 直接字符串比较会把「同一个目录」判成「不同身份」，
+        // 于是永远不复用、每次都另起一个 bridge。
+        const sameRoot = samePath(json.root, ROOT_ABS);
+        const wantHome = process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME;
+        const sameHome = samePath(json.flow_home, wantHome);
+        if (!sameRoot || !sameHome) {
+          s.end();
+          resolve(false);
+          return;
+        }
+        s.end();
+        resolve(true);
+        return;
       } catch {}
       s.end();
       // 健康检查失败但端口存活，也算运行中
@@ -192,10 +278,32 @@ function isBridgeRunning() {
   });
 }
 
+// 找一个能用的端口。
+//
+// 首选 BRIDGE_PORT；若该端口已被**另一个身份的 bridge** 占用，
+// 则向上探测若干个端口另起一个 —— 不能硬挤同一端口：
+// 挤不进去时 spawn 会失败或挂死（实测客户端因此超时挂死 30s）。
+async function pickBridgePort() {
+  for (let i = 0; i < 20; i++) {
+    const port = BRIDGE_PORT + i;
+    // 端口空闲 → 直接用
+    const busy = await new Promise((res) => {
+      const s = createConnection(port, "127.0.0.1");
+      s.on("connect", () => { s.end(); res(true); });
+      s.on("error", () => res(false));
+      setTimeout(() => { s.destroy(); res(false); }, 800);
+    });
+    if (!busy) return port;
+    // 端口被占 → 若是**同身份**的 bridge，直接复用
+    if (await isBridgeRunning(port)) return port;
+  }
+  return BRIDGE_PORT;
+}
+
 // 自动启动 bridge（后台常驻）
-function startBridge() {
+function startBridge(port = BRIDGE_PORT) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BRIDGE_SCRIPT, String(BRIDGE_PORT)], {
+    const child = spawn(process.execPath, [BRIDGE_SCRIPT, String(port)], {
       stdio: ["ignore", "ignore", "pipe"],
       detached: true,
       windowsHide: true,
@@ -212,14 +320,14 @@ function startBridge() {
     // stderr 管道会挂住父进程的事件循环（bridge 常驻，管道永不关闭）→ 必须 unref
     try { child.stderr?.unref?.(); } catch {}
 
-    // 写入 PID 文件
-    try { writeFileSync(PID_FILE, String(child.pid), "utf8"); } catch {}
+    // 写入 PID 文件（按**实际使用的端口**命名，避免多实例互相覆盖）
+    try { writeFileSync(join(ROOT_ABS, `bridge-${port}.pid`), String(child.pid), "utf8"); } catch {}
 
     // 等待 bridge 就绪：用轻量健康检查端点，不占用 MCP 的 initialize 握手
     // （否则同一 MCP server 会被握手两次，导致首次调用挂起）
     const check = setInterval(async () => {
       const ready = await new Promise((res) => {
-        const s = createConnection(BRIDGE_PORT, "127.0.0.1");
+        const s = createConnection(port, "127.0.0.1");
         let buf = "";
         s.on("connect", () => { s.write("GET /health\n"); });
         s.on("data", (data) => {
@@ -250,7 +358,7 @@ function startBridge() {
 // 通过 bridge 调用 MCP
 function callMCP(method, params) {
   return new Promise((resolve, reject) => {
-    const socket = createConnection(BRIDGE_PORT, "127.0.0.1");
+    const socket = createConnection(ACTIVE_PORT, "127.0.0.1");
     let buf = "";
     const reqId = Math.floor(Math.random() * 100000000) + 2;
     let resolved = false;
@@ -406,7 +514,10 @@ async function main() {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (await isBridgeRunning()) break;
     try {
-      await startBridge();
+      // 选端口：首选 BRIDGE_PORT；若被**别的身份的 bridge** 占用则向上另选
+      const port = await pickBridgePort();
+      ACTIVE_PORT = port;
+      await startBridge(port);
       break;
     } catch (e) {
       lastErr = e;

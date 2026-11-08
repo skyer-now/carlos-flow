@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 
 
 // 展开路径里的 `~`（家目录）。
@@ -91,8 +91,47 @@ export function sanitizeId(s) {
   return v;
 }
 
+// 当前状态文件结构版本号。
+// 改动 defaultState() 的**字段结构**时，必须 +1 并在 migrate() 里加一条迁移。
+export const CURRENT_SCHEMA_VERSION = 1;
+
+/**
+ * 迁移旧版本的状态文件。
+ *
+ * 逐版本迁移，每一步都只处理「从 vN 到 vN+1」的差异，
+ * 保证任何历史版本都能一路迁到当前版本（不跳步）。
+ *
+ * v0 → v1：最早的版本没有 schemaVersion 字段（等于 v0）。
+ *   · 补上 schemaVersion
+ *   · dispatch_baseline 早期不存在 → 补空数组（无基线时裁定走全量判定，更保守）
+ */
+export function migrate(parsed) {
+  if (!parsed || typeof parsed !== "object") return parsed;
+  let v = Number(parsed.schemaVersion);
+  if (!Number.isInteger(v) || v < 0) v = 0;   // 无版本号 → 当作 v0
+  const out = { ...parsed };
+
+  if (v < 1) {
+    // v0 → v1
+    if (!Array.isArray(out.dispatch_baseline)) out.dispatch_baseline = [];
+    if (!Array.isArray(out.activation_pending)) out.activation_pending = [];
+    if (typeof out.activation_activated !== "boolean") out.activation_activated = false;
+    v = 1;
+  }
+
+  out.schemaVersion = CURRENT_SCHEMA_VERSION;
+  return out;
+}
+
 export function defaultState() {
   return {
+    // 状态文件结构版本号。
+    // 为什么需要：早先靠 {...defaultState(), ...parsed} 做防御性合并，
+    // 但**没有版本号** —— 将来改字段名（如 bypass_ts → bypass_at）时，
+    // 老用户的 state.json 里那个旧字段会被当成「未知字段」静默丢弃，
+    // 表现为「免检没清零」「待补项丢失」这类**很难定位**的退化。
+    // 加了版本号 + migrate()，旧状态会被**显式迁移**而不是静默降级。
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     card: null,
     card_ts: 0,
     tier: "read_only",
@@ -114,6 +153,11 @@ export function defaultState() {
     // 闸门状态由「卡片内容 + 此标记」幂等派生，不再依赖上一轮的 pending 传递，
     // 这样跨进程并发写入也不会出现「卡片为空却 pending=[]」的矛盾组合。
     activation_activated: false,
+    // 派发时记录的工作区改动基线（文件路径数组）。
+    // 用途：裁定前用「当前改动 - 基线」算出**本次执行引入的**改动，
+    // 再与卡片 scope 比对 —— 这样既能拦住越界，又不会把用户自己原有的
+    // 未提交改动误判为越界。没有基线时退化为全量判定（更保守，fail-closed）。
+    dispatch_baseline: [],
   };
 }
 
@@ -122,7 +166,7 @@ export function loadState(sid) {
     const file = path.join(RUNS_DIR, sanitizeId(sid), "state.json");
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return defaultState();
-    return { ...defaultState(), ...parsed };
+    return { ...defaultState(), ...migrate(parsed) };
   } catch {
     return defaultState();
   }
@@ -239,6 +283,37 @@ function auditPayload(rec) {
   return JSON.stringify(out);
 }
 
+// ---- 审计链哈希模式 ----
+//
+// 裸 SHA-256 哈希链能防的是「**意外**损坏」（截断、位翻转、误删），
+// **防不了有意篡改**：攻击者能读文件，就能重算整条链。
+//
+// 因此提供两种模式：
+//   · hmac  —— 设置了 CARLOS_FLOW_AUDIT_KEY 时使用带密钥的 HMAC-SHA256。
+//              攻击者没有密钥 → 重算不出正确 hash → 篡改必被发现。
+//   · plain —— 未设置密钥时的降级模式（裸 SHA-256），**在 verify 结果里
+//              显式标注 mode**，让调用方知道自己拿到的是哪种保证。
+//
+// 不做「默认启用 HMAC」：没有密钥就签不了名，用户第一次用就会报错。
+// 也不做「假装 HMAC」：plain 模式必须诚实地说自己只是弱保证。
+const AUDIT_KEY = (() => {
+  const k = process.env.CARLOS_FLOW_AUDIT_KEY;
+  return typeof k === "string" && k.length >= 16 ? k : null;
+})();
+
+export function auditHashMode() {
+  return AUDIT_KEY ? "hmac" : "plain";
+}
+
+// 计算一条记录的 hash（写入与校验必须用同一套函数，否则永远对不上）
+function computeAuditHash(rec, prev) {
+  const payload = rec.ts + rec.type + rec.sessionID + auditPayload(rec) + prev;
+  if (AUDIT_KEY) {
+    return createHmac("sha256", AUDIT_KEY).update(payload).digest("hex");
+  }
+  return createHash("sha256").update(payload).digest("hex");
+}
+
 // 追加审计行；永不抛错，失败仅写 stderr；返回记录对象
 export function audit(type, sid, fields = {}) {
   const rec = {
@@ -253,9 +328,7 @@ export function audit(type, sid, fields = {}) {
     // 前驱 hash 取自目标文件尾部 → 与进程数无关，切换状态目录也不会断链
     const prev = lastHashOf(file);
     rec.prevHash = prev;
-    rec.hash = createHash("sha256")
-      .update(rec.ts + rec.type + rec.sessionID + auditPayload(rec) + prev)
-      .digest("hex");
+    rec.hash = computeAuditHash(rec, prev);
     // 单次 appendFileSync：O_APPEND 语义，多进程并发写不会互相截断
     fs.appendFileSync(file, JSON.stringify(rec) + "\n", "utf8");
   } catch (e) {
@@ -269,12 +342,15 @@ export function audit(type, sid, fields = {}) {
 // 校验审计链完整性（可选：需完整文件，不能只看尾部）
 export function verifyAuditChain(opts = {}) {
   const rawDate = typeof opts.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : localDate();
-  const file = path.join(AUDIT_DIR, `${localDate()}.jsonl`);
+  // ⚠️ 必须用 rawDate（而不是 localDate()）—— 否则 opts.date 完全失效：
+  // 传 date='2020-01-01' 读的仍是**今天**的文件，调用方以为在查历史、
+  // 实际拿到今天的数据（错而不报，最难发现）。
+  const file = path.join(AUDIT_DIR, `${rawDate}.jsonl`);
   let raw = "";
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch {
-    return { ok: true, total: 0, broken: 0, legacy: 0, brokenAt: [], file };
+    return { ok: true, total: 0, broken: 0, legacy: 0, brokenAt: [], file, mode: auditHashMode() };
   }
   let prev = "0".repeat(64);
   let total = 0;
@@ -292,27 +368,35 @@ export function verifyAuditChain(opts = {}) {
     }
     total++;
     if (typeof r.hash !== "string") {
+      // 旧格式记录（无 hash）→ 计入 legacy 计数，但**不重置链起点**。
+      //
+      // 早先这里写的是 prev = "0".repeat(64)，于是**一条**旧记录就会让
+      // 它之后所有记录的 prevHash 全部对不上 → 全判 broken。
+      // 后果：v2.5 升级上来的用户，审计链校验会长期报红，
+      // 而 README 把「可验证审计链」列为核心能力 —— 用户会以为自己的
+      // 审计记录被篡改了。**漏报比误报可接受，误报更伤信任。**
       legacy++;
-      prev = "0".repeat(64);
       continue;
     }
-    const expect = createHash("sha256")
-      .update(r.ts + r.type + r.sessionID + auditPayload(r) + prev)
-      .digest("hex");
+    const expect = computeAuditHash(r, prev);
     if (expect !== r.hash || r.prevHash !== prev) {
       broken++;
       if (brokenAt.length < 10) brokenAt.push({ ts: r.ts, type: r.type, kind: r.kind });
     }
     prev = r.hash;
   }
-  return { ok: broken === 0, total, broken, legacy, brokenAt, file };
+  // mode 字段说明本次校验的**保证强度**：
+  //   hmac → 带密钥（CARLOS_FLOW_AUDIT_KEY），能发现有意篡改
+  //   plain → 裸 SHA-256，只能发现意外损坏（攻击者能重算整条链）
+  return { ok: broken === 0, total, broken, legacy, brokenAt, file, mode: auditHashMode() };
 }
 
 export function readAudit(opts = {}) {
   const { sessionId, type, limit } = opts;
   const rawDate = typeof opts.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : localDate();
   try {
-    const file = path.join(AUDIT_DIR, `${localDate()}.jsonl`);
+    // ⚠️ 必须用 rawDate（而不是 localDate()）—— 否则 opts.date 完全失效。
+    const file = path.join(AUDIT_DIR, `${rawDate}.jsonl`);
     const raw = fs.readFileSync(file, "utf8");
     const out = [];
     for (const line of raw.split("\n")) {

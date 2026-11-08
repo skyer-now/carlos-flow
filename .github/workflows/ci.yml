@@ -84,6 +84,20 @@ jobs:
       # 产物全面体检：旧引用 / 个人路径 / 版本一致性 / 死链 / 发布集合 / 工具清单
       - name: 产物全面体检（对外产物是否正确）
         run: npm run check:full
+      # 行为兑现类门禁：承诺 ↔ 代码路径 / 参数不得静默失效 / 不得重复注册 handler。
+      # 现有门禁擅长查「静态一致性」，不擅长查「行为兑现」——
+      # 2026-11-07 第三方审查发现的 P0/P1 问题一个都没被现有门禁抓到。
+      - name: 行为兑现门禁（承诺 / 参数 / 重复注册）
+        run: |
+          npm run check:claims
+          npm run check:params
+          npm run check:no-dead-handler
+      # 专项真实验证：真实 git 仓库 / 真实篡改 / 真实 bridge 隔离 / 真实安装
+      - name: 专项真实验证（scope / 审计链 / bridge 隔离）
+        run: |
+          npm run test:scope
+          npm run test:audit
+          npm run test:bridge
       # 产物语言体检：提交信息 / 源码注释必须是中文。
       # 2026-11-07 的事故根因正是「对话是中文的、但提交信息是英文的」——
       # 靠人扫「回复」发现不了，必须机器单独检查产物。

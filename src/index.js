@@ -2,13 +2,14 @@
 // Carlos 工作流的机械门禁工具集（留痕 / 派发 / 裁定 / 审计 / 快照还原计划）。
 // 重要：stdout 是 MCP 传输通道，所有日志一律走 stderr。
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { createServer, connect } from "node:net";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { PROTOCOL } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
-import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock } from "./state.js";
+import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, auditHashMode } from "./state.js";
 import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, enforceScope, MAX_DISPATCH } from "./dispatch.js";
 
 const log = (msg) => {
@@ -313,7 +314,6 @@ const TOOLS = [
       properties: {
         sessionId: { type: "string", description: "会话 ID，默认 unknown" },
         role: { type: "string", enum: ["executor", "auditor"], description: "领取角色" },
-        cwd: { type: "string", description: "工作目录，默认 process.cwd()" },
       },
     },
     handler: async (args) => {
@@ -430,6 +430,25 @@ const TOOLS = [
         const scope = Array.isArray(state.card.scope) ? state.card.scope : [];
         const entries = snapshotFiles(sessionId, scope, cwd);
         audit("run", sessionId, { kind: "snapshot", role, files: scope.length, ok: true });
+
+        // Phase 1-1: 记录「派发前基线」。
+        //
+        // 为什么是记录而不是当场阻断：
+        //   派发这一刻，子 Agent **还没动手** —— 它之后会改哪些文件根本无从得知。
+        //   此时跑 git diff 得到的是「用户自己已有的未提交改动」，
+        //   拿它当越界拦下来会**误伤正常用法**（用户本来就在改这些文件）。
+        //
+        // 正确的时机是**裁定前**：用「当前改动 - 派发基线」算出**本次执行引入的**
+        // 改动，再与卡片 scope 比对 —— 这才是「越界直接阻断」的真实落点，
+        // 阻断的是「越界之后仍然拿到 PASS」这个闭环。
+        const baseline = enforceScope(scope, cwd);
+        state.dispatch_baseline = Array.isArray(baseline.checked) ? baseline.checked : [];
+        saveState(sessionId, state);
+        audit("run", sessionId, {
+          kind: "dispatch_baseline",
+          role,
+          files: state.dispatch_baseline.length,
+        });
 
         if (a.run === true) {
           // 写入 prompt 文件，供主 Agent 读取后通过 subagent 工具派发
@@ -557,6 +576,36 @@ const TOOLS = [
             return fail("已有的验证结果对应的命令与当前卡片的 verify.cmd 不一致，不能记录 PASS 裁定。" +
               "请对当前卡片重新执行 flow_run_verify，再记录裁定。");
           }
+
+          // 防假闭环之四：越界改动必须被拦住。
+          //
+          // 「越界直接阻断」的**真实落点**在这里：判定「本次执行有没有改到
+          // scope 之外的文件」，而不是「派发前工作区干不干净」。
+          //
+          // 做法：拿「当前 git 改动清单」减去「派发时记录的基线」，
+          // 剩下的就是**本次执行引入的**改动 —— 用户自己原有的未提交改动
+          // 不会被误判为越界。
+          //
+          // 无基线（未走过 flow_dispatch）时退化为「全量改动」判定：
+          // 此时没有参照点，用全量更保守（fail-closed）。
+          const scopeNow = Array.isArray(state.card.scope) ? state.card.scope : [];
+          const current = enforceScope(scopeNow, a.cwd || process.cwd());
+          const baseline = Array.isArray(state.dispatch_baseline) ? state.dispatch_baseline : [];
+          const baselineSet = new Set(baseline.map((f) => path.normalize(f)));
+          const introduced = (current.checked || []).filter((f) => !baselineSet.has(path.normalize(f)));
+          const scopeCheck = enforceScope(scopeNow, a.cwd || process.cwd(), introduced);
+          if (!scopeCheck.ok) {
+            audit("decision", sessionId, {
+              kind: "scope_violation",
+              reason: "越界改动",
+              violations: scopeCheck.violations,
+              introduced: introduced.length,
+            });
+            return fail("检测到越界改动，不能记录 PASS 裁定：" +
+              (scopeCheck.violations || []).join(", ") +
+              "。这些文件不在卡片 scope 白名单内。" +
+              "请把越界文件加入 scope（重新提交任务卡）后重试，或先撤销这些改动。");
+          }
         }
 
         const findings = [];
@@ -666,7 +715,7 @@ const TOOLS = [
           chainResult = verifyAuditChain(opts);
         }
 
-        return ok({ total: rows.length, by_type, by_kind, events: rows, chain: chainResult });
+        return ok({ total: rows.length, by_type, by_kind, events: rows, chain: chainResult, mode: auditHashMode() });
       } catch (e) {
         return fail(e && e.message ? e.message : String(e));
       }
@@ -859,7 +908,6 @@ const TOOLS = [
       type: "object",
       properties: {
         sessionId: { type: "string", description: "会话 ID，默认 unknown" },
-        cwd: { type: "string", description: "工作目录，默认 process.cwd()" },
       },
     },
     handler: async (args) => {
@@ -958,9 +1006,13 @@ const TOOLS = [
         
         const scope = Array.isArray(state.card.scope) ? state.card.scope : [];
         const paths = Array.isArray(a.paths) ? a.paths : [];
-        const result = enforceScope(scope, a.paths, a.cwd);
+        // 不传 paths → 自动跑 `git diff --name-only` 取当前实际改动清单。
+        // 传了 paths → 用调用方给的清单（自查场景）。
+        const result = paths.length
+          ? enforceScope(scope, a.cwd, paths)
+          : enforceScope(scope, a.cwd);
         
-        return ok({ ok: result.ok, scope, checked: a.paths, ...result });
+        return ok({ ok: result.ok, scope, checked: paths.length ? paths : result.checked || [], ...result });
       } catch (e) {
         return fail(e && e.message ? e.message : String(e));
       }
@@ -1085,7 +1137,6 @@ const TOOLS = [
             const tier = riskTier(card.scope);
             const withLock = withStateLock(sessionId, () => {
               const prev = loadState(sessionId);
-              const wasActivated = prev.activation_activated === true;
               const state = {
                 ...defaultState(),
                 ...prev,
@@ -1141,20 +1192,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
 }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const t = TOOLS.find((x) => x.name === request.params.name);
-  if (!t) {
-    return { content: [{ type: "text", text: "Unknown tool: " + request.params.name }], isError: true };
-  }
-  try {
-    return await t.handler(request.params.arguments || {});
-  } catch (e) {
-    return {
-      content: [{ type: "text", text: "ERROR: " + (e && e.message ? e.message : String(e)) }],
-      isError: true,
-    };
-  }
-});
+// ⚠️ 这里曾经**重复注册**过一次 CallToolRequestSchema（另一个不带参数校验的版本）。
+// MCP SDK 的 setRequestHandler 用 Map.set → 后注册的覆盖先注册的，
+// 于是先注册的那个（含约 17 行）**永远不会执行** —— 当前行为是对的，
+// 但它靠的是「注册顺序」这种隐式约定：任何一次重排或插入都会静默
+// 丢掉参数校验（required 字段 / 类型 / enum 全部失效）。
+// 现在只保留下面那一个带 validateToolArgs 的注册。
+//
+// check:no-dead-handler 门禁会统计同一 schema 的注册次数，>1 即红。
 
 // ---- Phase 1-1: 工具参数校验器（required 字段 / 类型 / enum）----
 function validateToolArgs(toolName, args) {

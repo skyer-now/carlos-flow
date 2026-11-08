@@ -115,7 +115,21 @@ const server = createServer((socket) => {
 
       // 健康检查
       if (t === "GET /health") {
-        socket.write(JSON.stringify({ status: "ok", uptime: process.uptime() }) + "\n");
+        // 必须回传**身份**，否则客户端无法判断“这个 bridge 是不是我该用的那个”。
+        //
+        // 背景：早先 /health 只回 {status:"ok"}，客户端只要看到 ok 就复用 ——
+        // 于是端口上若跑着**另一个 ROOT / 另一个 CARLOS_FLOW_HOME** 的 bridge，
+        // 客户端会静默连过去：它启动时的 HOME 生效、调用方传的 CARLOS_FLOW_HOME
+        // 完全失效（状态写到别人的目录），且协议可能不匹配导致挂死。
+        // 现在回传 root / flow_home / pid，客户端逐一比对，不符就当“未运行”。
+        const health = {
+          status: "ok",
+          root: process.env.CARLOS_FLOW_MCP_ROOT || "",
+          flow_home: process.env.CARLOS_FLOW_HOME || "",
+          pid: process.pid,
+          port: PORT,
+        };
+        socket.write(JSON.stringify(health) + "\n");
         continue;
       }
 

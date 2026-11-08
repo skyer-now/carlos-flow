@@ -144,6 +144,42 @@ const MUTANTS = [
   return true; // MUTANT: 无视改动动词`,
   },
   {
+    id: "M14-审计链断链",
+    desc: "审计链去掉 prevHash 链接（每条记录各自独立哈希 → 删改中间记录也不会被发现）",
+    file: "src/state.js",
+    from: `    rec.prevHash = prev;
+    rec.hash = computeAuditHash(rec, prev);`,
+    to: `    rec.prevHash = prev;
+    rec.hash = computeAuditHash(rec, ""); // MUTANT: 断开链式链接`,
+  },
+  {
+    id: "M15-审计链校验恒真",
+    desc: "verifyAuditChain 永远返回 ok:true → 任何篡改都发现不了",
+    file: "src/state.js",
+    from: `  return { ok: broken === 0, total, broken, legacy, brokenAt, file, mode: auditHashMode() };`,
+    to: `  return { ok: true, total, broken, legacy, brokenAt, file, mode: auditHashMode() }; // MUTANT: 恒真`,
+  },
+  {
+    id: "M16-越界检查退回 fail-open",
+    desc: "enforceScope 遇到任何越界都返回 ok:true → 越界改动直接放行",
+    file: "src/dispatch.js",
+    from: `  if (violations.length > 0) {
+    return { ok: false, violations, checked: diffFiles.slice(), message: \`越界改动（超出 scope）：\${violations.join(", ")}\` };
+  }`,
+    to: `  if (violations.length > 0) {
+    return { ok: true, violations, checked: diffFiles.slice(), message: \`越界改动（超出 scope）：\${violations.join(", ")}\` }; // MUTANT: fail-open
+  }`,
+  },
+  {
+    id: "M17-date 参数失效",
+    desc: "readAudit 用 localDate() 代替 rawDate → date 参数静默失效（读到的永远是今天）",
+    file: "src/state.js",
+    from: `    // ⚠️ 必须用 rawDate（而不是 localDate()）—— 否则 opts.date 完全失效。
+    const file = path.join(AUDIT_DIR, \`\${rawDate}.jsonl\`);`,
+    to: `    // MUTANT: 用回 localDate() → date 参数静默失效
+    const file = path.join(AUDIT_DIR, \`\${localDate()}.jsonl\`);`,
+  },
+  {
     id: "M7-空scope fail-open",
     desc: "enforceScope 在空 scope 时直接返回 ok:true（任意路径都算未越界）",
     file: "src/dispatch.js",
@@ -151,6 +187,7 @@ const MUTANTS = [
     return {
       ok: false,
       violations: diffFiles.slice(),
+      checked: diffFiles.slice(),
       message: \`越界改动（卡片 scope 为空，不允许修改任何文件）：\${diffFiles.join(", ")}\`,
     };
   }`,
@@ -264,7 +301,7 @@ const SRC_BRIDGES = new Set(bridgePidFiles(SRC));
 // 导致套件启动失败/结果失真（表现为 concurrency 套件输出异常）。
 const PORT_BASE = Number(process.env.MUTATION_PORT_BASE || 20100);
 
-const base = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?", SRC, {
+const base = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?; npm run test:scope 2>&1; echo SCOPE_EXIT=$?; npm run test:audit 2>&1; echo AUDIT_EXIT=$?", SRC, {
   CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", "base"),
 });
 const baseE2e = /════ 结果: (\d+) 通过 \/ (\d+) 失败/.exec(base);
@@ -359,7 +396,7 @@ for (const [mi, m] of MUTANTS.entries()) {
   }
   writeFileSync(target, mutated, "utf8");
 
-  const out = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?", workDir, {
+  const out = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?; npm run test:scope 2>&1; echo SCOPE_EXIT=$?; npm run test:audit 2>&1; echo AUDIT_EXIT=$?", workDir, {
     CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", m.id.replace(/[^A-Za-z0-9]/g, "_")),
     // 每个变异体用**独立端口**：否则会复用上一轮副本拉起的旧 bridge，
     // 旧 bridge 内存里跑的是旧代码 → 测试结果失真（可能假绿 / 假红）。
@@ -376,6 +413,10 @@ for (const [mi, m] of MUTANTS.entries()) {
   if (!e2eFail) unparsed.push("e2e");
   if (!trFail) unparsed.push("trigger");
   if (!concFail) unparsed.push("concurrency");
+  const scopeOut = out.slice(out.lastIndexOf("越界拦截真实验证"));
+  const auditOut = out.slice(out.lastIndexOf("审计链篡改检测验证"));
+  if (!/════ 结果: \d+ 通过 \/ \d+ 失败/.test(scopeOut)) unparsed.push("scope");
+  if (!/════ 结果: \d+ 通过 \/ \d+ 失败/.test(auditOut)) unparsed.push("audit");
   if (unparsed.length) {
     lines.push(`## ${m.id}`);
     lines.push("");
@@ -394,7 +435,9 @@ for (const [mi, m] of MUTANTS.entries()) {
   const caught =
     (e2eFail && Number(e2eFail[2]) > 0) ||
     (trFail && Number(trFail[3]) > 0) ||
-    (concFail && Number(concFail[2]) > 0);
+    (concFail && Number(concFail[2]) > 0) ||
+    /SCOPE_EXIT=[1-9]/.test(out) ||
+    /AUDIT_EXIT=[1-9]/.test(out);
   const verdict = caught ? "CAUGHT ✅" : "NOT CAUGHT ❌";
   results.push({
     ...m,
