@@ -140,7 +140,9 @@ try {
 
   r = await tool("flow_submit_requirement", {
     sessionId: SID, goal: "加参数校验", quote: TEXT, scope: ["README.md"],
-    acceptance: ["参数校验生效"], verify: { cmd: "node -e \"process.stdout.write('OK')\"" },
+    acceptance: ["参数校验生效"],
+    // 真实测试：检查 README.md 是否含改动标记 —— 改动前失败、改动后通过。
+    verify: { cmd: "node -e \"const c=require(\'fs\').readFileSync(\'README.md\',\'utf8\');process.exit(c.includes(\'PKG-E2E-CHANGED\')?0:1)\"" },
     cwd: pkgRoot, confirmed: true,
   });
   check("flow_submit_requirement 提交卡片", r.ok === true);
@@ -149,13 +151,19 @@ try {
   r = await tool("flow_claim", { sessionId: SID, role: "executor" });
   check("flow_claim 领取名额", r.ok === true);
 
-  r = await tool("flow_dispatch", { sessionId: SID, role: "executor", message: "只读检查", run: false });
+  r = await tool("flow_dispatch", { sessionId: SID, role: "executor", message: "只读检查", run: false, cwd: pkgRoot });
   check("flow_dispatch 派发并快照", r.ok === true && Array.isArray(r.snapshot));
 
-  r = await tool("flow_run_verify", { sessionId: SID });
-  check("flow_run_verify 真实执行验证命令", r.ok === true && r.exitCode === 0);
+  // 真实改动：给 README.md 打标记（pkgRoot 是临时安装目录，改了不污染源码）
+  writeFileSync(join(pkgRoot, "README.md"),
+    readFileSync(join(pkgRoot, "README.md"), "utf8") + "\n" + "PKG-E2E-CHANGED" + "\n");
 
-  r = await tool("flow_verdict", { sessionId: SID, verdict: "PASS", notes: "验证通过" });
+  r = await tool("flow_falsify", { sessionId: SID });
+  check("flow_falsify 负对照通过（改动前失败 + 改动后通过）",
+    r.ok === true && r.verdict === "meaningful", r.ok ? `verdict=${r.verdict}` : (r.__raw || ""));
+
+  r = await tool("flow_claim", { sessionId: SID, role: "auditor" });
+  r = await tool("flow_verdict", { sessionId: SID, verdict: "PASS", notes: "验证通过", cwd: pkgRoot });
   check("flow_verdict 记 PASS（有验证证据才放行）", r.ok === true && r.completed_ok === true);
 
   r = await tool("flow_audit", { sessionId: SID });

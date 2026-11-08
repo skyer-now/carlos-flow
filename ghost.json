@@ -5,7 +5,7 @@
   "name": "Carlos 工作流",
   "description": "机械门禁 MCP：留痕/派发/裁定/审计/快照/免检/还原。自动管理 Bridge 后台常驻，首次调用 ~3-5s，后续 ~1s。",
   "whenToUse": "需要走 Carlos 工作流门禁时使用：留痕/派发/裁定/审计/快照/免检/还原",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "kind": "mcp",
   "entry": "client/carlos.js",
   "command": "门禁",
@@ -404,6 +404,23 @@
     {
       "name": "flow_run_verify",
       "description": "执行卡片中指定的验证命令，返回执行结果（退出码、stdout、stderr）。用于在派发 executor 后验证其工作成果，或手动触发验证。记 PASS 裁定前必须先跑通本工具。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "会话 ID，默认 unknown"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "工作目录，默认 process.cwd()"
+          }
+        }
+      }
+    },
+    {
+      "name": "flow_falsify",
+      "description": "负对照（negative control）：把工作区还原到派发时的「改动前」状态跑同一 verify.cmd，要求它失败；再还原「改动后」状态跑一次，要求它通过。只有「改动前失败 + 改动后通过」才证明这个测试真的在测本次改动（而不是 `|| true` / `echo ok` 这类空测试）。记 PASS 裁定前必须先做负对照。",
       "parameters": {
         "type": "object",
         "properties": {

@@ -93,7 +93,7 @@ export function sanitizeId(s) {
 
 // 当前状态文件结构版本号。
 // 改动 defaultState() 的**字段结构**时，必须 +1 并在 migrate() 里加一条迁移。
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 /**
  * 迁移旧版本的状态文件。
@@ -104,6 +104,9 @@ export const CURRENT_SCHEMA_VERSION = 1;
  * v0 → v1：最早的版本没有 schemaVersion 字段（等于 v0）。
  *   · 补上 schemaVersion
  *   · dispatch_baseline 早期不存在 → 补空数组（无基线时裁定走全量判定，更保守）
+ *
+ * v1 → v2：新增 last_falsify（负对照记录）。
+ *   · 旧状态没有这个字段 → 补 null（表示「还没做负对照」，裁定会拒绝 PASS）
  */
 export function migrate(parsed) {
   if (!parsed || typeof parsed !== "object") return parsed;
@@ -117,6 +120,12 @@ export function migrate(parsed) {
     if (!Array.isArray(out.activation_pending)) out.activation_pending = [];
     if (typeof out.activation_activated !== "boolean") out.activation_activated = false;
     v = 1;
+  }
+
+  if (v < 2) {
+    // v1 → v2
+    if (out.last_falsify === undefined) out.last_falsify = null;
+    v = 2;
   }
 
   out.schemaVersion = CURRENT_SCHEMA_VERSION;
@@ -158,6 +167,12 @@ export function defaultState() {
     // 再与卡片 scope 比对 —— 这样既能拦住越界，又不会把用户自己原有的
     // 未提交改动误判为越界。没有基线时退化为全量判定（更保守，fail-closed）。
     dispatch_baseline: [],
+    // 负对照记录（flow_falsify 写入）。
+    // 为什么需要：只看 exitCode===0 时，`verify.cmd` 可以是 `|| true` / `echo ok`
+    // 这类**空测试** —— 改动前后都退 0，门禁却以为「验证通过了」。
+    // 负对照要求：改动前必须失败、改动后必须通过，才证明这个测试真的在测本次改动。
+    // null = 还没做负对照（此时 flow_verdict 拒绝 PASS）。
+    last_falsify: null,
   };
 }
 
@@ -173,11 +188,14 @@ export function loadState(sid) {
 }
 
 export function saveState(sid, state) {
+  // 落盘脱敏：`state.card` 可能携带密钥片段（verify.cmd/token/password），
+  // 不能明文落盘。sanitizeFields 只脱敏 value，key 名保留。
+  const safeState = sanitizeFields(state ?? defaultState());
   const dir = path.join(RUNS_DIR, sanitizeId(sid));
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, "state.json.tmp");
   const target = path.join(dir, "state.json");
-  fs.writeFileSync(tmp, JSON.stringify(state ?? defaultState(), null, 2), "utf8");
+  fs.writeFileSync(tmp, JSON.stringify(safeState, null, 2), "utf8");
   fs.renameSync(tmp, target);
   return target;
 }
@@ -273,6 +291,47 @@ function lastHashOf(file) {
   }
 }
 
+// 审计文件按天分片（`${localDate()}.jsonl`）。
+//
+// 审计链是「分片链表」：前一天的最后一条记录的 hash 应当传给后一天的第一条
+// 的 prevHash。**旧代码 `audit()` 只取当天文件的 tail**（当天文件不存在时退化成
+// 全 0），于是链子每天都在午夜断开——攻击者篡改**任意历史天**的记录，今天
+// 的 `verifyAuditChain()` 查不出来。
+//
+// 新增三个辅助：
+//   · auditDayFiles()    → 按日期升序排列的审计文件清单
+//   · lastHashOfDay(date)→ 某天文件最后一条记录的 hash（不存在那一天退化为 ZERO）
+//   · nextPrevHash(date) → 取「当天 tail」，当天没有则往前找最近一天的 tail
+//
+// `audit()` 用 nextPrevHash 把每天的 tail 串成完整链，
+// `verifyAuditChain()` 用同一套规则逐天串联验证。
+function auditDayFiles() {
+  try {
+    return fs.readdirSync(AUDIT_DIR).filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)).sort();
+  } catch {
+    return [];
+  }
+}
+
+function lastHashOfDay(date) {
+  return lastHashOf(path.join(AUDIT_DIR, `${date}.jsonl`));
+}
+
+// 取「当天 tail」，当天没有就往前找最近一天的 tail（修跨天断链）
+function nextPrevHash(date) {
+  const file = path.join(AUDIT_DIR, `${date}.jsonl`);
+  const prev = lastHashOf(file);
+  if (prev !== "0".repeat(64)) return prev; // 当天有链，正常运行
+  // 当天还没有记录：**从 date 前一天起**按日期降序找最近已有 tail，绝不看 future。
+  const today = localDate();
+  const sorted = auditDayFiles().sort().filter((f) => f.slice(0, 10) < today);
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    if (sorted[i].slice(0, 10) >= date) continue; // 只能找 date 之前的
+    const h = lastHashOf(path.join(AUDIT_DIR, sorted[i]));
+    if (h !== "0".repeat(64)) return h;
+  }
+  return "0".repeat(64);
+}
 // 哈希载荷：除链字段外的全部字段，保持写入/校验口径完全一致
 function auditPayload(rec) {
   const SKIP = new Set(["ts", "type", "sessionID", "prevHash", "hash"]);
@@ -282,6 +341,64 @@ function auditPayload(rec) {
   }
   return JSON.stringify(out);
 }
+
+// 敏感信息脱敏
+//
+// 用户卡片里可能包含密钥/密码（`verify.cmd` 里的 `sk_live_xxx`、`token`、
+// `password`），审计记录也接受任意 `fields`——如果原样落盘，**门禁本身成了泄露源**。
+//
+// 规则：
+//   · key 命中 `secret/key/password/pwd/token/credential/auth` 之一（不区分大小写）
+//   · 或 string value 里含有 `sk_|secret=|password=|token=|api_key=|sk_live|sk_test`
+//   → 记为敏感 value，脱敏：长度 ≤ 8 → `[脱敏]`，否则头尾各保留 4 个字符中间 ***
+//
+// 任何异常都不可抛（`audit` 必须永不抛错），脱敏失败则原地返回原值。
+function isSensitiveKey(k) {
+  try {
+    return typeof k === "string" && /[Ss]ecret|[Kk]ey|[Pp]assword|[Pp]wd|[Tt]oken|[Cc]redential|[Aa]uth/.test(k);
+  } catch {
+    return false;
+  }
+}
+const SENSITIVE_VALUES_RE = /sk_|secret=|password=|token=|api_key=|sk_live|sk_test|secret:/i;
+function isSensitiveValue(v) {
+  try {
+    return typeof v === "string" && v.length > 0 && SENSITIVE_VALUES_RE.test(v);
+  } catch {
+    return false;
+  }
+}
+function maskValue(v) {
+  try {
+    if (typeof v === "string" && v.length > 0) {
+      if (v.length <= 8) return "[脱敏]";
+      return v.slice(0, 4) + "***" + v.slice(-4);
+    }
+    return v;
+  } catch {
+    return v;
+  }
+}
+function sanitizeValue(v) {
+  try {
+    if (Array.isArray(v)) return v.map(sanitizeValue);
+    if (v && typeof v === "object") {
+      const out = {};
+      for (const k of Object.keys(v)) {
+        const val = v[k];
+        out[k] = isSensitiveKey(k) || isSensitiveValue(val) ? maskValue(val) : sanitizeValue(val);
+      }
+      return out;
+    }
+    return v;
+  } catch {
+    return v;
+  }
+}
+export function sanitizeFields(o) {
+  return sanitizeValue(o ?? {});
+}
+
 
 // ---- 审计链哈希模式 ----
 //
@@ -316,17 +433,20 @@ function computeAuditHash(rec, prev) {
 
 // 追加审计行；永不抛错，失败仅写 stderr；返回记录对象
 export function audit(type, sid, fields = {}) {
+  // 落盘脱敏：用户卡片/审计字段里的密钥片段（verify.cmd 等）不能明文入盘。
+  const sanitized = sanitizeFields(fields);
   const rec = {
     ts: new Date().toISOString(),
     type,
     sessionID: sanitizeId(sid),
-    ...(fields && typeof fields === "object" ? fields : {}),
+    ...sanitized,
   };
   try {
     fs.mkdirSync(AUDIT_DIR, { recursive: true });
     const file = path.join(AUDIT_DIR, `${localDate()}.jsonl`);
-    // 前驱 hash 取自目标文件尾部 → 与进程数无关，切换状态目录也不会断链
-    const prev = lastHashOf(file);
+    // 前驱 hash 取自当天文件 tail；当天没有记录时退成分片链上一天的 tail
+    //（nextPrevHash），这样审计链在午夜也不断开。
+    const prev = nextPrevHash(localDate());
     rec.prevHash = prev;
     rec.hash = computeAuditHash(rec, prev);
     // 单次 appendFileSync：O_APPEND 语义，多进程并发写不会互相截断
@@ -339,12 +459,70 @@ export function audit(type, sid, fields = {}) {
   return rec;
 }
 
-// 校验审计链完整性（可选：需完整文件，不能只看尾部）
+// 校验审计链完整性（可选：需完整文件，不能只看尾部）。
+//
+// 审计文件按天分片（`localDate().jsonl`），审计链是「分片链表」：
+// 前一天最后一条记录的 hash 是后一天第一条记录的 prevHash（nextPrevHash）。
+// 所以默认 `verifyAuditChain()` **逐天串联所有记录** 验证整条链——
+// 攻击者篡改任意一天的任意记录，整链检测都会 break（配合 CARLOS_FLOW_AUDIT_KEY
+// 为 HMAC 时做得到；plain 模式可在推荐结果里看到 mode 降级声明）。
+//
+// `opts.date` 给定的一天 → 只验证那一天（验证起点是前一天 tail，跨天）。
+// `opts.fullChain` 默认 true → 验证全部天的完整链。
 export function verifyAuditChain(opts = {}) {
   const rawDate = typeof opts.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : localDate();
   // ⚠️ 必须用 rawDate（而不是 localDate()）—— 否则 opts.date 完全失效：
   // 传 date='2020-01-01' 读的仍是**今天**的文件，调用方以为在查历史、
   // 实际拿到今天的数据（错而不报，最难发现）。
+  const fullChain = typeof opts.fullChain === "boolean" ? opts.fullChain : true;
+  if (fullChain && !opts.date) {
+    // 全链验证：逐天（按文件名升序 == 升时）串联，每天的 tail 是下一天的 prevHash。
+    const files = auditDayFiles();
+    const byDay = [];
+    let total = 0, broken = 0, legacy = 0;
+    const brokenAt = [];
+    let prev = "0".repeat(64); // 链起点
+    for (const f of files) {
+      let raw = "";
+      try {
+        raw = fs.readFileSync(path.join(AUDIT_DIR, f), "utf8");
+      } catch {
+        continue;
+      }
+      let dayBroken = 0, dayLegacy = 0;
+      for (const line of raw.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        let r;
+        try {
+          r = JSON.parse(t);
+        } catch {
+          continue;
+        }
+        total++;
+        if (typeof r.hash !== "string") {
+          // 旧格式记录（无 hash）→ 计入 legacy 计数，但**不重置链起点**
+          legacy++;
+          dayLegacy++;
+          continue;
+        }
+        const expect = computeAuditHash(r, prev);
+        if (expect !== r.hash || r.prevHash !== prev) {
+          broken++;
+          dayBroken++;
+          if (brokenAt.length < 10) brokenAt.push({ date: f.slice(0, 10), ts: r.ts, type: r.type, kind: r.kind });
+        }
+        prev = r.hash;
+      }
+      byDay.push({ date: f.slice(0, 10), dayBroken, dayLegacy, tailHash: prev });
+    }
+    return {
+      ok: broken === 0, total, broken, legacy, brokenAt, byDay, mode: auditHashMode(),
+      note: "全链验证：逐天串联，每天的 tail 是下一天的前驱。",
+    };
+  }
+
+  // 单日验证：按 date 读一天文件，链起点用前一天 tail（跨天联动）或全 0（新链第一天）。
   const file = path.join(AUDIT_DIR, `${rawDate}.jsonl`);
   let raw = "";
   try {
@@ -352,10 +530,14 @@ export function verifyAuditChain(opts = {}) {
   } catch {
     return { ok: true, total: 0, broken: 0, legacy: 0, brokenAt: [], file, mode: auditHashMode() };
   }
+  // 单日的链起点：前一个 tail hash（跨天）或全 0（新链第一天）。
+  const files = auditDayFiles();
   let prev = "0".repeat(64);
-  let total = 0;
-  let broken = 0;
-  let legacy = 0;
+  for (const f of files) {
+    if (f === `${rawDate}.jsonl`) break;
+    prev = lastHashOf(path.join(AUDIT_DIR, f));
+  }
+  let total = 0, broken = 0, legacy = 0;
   const brokenAt = [];
   for (const line of raw.split("\n")) {
     const t = line.trim();
@@ -390,6 +572,7 @@ export function verifyAuditChain(opts = {}) {
   //   plain → 裸 SHA-256，只能发现意外损坏（攻击者能重算整条链）
   return { ok: broken === 0, total, broken, legacy, brokenAt, file, mode: auditHashMode() };
 }
+
 
 export function readAudit(opts = {}) {
   const { sessionId, type, limit } = opts;

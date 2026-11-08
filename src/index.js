@@ -10,7 +10,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { PROTOCOL } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
 import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, auditHashMode } from "./state.js";
-import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, enforceScope, MAX_DISPATCH } from "./dispatch.js";
+import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, runNegativeControl, computeOutputHash, enforceScope, MAX_DISPATCH } from "./dispatch.js";
 
 const log = (msg) => {
   try {
@@ -606,6 +606,38 @@ const TOOLS = [
               "。这些文件不在卡片 scope 白名单内。" +
               "请把越界文件加入 scope（重新提交任务卡）后重试，或先撤销这些改动。");
           }
+
+          // 防假闭环之四：role 门禁绑定到会话 ID（claimed_role），而非调用方自述字符串
+          if (verdict === "PASS" && state.claimed_role !== "auditor") {
+            audit("decision", sessionId, { kind: "verdict_denied", reason: "role 未绑定到 auditor 会话", claimed_role: state.claimed_role });
+            return fail("PASS 裁定必须由已领取 auditor 角色的会话（flow_claim role=auditor）落下。当前会话 claimed_role=" + (state.claimed_role || "null"));
+          }
+
+          // 防假闭环之五：负对照 —— 证明 verify.cmd 真的在测「本次改动」。
+          //
+          // 「验证通过」本身不是证据：verify.cmd 可以是 `|| true` / `echo ok`，
+          // 改动前后都退 0，门禁却以为测试过了。负对照要求：
+          //   · 还原到派发时（改动前）跑同一命令 → 必须失败
+          //   · 还原回改动后跑同一命令 → 必须通过
+          // 只有「改动前失败 + 改动后通过」才说明这个测试有判别力。
+          const lf = state.last_falsify;
+          if (!lf || typeof lf !== "object") {
+            audit("decision", sessionId, { kind: "verdict_denied", reason: "尚未做负对照" });
+            return fail("尚未做负对照（flow_falsify），不能记录 PASS 裁定。" +
+              "请先用 flow_falsify 证明 verify.cmd 在改动前失败、改动后通过。");
+          }
+          if (lf.verdict !== "meaningful") {
+            audit("decision", sessionId, { kind: "verdict_denied", reason: "负对照未通过", falsify_verdict: lf.verdict });
+            return fail("负对照未通过（" + lf.verdict + "）：" + (lf.reason || "") +
+              " 不能记录 PASS 裁定。请修正 verify.cmd 或改动后重试。");
+          }
+          // 绑定：裁定的证据必须就是负对照里「改动后」的那次运行。
+          if (typeof lf.after === "object" && lf.after && typeof lf.after.hash === "string" &&
+              state.last_verify && state.last_verify.output_hash !== lf.after.hash) {
+            audit("decision", sessionId, { kind: "verdict_denied", reason: "验证证据与负对照不一致" });
+            return fail("已有的验证结果与负对照的运行结果不一致，不能记录 PASS 裁定。" +
+              "请重新调用 flow_falsify（它会把改动后的运行写为验证证据）。");
+          }
         }
 
         const findings = [];
@@ -974,10 +1006,92 @@ const TOOLS = [
           cwd: workdir || process.cwd(),
           exitCode: result.exitCode,
           ok: result.ok,
+          // 输出指纹：把「验证通过」绑定到一次可复现的运行，而不是「我说过了」。
+          output_hash: computeOutputHash(result.exitCode, result.stdout, result.stderr),
         };
         saveState(sessionId, state2);
         
         return ok({ ok: result.ok, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, cwd: workdir || process.cwd() });
+      } catch (e) {
+        return fail(e && e.message ? e.message : String(e));
+      }
+    },
+  },
+
+  // 13b -----------------------------------------------------------------------
+  {
+    name: "flow_falsify",
+    description:
+      "负对照（negative control）：把工作区还原到派发时的「改动前」状态跑同一 verify.cmd，要求它**失败**；" +
+      "再还原「改动后」状态跑一次，要求它**通过**。只有「改动前失败 + 改动后通过」才证明这个测试真的在测本次改动" +
+      "（而不是 `|| true` / `echo ok` 这类空测试）。记 PASS 裁定前必须先做负对照。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "会话 ID，默认 unknown" },
+        cwd: { type: "string", description: "工作目录，默认 process.cwd()" },
+      },
+    },
+    handler: async (args) => {
+      try {
+        const a = args || {};
+        const sessionId = a.sessionId || "unknown";
+        const state = loadState(sessionId);
+        if (!state.card) return fail("没有留痕，无法做负对照。");
+        if (!state.card.verify || !state.card.verify.cmd) return fail("卡片未指定验证命令，无法做负对照。");
+
+        const cardProject = state.card.env && typeof state.card.env.project === "string"
+          ? state.card.env.project
+          : "";
+        const workdir = a.cwd || cardProject || undefined;
+
+        const r = await runNegativeControl(sessionId, state.card.verify.cmd, workdir);
+        if (!r.ok) {
+          audit("run", sessionId, { kind: "falsify_denied", reason: r.error || "负对照无法执行" });
+          return fail(r.error || "负对照无法执行");
+        }
+
+        const state2 = loadState(sessionId);
+        state2.last_falsify = {
+          ts: new Date().toISOString(),
+          cmd: state.card.verify.cmd,
+          cwd: workdir || process.cwd(),
+          verdict: r.verdict,
+          reason: r.reason,
+          before: { exitCode: r.before.exitCode, ok: r.before.ok, hash: r.before.hash },
+          after: { exitCode: r.after.exitCode, ok: r.after.ok, hash: r.after.hash },
+        };
+        // 把「改动后」的运行写为 last_verify —— 裁定的证据绑定到这一次运行。
+        state2.last_verify = {
+          ts: new Date().toISOString(),
+          cmd: state.card.verify.cmd,
+          cwd: workdir || process.cwd(),
+          exitCode: r.after.exitCode,
+          ok: r.after.ok,
+          output_hash: r.after.hash,
+        };
+        saveState(sessionId, state2);
+
+        audit("run", sessionId, {
+          kind: "falsify",
+          verdict: r.verdict,
+          before_exit: r.before.exitCode,
+          after_exit: r.after.exitCode,
+          before_hash: r.before.hash,
+          after_hash: r.after.hash,
+        });
+
+        const trunc = (s) => (typeof s === "string" && s.length > 2000 ? s.slice(0, 2000) + "…" : s);
+        return ok({
+          ok: true,
+          verdict: r.verdict,
+          reason: r.reason,
+          before: { exitCode: r.before.exitCode, ok: r.before.ok, hash: r.before.hash, stdout: trunc(r.before.stdout), stderr: trunc(r.before.stderr) },
+          after: { exitCode: r.after.exitCode, ok: r.after.ok, hash: r.after.hash, stdout: trunc(r.after.stdout), stderr: trunc(r.after.stderr) },
+          note: r.verdict === "meaningful"
+            ? "负对照通过：测试有判别力，可以记 PASS。"
+            : "负对照未通过：不能记 PASS。" + r.reason,
+        });
       } catch (e) {
         return fail(e && e.message ? e.message : String(e));
       }

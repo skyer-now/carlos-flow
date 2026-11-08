@@ -71,8 +71,8 @@ try {
   const hasValidation = /validateToolArgs\(/.test(src);
   if (hasValidation) pass("CallTool handler 调用了 validateToolArgs（参数校验未丢失）");
   else fail("CallTool handler 没有调用 validateToolArgs —— 参数校验可能已丢失");
-  if (declared.length === 15) pass(`TOOLS 声明 ${declared.length} 个工具`);
-  else fail(`TOOLS 声明了 ${declared.length} 个工具（期望 15）`);
+  if (declared.length === 16) pass(`TOOLS 声明 ${declared.length} 个工具`);
+  else fail(`TOOLS 声明了 ${declared.length} 个工具（期望 16）`);
 } catch (e) {
   fail(`读取 src/index.js 失败：${e.message}`);
 }

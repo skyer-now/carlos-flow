@@ -231,6 +231,147 @@ export async function runVerifyCommand(cmd, cwd) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 输出指纹 + 负对照（negative control）
+// ---------------------------------------------------------------------------
+
+// 一次验证运行的输出指纹：exitCode + stdout + stderr。
+//
+// 为什么需要：裁定要绑定的是「一次可复现的运行」，而不是「我说测试过了」。
+// 把输出哈希记进 last_verify，裁定时比对，就能发现「证据被换掉 / 命令不确定」。
+export function computeOutputHash(exitCode, stdout, stderr) {
+  try {
+    const h = createHash("sha256");
+    h.update("exitCode=" + String(exitCode === undefined || exitCode === null ? -1 : exitCode));
+    h.update("\n");
+    h.update(typeof stdout === "string" ? stdout : "");
+    h.update("\n");
+    h.update(typeof stderr === "string" ? stderr : "");
+    return h.digest("hex");
+  } catch {
+    return "";
+  }
+}
+
+// 用快照 manifest 还原「派发时（改动前）」的工作区状态。
+function restoreFromManifest(entries) {
+  for (const e of entries) {
+    if (!e || !e.orig) continue;
+    try {
+      if (e.created === true) {
+        // 派发时该文件不存在 → 删除当前文件
+        try { fs.unlinkSync(e.orig); } catch {}
+      } else if (e.backup) {
+        fs.mkdirSync(path.dirname(e.orig), { recursive: true });
+        fs.copyFileSync(e.backup, e.orig);
+      }
+    } catch (err) {
+      try { process.stderr.write(`[flow-falsify] 还原失败 ${e.orig}: ${err && err.message ? err.message : err}\n`); } catch {}
+    }
+  }
+}
+
+// 负对照：证明 verify.cmd 真的在测「本次改动」。
+//
+// 层次：这是「证据门禁」的执行侧 —— 不是让 LLM 声称「我试图证伪但没成功」，
+// 而是让 harness 真的把工作区还原到改动前，跑同一命令，看它是否失败。
+// 一个改动前就退 0 的测试是**空测试**，不构成任何证据（`|| true` / `echo ok` 就是这么漏过去的）。
+//
+// 安全：先把「改动后」的 scope 文件备份到临时目录，finally 里一定还原；
+// 即使 verify 命令本身改动文件，也不会把工作区留在改动前状态。
+//
+// 局限（如实说明）：快照只覆盖卡片 scope 内的文件。如果 verify.cmd 依赖 scope 外的
+// 文件、而执行者又改了它们，「改动前」状态只是近似。此时负对照结论仅供参考。
+export async function runNegativeControl(sid, cmd, cwd) {
+  const entries = readManifest(sid);
+  if (!entries.length) {
+    return { ok: false, error: "没有派发快照，无法做负对照（请先 flow_dispatch）" };
+  }
+  const tmpDir = path.join(RUNS_DIR, sanitizeId(sid), "negative_control", String(Date.now()));
+  try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (e) {
+    return { ok: false, error: "无法创建负对照临时目录：" + (e && e.message ? e.message : e) };
+  }
+
+  // 1. 备份「改动后」的当前状态
+  const saved = [];
+  for (const e of entries) {
+    if (!e || !e.orig) continue;
+    const orig = e.orig;
+    const existed = fs.existsSync(orig);
+    let savedPath = null;
+    if (existed) {
+      try {
+        savedPath = path.join(tmpDir, `${saved.length}_${path.basename(orig)}`);
+        fs.copyFileSync(orig, savedPath);
+      } catch (err) {
+        try { process.stderr.write(`[flow-falsify] 备份当前文件失败 ${orig}: ${err && err.message ? err.message : err}\n`); } catch {}
+      }
+    }
+    saved.push({ orig, savedPath, existed });
+  }
+
+  // 还原「改动后」状态（无论后续发生什么）
+  const restoreCurrent = () => {
+    for (const s of saved) {
+      try {
+        if (s.existed && s.savedPath) {
+          fs.mkdirSync(path.dirname(s.orig), { recursive: true });
+          fs.copyFileSync(s.savedPath, s.orig);
+        } else if (!s.existed) {
+          // 当前状态里该文件不存在（executor 删了它）→ 保持删除
+          try { fs.unlinkSync(s.orig); } catch {}
+        }
+      } catch (err) {
+        try { process.stderr.write(`[flow-falsify] 还原当前文件失败 ${s.orig}: ${err && err.message ? err.message : err}\n`); } catch {}
+      }
+    }
+  };
+
+  let before = null;
+  let after = null;
+  try {
+    // 2. 还原「改动前」
+    restoreFromManifest(entries);
+    // 3. 跑改动前 —— 必须失败
+    before = await runVerifyCommand(cmd, cwd);
+    // 4. 还原「改动后」
+    restoreCurrent();
+    // 5. 跑改动后 —— 必须通过
+    after = await runVerifyCommand(cmd, cwd);
+  } finally {
+    // 无论如何都还原改动后状态
+    restoreCurrent();
+  }
+
+  const beforeHash = computeOutputHash(before.exitCode, before.stdout, before.stderr);
+  const afterHash = computeOutputHash(after.exitCode, after.stdout, after.stderr);
+
+  let verdict = "inconclusive";
+  let reason = "";
+  if (before.ok === true) {
+    // 改动前就通过 → 空测试
+    verdict = "vacuous";
+    reason = "verify.cmd 在改动前就通过（exitCode=" + before.exitCode + "）—— 它没有测本次改动，是空测试";
+  } else if (after.ok !== true) {
+    verdict = "not_passing";
+    reason = "verify.cmd 在改动后未通过（exitCode=" + after.exitCode + "）—— 改动本身有问题";
+  } else {
+    verdict = "meaningful";
+    reason = "改动前失败（exitCode=" + before.exitCode + "）+ 改动后通过（exitCode=" + after.exitCode + "）—— 测试有判别力";
+  }
+
+  // 清理临时目录（还原已完成，不再需要备份）
+  try { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
+
+  return {
+    ok: true,
+    verdict,
+    reason,
+    before: { exitCode: before.exitCode, ok: before.ok, hash: beforeHash, stdout: before.stdout, stderr: before.stderr },
+    after: { exitCode: after.exitCode, ok: after.ok, hash: afterHash, stdout: after.stdout, stderr: after.stderr },
+  };
+}
+
 // Phase 1-1: scope 机器校验 - 对比 diff 与 card.scope
 //
 // 用法：enforceScope(scope, cwd, diffFiles?)

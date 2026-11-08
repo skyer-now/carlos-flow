@@ -1,9 +1,10 @@
 // Carlos 工作流 · 完整端到端测试（12 工具 + 审计链验证）
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, mkdtempSync } from "node:fs";
 
 import os from 'node:os';
+import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -107,6 +108,19 @@ async function main() {
   console.log(`sessionId: ${SID}`);
   console.log(`FLOW_HOME: ${FLOW_HOME}\n`);
 
+  // 为「真实改动」准备一个临时 git 工作区：负对照要求 verify.cmd 改动前失败、改动后通过。
+  // 旧版用 `process.exit(0)`（永远退 0）—— 正是负对照要抓的「空测试」。
+  const WORK = mkdtempSync(join(tmpdir(), "carlos-e2e-work-"));
+  const gitw = (...args) => spawnSync("git", args, { cwd: WORK, encoding: "utf8" });
+  gitw("init", "-q");
+  gitw("config", "user.email", "t@t");
+  gitw("config", "user.name", "t");
+  writeFileSync(join(WORK, "target.txt"), "broken\n");
+  writeFileSync(join(WORK, "target2.txt"), "broken\n");
+  gitw("add", "-A");
+  gitw("commit", "-q", "-m", "init");
+  const verifyFor = (f) => `node -e "const c=require('fs').readFileSync('${f}','utf8');process.exit(c.trim()==='fixed'?0:1)"`;
+
   // 1. flow_protocol
   let r = await call("flow_protocol", {});
   check("1. flow_protocol", r.ok && r.data?.protocol?.ROUTE_TABLE?.includes("T2"), r.ok ? "" : r.error);
@@ -118,9 +132,9 @@ async function main() {
   // 3. flow_submit_requirement
   r = await call("flow_submit_requirement", {
     sessionId: SID, goal: "跑通 Carlos 端到端测试",
-    quote: QUOTE, scope: [ROOT + "/README.md"],
+    quote: QUOTE, scope: ["target.txt"],
     acceptance: ["12 个工具全部可用"],
-    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
+    verify: { cmd: verifyFor("target.txt") }, confirmed: true, cwd: WORK,
   });
   check("3. flow_submit_requirement", r.ok && r.data?.ok === true, r.ok ? `tier=${r.data.tier}` : r.error);
 
@@ -147,7 +161,7 @@ async function main() {
   check("5. flow_claim", r.ok && r.data?.ok === true && /objective:/.test(r.data.prompt || ""), r.ok ? `dispatch=${r.data.dispatch_count}` : r.error);
 
   // 6. flow_dispatch
-  r = await call("flow_dispatch", { sessionId: SID, role: "executor", message: "只读检查", run: false });
+  r = await call("flow_dispatch", { sessionId: SID, role: "executor", message: "只读检查", run: false, cwd: WORK });
   const snapOk = r.ok && r.data?.snapshot?.length === 1 && r.data?.snapshot[0].backup;
   check("6. flow_dispatch", r.ok && r.data?.ok === true && snapOk, r.ok ? (snapOk ? "快照已建" : "快照缺失") : r.error);
 
@@ -155,13 +169,19 @@ async function main() {
   r = await call("flow_save_result", { sessionId: SID, role: "executor", stdout: "结论：全部通过", stderr: "", code: 0 });
   check("7. flow_save_result", r.ok && r.data?.ok === true && !!r.data?.file, r.ok ? "" : r.error);
 
-  // 7b. flow_run_verify —— 记 PASS 的前置证据（真实验证必须跑通）
-  r = await call("flow_run_verify", { sessionId: SID });
-  check("7b. flow_run_verify 真实执行 verify.cmd", r.ok && r.data?.ok === true && r.data?.exitCode === 0,
-    r.ok ? `ok=${r.data?.ok} exitCode=${r.data?.exitCode}` : r.error);
+  // 7b. 真实改动 + 负对照 —— 记 PASS 的前置证据（真实验证必须跑通，且测试要有判别力）
+  writeFileSync(join(WORK, "target.txt"), "fixed\n");
+  r = await call("flow_falsify", { sessionId: SID, cwd: WORK });
+  check("7b. flow_falsify 负对照（改动前失败 + 改动后通过）",
+    r.ok && r.data?.verdict === "meaningful",
+    r.ok ? `verdict=${r.data?.verdict}` : r.error);
 
-  // 8. flow_verdict
-  r = await call("flow_verdict", { sessionId: SID, verdict: "PASS", notes: "端测通过" });
+  // 8. auditor 再 claim 后才能 verdict（role 门禁绑定会话 claimed_role）
+  r = await call("flow_claim", { sessionId: SID, role: "auditor" });
+  check("8. flow_claim auditor", r.ok && r.data?.ok === true && r.data?.role === "auditor", r.ok ? "" : r.error);
+
+  // 9. flow_verdict
+  r = await call("flow_verdict", { sessionId: SID, verdict: "PASS", notes: "端测通过", cwd: WORK });
   check("8. flow_verdict", r.ok && r.data?.verdict === "PASS" && r.data?.completed_ok === true, r.ok ? "" : r.error);
 
   // 9. flow_audit
@@ -567,20 +587,24 @@ async function main() {
   await call("flow_add_user_msg", { sessionId: NV_SID, text: QUOTE });
   r = await call("flow_submit_requirement", {
     sessionId: NV_SID, goal: "没验证就想通过", quote: QUOTE,
-    scope: [ROOT + "/README.md"], acceptance: ["未验证时 PASS 必须被拒"],
-    verify: { cmd: "node -e \"process.exit(0)\"" }, confirmed: true,
+    scope: ["target2.txt"], acceptance: ["未验证时 PASS 必须被拒"],
+    verify: { cmd: verifyFor("target2.txt") }, confirmed: true, cwd: WORK,
   });
   const nvSubmitted = r.ok && r.data?.ok === true;
   await call("flow_claim", { sessionId: NV_SID, role: "executor" });
-  await call("flow_dispatch", { sessionId: NV_SID, role: "executor", message: "只读检查", run: false });
+  await call("flow_dispatch", { sessionId: NV_SID, role: "executor", message: "只读检查", run: false, cwd: WORK });
   r = await call("flow_verdict", { sessionId: NV_SID, verdict: "PASS", notes: "没跑过验证就想通过" });
   const nvPassBlocked = r.ok === false && /验证/.test(r.error || "");
   check("24a. 从未跑过 flow_run_verify 就记 PASS 被拒", nvSubmitted && nvPassBlocked,
     r.ok ? "未被拒绝（异常）" : "已拒绝");
 
-  r = await call("flow_run_verify", { sessionId: NV_SID });
-  const nvRan = r.ok && r.data?.ok === true;
-  r = await call("flow_verdict", { sessionId: NV_SID, verdict: "PASS", notes: "验证已跑通" });
+  writeFileSync(join(WORK, "target2.txt"), "fixed\n");
+  r = await call("flow_falsify", { sessionId: NV_SID, cwd: WORK });
+  const nvRan = r.ok && r.data?.verdict === "meaningful";
+
+  // auditor 再 claim 后 verdict
+  r = await call("flow_claim", { sessionId: NV_SID, role: "auditor" });
+  r = await call("flow_verdict", { sessionId: NV_SID, verdict: "PASS", notes: "验证已跑通", cwd: WORK });
   const nvPassOk = r.ok && r.data?.verdict === "PASS" && r.data?.completed_ok === true;
   check("24b. 验证通过后记 PASS 放行", nvRan && nvPassOk, r.ok ? "" : r.error);
 

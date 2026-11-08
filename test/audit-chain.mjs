@@ -145,6 +145,85 @@ v = JSON.parse(r.stdout.trim().split("\n").pop());
 check("date=2020-01-01 读到 0 条（不再误读今天的数据）", v.total === 0, JSON.stringify(v));
 check("date=2020-01-01 校验的是那一天的文件（broken=0）", v.chainBroken === 0, JSON.stringify(v));
 
+// ---- 5. 跨天断链回连：今天第一条记录的 prevHash 必须来自昨天的 tail ----
+console.log("\n> 5. 跨天链");
+const YESTERDAY = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+rmSync(join(home, "gate-audit"), { recursive: true, force: true });
+// 写种子：一条昨天的记录（格式与 audit() 完全一致）
+const YESTERDAY_SCRIPT = `
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+mkdirSync(join(${JSON.stringify(home)}, "gate-audit"), { recursive: true });
+// 手动写一条昨天的记录：格式与 audit() 一致
+function payload(rec) {
+  const SKIP = new Set(["ts", "type", "sessionID", "prevHash", "hash"]);
+  return JSON.stringify(Object.fromEntries(Object.entries(rec).filter(([k]) => !SKIP.has(k))));
+}
+function compute(rec, prev) { return createHash("sha256").update(rec.ts + rec.type + rec.sessionID + payload(rec) + prev).digest("hex"); }
+const y = ${JSON.stringify(YESTERDAY(1))};
+const rec = { ts: y + "T23:59:59Z", type: "run", sessionID: "sess-yest", kind: "record" };
+rec.prevHash = "0".repeat(64);
+rec.hash = compute(rec, rec.prevHash);
+writeFileSync(join(${JSON.stringify(home)}, "gate-audit", y + ".jsonl"), JSON.stringify(rec) + "\\n");
+console.log("yesterday written, date =", y);
+`;
+r = runInChild("plain", YESTERDAY_SCRIPT);
+check("手动种子：昨天写入一条记录", r.stdout.includes("yesterday written"), r.stderr.slice(0, 300));
+
+const TODAY_SCRIPT = `
+import { verifyAuditChain, audit } from ${JSON.stringify(pathToFileURL(join(ROOT, "src", "state.js")).href)};
+const v = verifyAuditChain({ date: ${JSON.stringify(YESTERDAY(1))}, fullChain: false });
+const t = new Date().toISOString().slice(0, 10);
+audit("run", "sess-crossday", { kind: "record" });
+audit("run", "sess-crossday2", { kind: "record" });
+const vT = verifyAuditChain({ date: t, fullChain: false });
+const vF = verifyAuditChain({ fullChain: true });
+console.log(JSON.stringify({ y: ${JSON.stringify(YESTERDAY(1))}, t, v: v.ok, vT: vT.ok, vTbroken: vT.broken, vF: vF.ok, vFbroken: vF.broken }));
+`;
+r = runInChild("plain", TODAY_SCRIPT);
+v = JSON.parse(r.stdout.trim().split("\n").pop());
+check("crossDay audit() 今天 prevHash 来自昨天的 tail（不是 ZERO）", v.vTbroken === 0, JSON.stringify(v));
+check("昨天种子记录可验证（backward link）", v.v === true, JSON.stringify(v));
+check("全链验证通过（逐天串联，无断裂）", v.vF === true, JSON.stringify(v));
+
+// 用来确认 fullChain 能把所有天串在一起
+const CHAIN_VERIFY_SCRIPT = `
+import { verifyAuditChain } from ${JSON.stringify(pathToFileURL(join(ROOT, "src", "state.js")).href)};
+const v = verifyAuditChain({ fullChain: true });
+console.log(JSON.stringify({ total: v.total, broken: v.broken, byDay: v.byDay.map((d) => d.date + ":" + d.dayBroken) }));
+`;
+r = runInChild("plain", CHAIN_VERIFY_SCRIPT);
+v = JSON.parse(r.stdout.trim().split("\n").pop());
+check("fullChain 按天串联且只有 0 个断裂", v.broken === 0, JSON.stringify(v));
+
+// ---- 6. 敏感信息脱敏：密钥不能明文落盘 ----
+console.log("\n> 6. 敏感脱敏");
+const hasSecret = "sk_live_abc123456789";
+const SECRETS_SCRIPT = `
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { audit, saveState } from ${JSON.stringify(pathToFileURL(join(ROOT, "src", "state.js")).href)};
+mkdirSync(${JSON.stringify(home)}, { recursive: true });
+saveState("sess-secret", { card: { goal: "leak-me", verify: { cmd: "echo " + ${JSON.stringify(hasSecret)} }, password: "123456", token: "tok_1234567890abcdef01234567890" } });
+audit("run", "sess-secret", { cmd: "curl -H 'Bearer " + ${JSON.stringify(hasSecret)} + "' https://api.example.com", token: "tok_1234567890abcdef01234567890" });
+console.log("wrote");
+`;
+r = runInChild("plain", SECRETS_SCRIPT);
+r = runInChild("plain", SECRETS_SCRIPT);
+check("audit/write 完成", r.stdout.includes("wrote"), r.stderr.slice(0, 200));
+
+const stateFile = readFileSync(join(home, "gate-state", "runs", "sess-secret", "state.json"), "utf8");
+const state = JSON.parse(stateFile);
+check("card.verify.cmd 脱敏", state.card.verify.cmd !== hasSecret && !state.card.verify.cmd.includes(hasSecret), JSON.stringify(state.card));
+check("card.password 脱敏", state.card.password === "[脱敏]", JSON.stringify(state.card));
+check("card.token 脱敏", typeof state.card.token === "string" && !state.card.token.includes("1234567890abcdef"), JSON.stringify(state.card));
+const AUDIT_DIR = join(home, "gate-audit");
+const today = readFileSync(join(AUDIT_DIR, new Date().toISOString().slice(0, 10) + ".jsonl"), "utf8").trim();
+const last = JSON.parse(today.split("\n").filter(Boolean).pop());
+check("audit 字段脱敏（不含 sk_live 等密钥）", !today.includes(hasSecret), JSON.stringify(last));
+check("audit 仍然拥有合法 hash（脱敏后参与链计算）", last.hash && last.hash.length === 64, JSON.stringify(last));
+
 try { rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); } catch {}
 
 console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);

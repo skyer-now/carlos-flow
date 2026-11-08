@@ -4,7 +4,8 @@
 
 | 版本 | 支持状态 |
 |------|----------|
-| 2.6.x | ✅ 活跃维护 |
+| 2.7.x | ✅ 活跃维护（当前发布版） |
+| 2.6.x | ⚠️ 仅修安全问题 |
 | 2.5.x | ⚠️ 仅修安全问题 |
 | < 2.5 | ❌ 不再维护 |
 
@@ -46,6 +47,8 @@
 - 每条审计记录含 `prevHash`/`hash` 链式结构
 - 文件级作用域，切换目录/多实例不断链
 - 提供 `verifyAuditChain()` 校验工具
+- 审计文件按本地日期分片（`YYYY-MM-DD.jsonl`），`prevHash` 一律联动**前一天 tail**，跨天不断链
+- 审计记录（`audit()`）和状态文件（`saveState()`）写之前先脱敏——敏感值（`token`/`password`/`verify.cmd`）只留掩码，不入盘
 - **两种哈希模式，强度不同，请如实区分**：
   | 模式 | 条件 | 能发现什么 | 不能发现什么 |
   |------|------|-----------|-------------|
@@ -54,6 +57,7 @@
 - `verifyAuditChain()` 的返回值含 `mode` 字段（`plain` / `hmac`）—— **调用方应据此判断保证强度**，
   不要把 `plain` 模式的 `ok: true` 当成「没被篡改过」的证明。
 - 想获得完整防篡改能力：设置 `CARLOS_FLOW_AUDIT_KEY`（如 `export CARLOS_FLOW_AUDIT_KEY=$(openssl rand -hex 32)`）。
+- **落盘脱敏**：审计记录（`audit()`）和状态文件（`saveState()`）写之前先脱敏；`verify.cmd`/`token`/`password` 等只留掩码，不入盘。
 
 ### 4. 路径穿越防护
 - `sessionId` 严格清洗（仅允许 `A-Za-z0-9_.-`）
@@ -66,6 +70,7 @@
 |------|----------|
 | Bridge Token 泄露 | 仅本地回环；Token 随机生成并落盘 0600，不在代码里；泄露后删除 `bridge-token` 文件即可轮换 |
 | 审计日志篡改 | 链式哈希能发现意外损坏；**要发现有意篡改必须启用 HMAC 模式**（设 `CARLOS_FLOW_AUDIT_KEY`）。校验结果的 `mode` 字段会如实标注当前强度 |
+| 敏感信息落盘脱敏 | 审计/状态文件中的敏感 key（`token`/`password`/`secret`/`key`/`credential`/`auth`）和含 `sk_|api_key|token=` 的值脱敏为 `[脱敏]` 或 `head *** tail`，不保留原值 |
 | 敏感路径误操作 | `isSensitive()` 多层校验，`confirmed=true` 强制用户确认 |
 | 依赖供应链攻击 | `package-lock.json` 锁定版本，CI 执行 `npm audit` |
 

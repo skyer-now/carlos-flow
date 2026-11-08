@@ -5,6 +5,12 @@
 
 ---
 
+## [2.8.0] - 2026-11-08 — 角色门禁绑定会话 claimed_role + auditor 复核流程
+
+- flow_verdict PASS 现在必须由已 claim "auditor" 角色的会话落下（claimed_role 绑定会话 ID，而非调用方自述字符串）。
+- executor 负责做事，auditor 负责复核裁定，测试脚本已同步更新（e2e-carlos、scope-enforcement、package-e2e）。
+- 强版 falsify + output_hash 比对继续保留，整体无回归。
+
 ## [2.7.0] - 2026-11-07 — 第三方审查全线修复：核心承诺终于成立 + 安全承诺降级为准确表述
 
 > 本版源于一份第三方审查报告（逐条核实与决策记录见 [`docs/AUDIT_REVIEW.md`](./docs/AUDIT_REVIEW.md)）。
@@ -32,7 +38,11 @@
 | T-82 | 客户端有**硬编码默认 Token**（\`carlos-local-token-2026\`），与 bridge 侧 fail-closed 行为不一致 | 任何本机进程都知道这个字符串；SECURITY.md 却声称「无硬编码密钥」—— 自相矛盾 | 去掉硬编码默认值：优先读 \`CARLOS_BRIDGE_TOKEN\`；未设则**首次运行生成 256 位随机 token** 落盘 \`$CARLOS_FLOW_HOME/bridge-token\`（0600），跨进程复用 |
 | T-83 | \`flow_audit\` 的 \`date\` 参数**完全失效**（\`rawDate\` 算出却不用，文件路径仍是 \`localDate()\`） | 工具描述承诺「可按日期过滤」，实际传 \`date=2020-01-01\` 读到的是**今天**的数据 —— 错而不报 | \`readAudit\` / \`verifyAuditChain\` 均改用 \`rawDate\` 构造文件路径 |
 
+| T-88 | `audit()` 的上链 `prevHash` 只取当天 tail，**跨天链断开** | 午夜后任意历史天的篡改今天查不出，等于完美洗白 | `audit()` 改为 `nextPrevHash(localDate())`（当天无记录则往前找最近一天 tail）；`verifyAuditChain` 全链逐天串联验证 |
+| T-89 | `audit()` 与 `saveState()` 把密钥片段（`verify.cmd`/`token`/`password`）**明文落盘** | 门禁本身成了泄露源，与“机械门禁”定位直接矛盾 | 脱敏后入盘：key 命中 `secret/key/password/pwd/token/credential/auth` 或 value 含 `sk_|secret=|password=|token=|api_key=|sk_live|sk_test` 时，只留掩码（≤8 字符→`[脱敏]`，否则头尾各 4 位 + `***`） |
+
 ### 🧭 行为兑现类门禁（新增）—— 防止这类问题复发
+
 
 > 报告里最有价值的一个元发现：**现有门禁擅长查「静态一致性」，不擅长查「行为兑现」**。
 > 上面的 P0 与 P1 问题**一个都没被现有门禁抓到**。为此新增三个门禁：
@@ -48,7 +58,7 @@
 | 脚本 | 验什么 | 用例数 |
 |------|--------|--------|
 | \`npm run test:scope\` | 真实 git 仓库里改文件 → scope 外改动**真被阻断**；派发前已有改动**不误伤**；\`flow_check_scope\` 自动 diff 模式 | 5/5 |
-| \`npm run test:audit\` | **真实篡改**审计记录 → hmac 模式必发现；plain 模式如实标注局限；legacy 不误报；date 真的生效 | 12/12 |
+| \`npm run test:audit\` | **真实篡改**审计记录 → hmac 模式必发现；plain 模式如实标注局限；legacy 不误报；date 真的生效 | 23/23 |
 | \`npm run test:bridge\` | 端口上是**别人的 bridge** 时不复用（状态不会写到别人的 HOME）；同身份可复用 | 6/6 |
 | \`npm run test:lang\` | 语言体检**真能抓到英文**（防假绿） | 12/12 |
 

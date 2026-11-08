@@ -38,6 +38,11 @@ Carlos Flow 的做法是：**约束全部落在代码里，用运行时事实校
 - 审计日志？→ **链式哈希**（`prevHash` → `hash`），改一条全链断裂。
   设了 `CARLOS_FLOW_AUDIT_KEY` 时用 **HMAC-SHA256**（带密钥）→ 攻击者重算不出，只能发现不能隐藏
 - 想跳过？→ 免检需显式 `confirmed=true`，且**每次派发自动清零**
+  审计文件按本地日期分片，`prevHash` 一律联动**前一天的 tail**，跨天不断链。
+  未设密钥时（`plain` 模式）走裸 SHA-256：只能防**意外损坏**，
+  不能防有意篡改；`verifyAuditChain()` 的回传带了 `mode` 字段（`plain`/`hmac`），
+  调用方自行判断强度。审计记录（`audit()`）和状态文件（`saveState()`）
+  写之前先脱敏——密钥片段不入盘。
 
 **一句话**：它把「代码评审的门禁」搬到了 AI Agent 上，而且门禁本身是机器执行、不是人执行。
 
@@ -49,7 +54,8 @@ Carlos Flow 的做法是：**约束全部落在代码里，用运行时事实校
 |---|------|---------|------------------------|
 | 1 | **越界改动** | "只改这些文件"是建议不是规则 | `enforceScope()` 运行时 `git diff` 比对白名单，越界**阻断派发** |
 | 2 | **验证表演** | Agent 自述"测试通过"，无人能证明 | `runVerifyCommand()` 真实执行，捕获 stdout/stderr/exitCode；**无验证证据不许记 PASS** |
-| 3 | **可洗白审计** | 普通文件日志 —— 可删可改 | 链式哈希审计，**改一条全链断裂**；配 `CARLOS_FLOW_AUDIT_KEY` 启用 HMAC 后，**攻击者没有密钥就无法重算掩盖** |
+| 3 | **可洗白审计** | 普通文件日志 —— 可删可改 | 链式哈希审计，**改一条全链断裂**；跨天链联动前一天 tail；**审计记录与落盘状态均脱敏后写**；
+  配 `CARLOS_FLOW_AUDIT_KEY` 启用 HMAC 后，**攻击者没有密钥就无法重算掩盖** |
 | 4 | **失控免检** | 一句话关闭所有防护 | 需卡片显式 `confirmed=true`，**每次派发自动清零** |
 | 5 | **无限派发** | 领卡即重置计数，可无限重试 | `dispatch_count` 仅在派发时 +1，耗尽同时拦截 claim / dispatch |
 | 6 | **自证式复核** | 同一 Agent 既实现又审批 | 内置 `auditor` 角色 + 独立合同，裁定严格三档 |
@@ -117,11 +123,11 @@ flowchart TB
         Plugin["plugins/carlos-flow-trigger.js<br/>chat.message 钩子"]
     end
 
-    subgraph Core["核心 MCP Server (src/index.js) — 15 个工具"]
+    subgraph Core["核心 MCP Server (src/index.js) — 16 个工具"]
         Protocol["flow_protocol"]
         Submit["flow_submit_requirement"]
         Dispatch["flow_claim / flow_dispatch"]
-        Verify["flow_run_verify / flow_check_scope"]
+        Verify["flow_run_verify / flow_falsify / flow_check_scope"]
         Verdict["flow_verdict"]
         Audit["flow_status / flow_audit"]
         Trigger["flow_trigger_check"]
@@ -157,7 +163,7 @@ flowchart TB
 |----|------|------|---------|
 | **宿主适配层** | `ghost.json` / `plugins/` / `templates/` | 发现、启动、配置、生命周期 | ⚠️ 唯一有平台差异的层 |
 | **客户端层** | `client/carlos.js` / `bridge/` | CLI、触发检查、Bridge 守护 | 仅 Cindy 需要 Bridge |
-| **协议层** | `src/index.js` | 15 个 MCP 工具 + 参数校验 + 门禁语义 | ✅ 零耦合，纯标准 MCP |
+| **协议层** | `src/index.js` | 16 个 MCP 工具 + 参数校验 + 门禁语义 | ✅ 零耦合，纯标准 MCP |
 | **引擎层** | `src/trigger.js` / `src/card.js` / `src/state.js` | 触发评分、卡片校验、状态/审计 | ✅ 零耦合，纯 JS 无依赖 |
 | **持久化层** | `~/.carlos-flow/` | 状态、审计链、快照、触发历史 | ✅ 跨平台路径约定 |
 
@@ -173,7 +179,7 @@ flowchart TB
 |------|-------------|-----------------|------------------|
 | 越界拦截 | ✅ 自己跑 `git diff`；执行者动了 scope 外的文件 → **阻断 PASS** | ❌ | ❌ 靠自觉 |
 | 真实验证 | ✅ spawn + 捕获，无证据不许 PASS | ❌ | ❌ Agent 自述 |
-| 审计链完整性 | ✅ 链式哈希（+ 可选 HMAC 密钥） | ❌ | ❌ |
+| 审计链完整性 | ✅ 链式哈希（+ 可选 HMAC），跨天串联，落盘脱敏 | ❌ | ❌ |
 | 可控免检 | ✅ 显式开启 + 自动清零 | ❌ | ❌ 一句话全关 |
 | 诚实派发配额 | ✅ 只计派发 | ❌ | ❌ |
 | 独立复核 | ✅ 内置 `auditor` 角色 | ❌ | ❌ 可选 |
@@ -185,6 +191,9 @@ flowchart TB
 > **信任边界说明**：手工改 `state.json` 里的 verdict 能伪造 PASS —— 状态文件不在审计哈希链内。
 > 这是**本地文件系统权限**的信任边界，不是 MCP 工具面能被绕过的漏洞：
 > 能写 `CARLOS_FLOW_HOME` 的人本来就能改自己的代码。
+> 还要注意：（1）未设 `CARLOS_FLOW_AUDIT_KEY` 时是 `plain` 模式（裸 SHA-256），
+> **`ok: true` 不是「没被篡改过」的证明**，调用方看 `mode` 字段；
+> （2）审计记录与状态（`verify.cmd`/`token`/`password`）脱敏后入盘，密钥片段不留明文。
 > 完整说明见 [QA 验收报告](./docs/QA_REPORT_v2.5.5.md) §六。
 
 ---
@@ -274,7 +283,7 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 
 ---
 
-## 🔧 MCP 工具参考（15 个）
+## 🔧 MCP 工具参考（16 个）
 
 | 工具 | 作用 | 关键约束 |
 |------|------|---------|
@@ -284,9 +293,10 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_claim` | 领取派发名额（executor / auditor） | 激活闸门未解时拒绝 |
 | `flow_dispatch` | 按四段合同派发子 Agent | 派发前自动快照 scope 内文件 |
 | `flow_save_result` | 保存子 Agent 执行结果 | — |
-| `flow_run_verify` | **真实执行** `verify.cmd` | 返回 exitCode / stdout / stderr |
+| `flow_run_verify` | **真实执行** `verify.cmd` | 返回 exitCode / stdout / stderr + `output_hash` |
+| `flow_falsify` | **负对照**：改动前跑 verify.cmd 必须失败、改动后必须通过 | 空测试（`|| true`）会被拒；记 PASS 前必做 |
 | `flow_check_scope` | 检查文件是否越界 | 空 scope → fail-closed 全部越界 |
-| `flow_verdict` | 记录裁定 PASS / DIRECTION / LOCAL | 未派发不许 PASS；验证未过不许 PASS |
+| `flow_verdict` | 记录裁定 PASS / DIRECTION / LOCAL | 未派发不许 PASS；验证未过不许 PASS；**负对照未过不许 PASS** |
 | `flow_status` | 查询门禁状态 | 暴露 `activation_pending` / `verify_passed` |
 | `flow_audit` | 读取审计流水 | 含 6 类激活相关事件 |
 | `flow_diff_hunks` | 解析 `git diff -U0` 的 hunk 范围 | — |
@@ -389,6 +399,7 @@ npm run test:mutation    # 17 类变异体，必须 17/17 全部被抓住
 |------|--------|
 | `npm run test:scope` | 在**真实 git 仓库**里改文件 → scope 外改动**真的被阻断**；派发前就有的改动**不误伤** |
 | `npm run test:audit` | **真实篡改**审计记录 → hmac 模式必须发现；plain 模式如实标注局限；legacy 记录不误报；date 参数真的生效 |
+| | **跨天链**连通不留断点；脱敏检查确保密钥片段不留明文 |
 | `npm run test:bridge` | 端口上是**别人的 bridge** 时不得复用（否则状态会写到别人的 HOME） |
 | `npm run test:package` | `npm pack` → 装到干净目录 → 从 `node_modules` 拉起 MCP server 走真实握手 |
 | `npm run test:lang` | 语言体检脚本**真的能抓到英文**（防假绿） |

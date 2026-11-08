@@ -38,6 +38,8 @@ Carlos Flow takes the opposite approach: **every constraint is enforced at runti
 - Audit log? → SHA-256 **chained hashes** (`prevHash` → `hash`); **change one and the chain breaks**
 - Want to skip? → Bypass needs explicit `confirmed=true`, and **auto-clears on every dispatch**
 
+  After `audit()` and `saveState()` field values (verify.cmd/token/password) are sanitized;
+  no key fragment is stored in plain.
 **In one line**: it brings code-review gates to AI agents — and the gates are executed by machines, not humans.
 
 ---
@@ -48,7 +50,7 @@ Carlos Flow takes the opposite approach: **every constraint is enforced at runti
 |---|---------|------------|-------------------------------|
 | 1 | **Out-of-scope edits** | "Only these files" is advice, not a rule | `enforceScope()` compares `git diff` to the whitelist at runtime — out-of-scope **blocks dispatch** |
 | 2 | **Verification theater** | Agent self-reports "tests passed"; no proof | `runVerifyCommand()` really executes, capturing stdout/stderr/exitCode; **no evidence → no PASS** |
-| 3 | **Mutable audit logs** | Plain files — deletable, editable | SHA-256 chained hashes — **change one and the whole chain breaks** |
+| 3 | **Mutable audit logs** | Plain files — deletable, editable | SHA-256 chained hashes (per-day files, prevHash threaded to previous day's tail, cross-day chain intact) — **change one and the whole chain breaks** |
 | 4 | **Uncontrolled bypass** | One sentence disables all guards | Requires explicit `confirmed=true` on the card; **auto-cleared on every dispatch** |
 | 5 | **Unlimited dispatch** | Claim resets the counter; infinite retries | `dispatch_count` increments only on dispatch; exhaustion blocks both claim and dispatch |
 | 6 | **Self-certified review** | Same agent implements and approves | Built-in `auditor` role + independent contract, strict three-tier verdict |
@@ -116,11 +118,11 @@ flowchart TB
         Plugin["plugins/carlos-flow-trigger.js<br/>chat.message hook"]
     end
 
-    subgraph Core["Core MCP Server (src/index.js) — 15 tools"]
+    subgraph Core["Core MCP Server (src/index.js) — 16 tools"]
         Protocol["flow_protocol"]
         Submit["flow_submit_requirement"]
         Dispatch["flow_claim / flow_dispatch"]
-        Verify["flow_run_verify / flow_check_scope"]
+        Verify["flow_run_verify / flow_falsify / flow_check_scope"]
         Verdict["flow_verdict"]
         Audit["flow_status / flow_audit"]
         Trigger["flow_trigger_check"]
@@ -156,7 +158,7 @@ flowchart TB
 |-------|----------|----------------|-------------------|
 | **Host adapter** | `ghost.json` / `plugins/` / `templates/` | Discovery, launch, config, lifecycle | ⚠️ The **only** platform-specific layer |
 | **Client** | `client/carlos.js` / `bridge/` | CLI, trigger check, Bridge daemon | Bridge is Cindy-only |
-| **Protocol** | `src/index.js` | 15 MCP tools + validation + gate semantics | ✅ Zero coupling, pure standard MCP |
+| **Protocol** | `src/index.js` | 16 MCP tools + validation + gate semantics | ✅ Zero coupling, pure standard MCP |
 | **Engine** | `src/trigger.js` / `src/card.js` / `src/state.js` | Trigger scoring, card validation, state/audit | ✅ Zero coupling, pure JS, no deps |
 | **Persistence** | `~/.carlos-flow/` | State, audit chain, snapshots, trigger history | ✅ Cross-platform path convention |
 
@@ -173,7 +175,7 @@ flowchart TB
 |------------|-------------|-------------------|-------------------|
 | Scope enforcement | ✅ Runs `git diff` itself; **blocks PASS** when the executor touched out-of-scope files | ❌ | ❌ Honor system |
 | Real verification | ✅ spawn + capture; no evidence → no PASS | ❌ | ❌ Agent says so |
-| Tamper-proof audit | ✅ SHA-256 chained hashes | ❌ | ❌ |
+| Tamper-proof audit | ✅ SHA-256 chained hashes, cross-day threaded, values sanitized | ❌ | ❌ |
 | Controlled bypass | ✅ Explicit + auto-cleared | ❌ | ❌ One sentence kills all |
 | Honest dispatch quota | ✅ Counts only dispatches | ❌ | ❌ |
 | Independent review | ✅ Built-in `auditor` role | ❌ | ❌ Optional |
@@ -275,7 +277,7 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 
 ---
 
-## 🔧 MCP Tool Reference (15 tools)
+## 🔧 MCP Tool Reference (16 tools)
 
 | Tool | Purpose | Key constraint |
 |------|---------|----------------|
@@ -285,9 +287,10 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_claim` | Claim a dispatch slot (executor / auditor) | Rejected while the activation gate is open |
 | `flow_dispatch` | Dispatch a sub-agent per the four-part contract | Auto-snapshots files in scope before dispatch |
 | `flow_save_result` | Save a sub-agent's result | — |
-| `flow_run_verify` | **Really execute** `verify.cmd` | Returns exitCode / stdout / stderr |
+| `flow_run_verify` | **Really execute** `verify.cmd` | Returns exitCode / stdout / stderr + `output_hash` |
+| `flow_falsify` | **Negative control**: run `verify.cmd` pre-change (must fail) and post-change (must pass) | Vacuous tests (`|| true`) rejected; required before PASS |
 | `flow_check_scope` | Check whether files are in scope | Empty scope → fail-closed, everything out of scope |
-| `flow_verdict` | Record verdict PASS / DIRECTION / LOCAL | No PASS without dispatch; no PASS without passing verification |
+| `flow_verdict` | Record verdict PASS / DIRECTION / LOCAL | No PASS without dispatch; no PASS without passing verification; **no PASS without a passing negative control** |
 | `flow_status` | Query gate state | Exposes `activation_pending` / `verify_passed` |
 | `flow_audit` | Read the audit stream | Includes 6 activation-related event kinds |
 | `flow_diff_hunks` | Parse `git diff -U0` hunk ranges | — |
@@ -390,7 +393,8 @@ Each mutant corresponds to a **real regression** and must be caught by a real te
 | Script | What it proves |
 |--------|----------------|
 | `npm run test:scope` | In a **real git repo**, editing a file outside scope is **actually blocked**; pre-existing edits are **not** misjudged |
-| `npm run test:audit` | **Actually tampering** with an audit record → hmac mode must detect it; plain mode honestly states its limits; legacy records don't cause false alarms; `date` actually works |
+| `npm run test:audit` | **Actually tampering** with an audit record
+| | cross-day chain must connect; only sanitized values, no key fragment stored | → hmac mode must detect it; plain mode honestly states its limits; legacy records don't cause false alarms; `date` actually works |
 | `npm run test:bridge` | A bridge belonging to **someone else** on the port is not reused (otherwise state lands in someone else's HOME) |
 | `npm run test:package` | `npm pack` → install into a clean dir → launch the MCP server from `node_modules` and do a real handshake |
 | `npm run test:lang` | The language audit really **catches** English (guards against a false green) |

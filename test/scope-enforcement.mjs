@@ -71,16 +71,18 @@ await req("notifications/initialized", {});
 console.log("\n════ 越界拦截真实验证 ════\n");
 
 const QUOTE = "改 in-scope 文件";
-const VERIFY = "node -e \"process.stdout.write('OK')\"";
+// 真实测试：检查 in-scope.txt 内容 —— 改动前（original）失败、改动后（含 changed）通过。
+// 旧版用 `process.stdout.write(\"OK\")`（永远退 0）—— 正是负对照要抓的「空测试」。
+const VERIFY = "node -e \"const c=require(\'fs\').readFileSync(\'in-scope.txt\',\'utf8\');process.exit(c.includes(\'changed\')?0:1)\"";
 
 /** 跑一轮：提交卡 → claim → dispatch → 改文件 → verify → verdict */
-async function round(name, { mutate, expectPass }) {
+async function round(name, { mutate, expectPass, expectFalsify, verify }) {
   const sid = "scope-" + name + "-" + Date.now();
   await tool("flow_add_user_msg", { sessionId: sid, text: QUOTE });
   await tool("flow_submit_requirement", {
     sessionId: sid, goal: "测试 scope 拦截", quote: QUOTE,
     scope: ["in-scope.txt"], acceptance: ["改对了"],
-    verify: { cmd: VERIFY }, cwd: repo, confirmed: true,
+    verify: { cmd: verify || VERIFY }, cwd: repo, confirmed: true,
   });
   await tool("flow_claim", { sessionId: sid, role: "executor" });
   const d = await tool("flow_dispatch", { sessionId: sid, role: "executor", run: false });
@@ -89,14 +91,17 @@ async function round(name, { mutate, expectPass }) {
     return;
   }
   mutate();
-  const v = await tool("flow_run_verify", { sessionId: sid, cwd: repo });
-  if (!v.ok || v.exitCode !== 0) {
-    check(`${name}：验证命令跑通`, false, `exitCode=${v.exitCode}`);
-    return;
+  // 负对照：改动前必须失败、改动后必须通过（空测试在这里被判定为 vacuous）
+  const f = await tool("flow_falsify", { sessionId: sid, cwd: repo });
+  if (expectFalsify) {
+    check(`${name}：负对照结论 = ${expectFalsify}`, f.verdict === expectFalsify,
+      `实际 ${f.verdict}${f.reason ? "（" + f.reason + "）" : ""}`);
   }
+  // auditor claim 后 verdict
+  await tool("flow_claim", { sessionId: sid, role: "auditor" });
   const verdict = await tool("flow_verdict", { sessionId: sid, verdict: "PASS", notes: "测试", cwd: repo });
   const gotPass = verdict.ok === true && verdict.completed_ok === true;
-  check(`${name}：${expectPass ? "scope 内改动 → 允许 PASS" : "scope 外改动 → 阻断 PASS"}`,
+  check(`${name}：${expectPass ? "允许 PASS" : "阻断 PASS"}`,
     gotPass === expectPass,
     expectPass ? `竟然被拒：${verdict.__raw || verdict.reason || ""}` : `竟然放行了：${JSON.stringify(verdict).slice(0, 120)}`);
   return verdict;
@@ -105,7 +110,7 @@ async function round(name, { mutate, expectPass }) {
 // ---- 用例 1：scope 内改动 → 允许 PASS ----
 await round("用例1-scope内", {
   mutate: () => writeFileSync(join(repo, "in-scope.txt"), "changed by agent\n"),
-  expectPass: true,
+  expectPass: true, expectFalsify: "meaningful",
 });
 
 // 恢复
@@ -114,7 +119,7 @@ git("checkout", "--", "in-scope.txt");
 // ---- 用例 2：scope 外改动 → 必须阻断 PASS（核心断言）----
 await round("用例2-scope外", {
   mutate: () => writeFileSync(join(repo, "out-of-scope.txt"), "changed by agent OUT OF SCOPE\n"),
-  expectPass: false,
+  expectPass: false, expectFalsify: "not_passing",
 });
 git("checkout", "--", "out-of-scope.txt");
 
@@ -122,10 +127,20 @@ git("checkout", "--", "out-of-scope.txt");
 writeFileSync(join(repo, "pre-existing.txt"), "用户自己先改的（派发前就有）\n");
 await round("用例3-派发前已有改动", {
   mutate: () => writeFileSync(join(repo, "in-scope.txt"), "changed by agent\n"),
-  expectPass: true,
+  expectPass: true, expectFalsify: "meaningful",
 });
 git("checkout", "--", "in-scope.txt");
 git("checkout", "--", "pre-existing.txt");
+
+// ---- 用例 6：空测试（改动前后都退 0）→ 负对照判定 vacuous，阻断 PASS ----
+// 这是负对照存在的理由：`|| true` / `process.exit(0)` 这类命令永远「验证通过」，
+// 旧门禁会把它们当成证据。
+await round("用例6-空测试", {
+  mutate: () => writeFileSync(join(repo, "in-scope.txt"), "changed by agent\n"),
+  expectPass: false, expectFalsify: "vacuous",
+  verify: "node -e \"process.exit(0)\"",
+});
+git("checkout", "--", "in-scope.txt");
 
 // ---- 用例 4：flow_check_scope 不传 paths 时自动跑 git diff ----
 const sid4 = "scope-auto-" + Date.now();
