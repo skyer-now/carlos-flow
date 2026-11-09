@@ -674,16 +674,26 @@ async function main() {
   process.exit(fail > 0 ? 1 : 0);
 }
 
-// 清理本次测试拉起的 Bridge（端口隔离，不影响其他实例）
+// 清理本次测试拉起的 Bridge。
+//
+// 为什么不能只清 BRIDGE_PORT 那一个：客户端的 pickBridgePort() 在首选端口被占时
+// 会向上另选（PORT+1、PORT+2…），并把 PID 写到 bridge-<实际端口>.pid。
+// 只清 BRIDGE_PORT 会漏掉实际在跑的那个 —— 它是 detached + unref 的，
+// 测试进程退出后仍然常驻（历史上一度漏了 8 个）。
+// 做法：测试开始时记下已有的 PID 文件，结束时只清**本次新增**的那些。
+const preexistingBridgePids = new Set(
+  fs.readdirSync(ROOT).filter((f) => /^bridge-\d+\.pid$/.test(f))
+);
+
 function cleanupBridge() {
   try {
-    const pidFile = path.join(ROOT, `bridge-${BRIDGE_PORT}.pid`);
-    if (fs.existsSync(pidFile)) {
-      const pid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+    for (const f of fs.readdirSync(ROOT)) {
+      if (!/^bridge-\d+\.pid$/.test(f) || preexistingBridgePids.has(f)) continue;
+      const pid = parseInt(fs.readFileSync(path.join(ROOT, f), "utf8").trim(), 10);
       if (pid && pid !== process.pid) {
         try { process.kill(pid); } catch { /* 已退出 */ }
       }
-      fs.unlinkSync(pidFile);
+      try { fs.unlinkSync(path.join(ROOT, f)); } catch {}
     }
   } catch { /* 清理失败不影响测试结果 */ }
 }

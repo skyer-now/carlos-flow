@@ -151,6 +151,22 @@ check("指向相同 ROOT 的客户端可复用同一 bridge",
 
 try { bridgeA.kill(); } catch {}
 await sleep(300);
+
+// 客户端会另起 **detached** bridge（client/carlos.js 的 startBridge 用
+// detached + unref），测试进程退出后它们仍然常驻 —— 必须显式收掉。
+// 否则每跑一次测试就漏一个 bridge（历史上一度漏了 8 个，全是测试临时根目录）。
+// client 会把 PID 写到 <CARLOS_FLOW_MCP_ROOT>/bridge-<port>.pid，据此精准清理。
+for (const d of [rootA, rootB]) {
+  try {
+    for (const f of readdirSync(d)) {
+      if (!/^bridge-\d+\.pid$/.test(f)) continue;
+      const pid = parseInt(rf(join(d, f), "utf8").trim(), 10);
+      if (pid && pid !== process.pid) { try { process.kill(pid, "SIGTERM"); } catch {} }
+    }
+  } catch {}
+}
+await sleep(300);
+
 for (const d of [rootA, rootB, homeA, homeB]) {
   try { rmSync(d, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 }); } catch {}
 }
