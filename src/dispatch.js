@@ -7,19 +7,77 @@ import { RUNS_DIR, sanitizeId } from "./state.js";
 
 export const MAX_DISPATCH = 5;
 
+// 通用设计基线（坏味道清单）—— Standards 轴的第二层基线。
+//
+// 出处与边界（重要，不要夸大）：
+//   · 本表由 Carlos 项目自维护，**术语对齐** Fowler et al.《Refactoring:
+//     Improving the Design of Existing Code》第二版第 3 章「Code Smells」；
+//   · 但它**不是原书全表**，也不声称逐条等同原书 —— 原书两版条目数不同，
+//     市面上流传的「Fowler 12 种坏味道」是二手博客的说法、不是书里的口径。
+//     把一个无法核实的数字写进审计权威，subagent 就会拿着错的基准去判定。
+//   · 显式化清单的价值不在「权威」，在**可枚举、可测试、口径一致**：
+//     判定不再依赖模型记性，测试也能断言基线条目一条都没被静默删掉。
+export const SMELL_BASELINE = [
+  { name: "Duplicated Code", desc: "同一段逻辑重复出现，改一处漏一处" },
+  { name: "Long Method", desc: "函数承担过多职责，应拆分" },
+  { name: "Long Parameter List", desc: "参数过多，应封装成对象" },
+  { name: "Large Class", desc: "类承担过多职责" },
+  { name: "Data Clumps", desc: "同一组字段/参数反复成组出现" },
+  { name: "Primitive Obsession", desc: "用基本类型代替领域对象" },
+  { name: "Feature Envy", desc: "方法比宿主对象更依赖别的对象的数据" },
+  { name: "Message Chains", desc: "过长的链式调用（a.getB().getC().getD()）" },
+  { name: "Middle Man", desc: "类/方法只做转发，自己没有职责" },
+  { name: "Divergent Change", desc: "一个类因多种不相关的原因被修改" },
+  { name: "Shotgun Surgery", desc: "一处逻辑改动要同步改多个文件" },
+  { name: "Speculative Generality", desc: "为尚不存在的需求预留扩展点" },
+  { name: "Temporary Field", desc: "字段只在某段流程内有值" },
+  { name: "Refused Bequest", desc: "子类继承父类却拒绝/覆盖其大部分行为" },
+  { name: "Data Class", desc: "只有数据没有行为" },
+  { name: "Lazy Class", desc: "只有方法没有实质职责" },
+  { name: "Comments", desc: "用注释掩盖代码本该表达的东西" },
+  { name: "Dead Code", desc: "永不可达的废弃代码" },
+];
+
+// 渲染审计 checklist 段：条目逐条编号，便于 subagent 按项检查、便于测试逐条断言。
+function renderChecklist(checklist) {
+  const items = (checklist.items || [])
+    .map((it, i) => `${i + 1}. ${it.name} — ${it.desc}`)
+    .join("\n");
+  return `${checklist.title}（逐条检查，命中即给 file:line 证据）：\n${items}\n注：${checklist.note}`;
+}
+
 // Dispatcher 配置：双轴审查 prompt 配置表。
 // 新增轴只改这里，不动 buildContractPrompt 的函数体（避免分支膨胀）。
+//
+// 判定词表必须与 flow_audit_submit 的 enum（PASS / WARN / FAIL）对齐：
+// 词表不一致时 subagent 会输出「通过/违规」这类自然语言，由主 Agent 手工映射，
+// 而 FAIL（硬拦）与 WARN（不拦）的差别就在这一步 —— 映射错了硬拦就失效了。
 const AXIS_PROMPTS = {
   standards: {
     objective: "审计：仓库代码规范与坏味道",
-    format: "判定（通过/违规/坏味道） / 规范依据 / file:line 证据 / 是否硬违规",
-    guidance: "对照仓库规范文件 + Fowler 坏味道基线，只读取证 git diff，不轻信 executor 自述",
+    format: "判定（PASS / WARN / FAIL） / 规范依据 / file:line 证据 / 是否硬违规",
+    guidance:
+      "两层基线同时执行：" +
+      "① 仓库规范层：先在目标仓库内发现规范文件（eslint 配置、prettier 配置、editorconfig、" +
+      "CONTRIBUTING.md、AGENTS.md、tsconfig 的 lint 选项、CI 里的 lint/test 命令），" +
+      "把发现的规范文件清单写进报告，再逐条对照；" +
+      "② 通用设计层：按下面的「坏味道基线」逐条检查。" +
+      "只读取证 git diff，不轻信 executor 自述，每条命中都要给 file:line 证据。" +
+      "判定口径：违反仓库明文规范判 FAIL；命中通用设计基线判 WARN。",
     boundaries: "零文件改动，只读取证",
+    checklist: {
+      title: "坏味道基线",
+      items: SMELL_BASELINE,
+      note: "本表由 Carlos 自维护，术语对齐 Fowler《Refactoring》第二版第 3 章 Code Smells，非原书全表",
+    },
   },
   spec: {
     objective: "审计：任务卡验收标准忠实度",
-    format: "判定（通过/未实现验收/越界） / 卡上的验收标准逐条核对 / 越界改动",
-    guidance: "对照任务卡 goal/acceptance/scope，跑 flow_check_scope 校验越界，独立跑验证命令取证",
+    format: "判定（PASS / WARN / FAIL） / 验收标准逐条核对结果 / 越界改动（file:line）",
+    guidance:
+      "对照任务卡 goal/acceptance/scope，逐条核对卡上的验收标准，跑 flow_check_scope 校验越界，" +
+      "独立跑验证命令取证。判定口径：验收标准全部满足且无越界判 PASS；未实现验收或越界改动判 FAIL；" +
+      "仅部分存疑判 WARN。",
     boundaries: "零文件改动，只读取证",
   },
 };
@@ -69,6 +127,15 @@ export function buildContractPrompt(role, card, extra, axis) {
   }
 
   let prompt = [objective, outputFormat, toolGuidance, taskBoundaries].join("\n");
+
+  // 轴模式：附上该轴的基线清单（Standards 轴的坏味道基线）。
+  // 清单必须内联进 prompt —— 审计 subagent 跑在**目标仓库**里，
+  // 读不到 carlos-flow 包内的文件，写成 docs/xxx.md 让它去读等于没写。
+  const axisCfg = axis ? AXIS_PROMPTS[axis] : null;
+  if (axisCfg && axisCfg.checklist) {
+    prompt += "\n\n" + renderChecklist(axisCfg.checklist);
+  }
+
   if (extra && String(extra) !== "") {
     prompt += "\n\n" + String(extra); // 原样附在末尾
   }

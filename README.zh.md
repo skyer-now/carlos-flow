@@ -293,14 +293,14 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_claim` | 领取派发名额（executor / auditor） | 激活闸门未解时拒绝 |
 | `flow_dispatch` | 按四段合同派发子 Agent | 派发前自动快照 scope 内文件 |
 | `flow_audit_axes` | **派发双轴审计**（Standards / Spec） | 生成两段并行审计 prompt，只读不改 |
-| `flow_audit_submit` | **提交某一轴结论** | 按 `card_ts` 绑定当前卡；WARN 不硬拦；同轴可覆盖 |
+| `flow_audit_submit` | **提交某一轴结论** | 按 `card_ts` 绑定当前卡；WARN 不硬拦；同轴可覆盖；写审计事件可追溯 |
 | `flow_audit_guard` | **两轴门禁自查** | 与 `flow_verdict` 内的门禁同口径 |
 | `flow_save_result` | 保存子 Agent 执行结果 | — |
 | `flow_run_verify` | **真实执行** `verify.cmd` | 返回 exitCode / stdout / stderr + `output_hash` |
 | `flow_falsify` | **负对照**：改动前跑 verify.cmd 必须失败、改动后必须通过 | 空测试（`|| true`）会被拒；记 PASS 前必做 |
 | `flow_check_scope` | 检查文件是否越界 | 空 scope → fail-closed 全部越界 |
-| `flow_verdict` | 记录裁定 PASS / DIRECTION / LOCAL | 未派发 / 验证未过 / 负对照未过 / **双轴未齐**均不许 PASS；任一轴 FAIL 不许 PASS；返回 `verdict_role` |
-| `flow_status` | 查询门禁状态 | 暴露 `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` / `verdict_role` |
+| `flow_verdict` | 记录裁定 PASS / DIRECTION / LOCAL | 未派发 / 验证未过 / 负对照未过 / **双轴未齐**均不许 PASS；任一轴 FAIL 不许 PASS；返回 `verdict_role` + `warn_findings`（WARN 汇总） |
+| `flow_status` | 查询门禁状态 | 暴露 `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` / `verdict_role` / `warn_count` |
 | `flow_audit` | 读取审计流水 | 含 6 类激活相关事件 |
 | `flow_diff_hunks` | 解析 `git diff -U0` 的 hunk 范围 | — |
 | `flow_bypass` | 开关免检模式 | 需 `confirmed=true`；派发自动清零 |
@@ -308,6 +308,8 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_trigger_check` | 智能触发检查 | 达标即实际激活；未达标如实返回评分 |
 
 > **双轴审查**（防假闭环之六）：`flow_verdict` 落 PASS 前，必须先 `flow_audit_axes` 派发 Standards（合不合规范 + 坏味道）与 Spec（忠不忠实实现验收）两轴，由 subagent 独立取证后 `flow_audit_submit` 提交。门禁位于负对照**之后**，是 PASS 落定前的最后一道；两轴证据都绑定当前 `card_ts`（旧卡审查不能冒充新卡），任一轴 FAIL 硬拦，WARN 只标注不拦。
+>
+> **WARN 汇总（v2.11.0）**：WARN（坏味道等 judgement call）以前只存在 `state.audit_axes` 里，主 Agent 不主动读就看不到，「带坏味道通过」在汇报里等于被吞掉。现在 `flow_verdict` 与 `flow_status` 都直接返回 `warn_count` / `warn_findings`（只收 `card_ts` 与当前卡一致的轴结论，换卡后旧 WARN 自动失效）。Standards 轴的 prompt 还内联了一份显式坏味道基线（18 条，术语对齐 Fowler《Refactoring》第二版第 3 章，**非原书全表**）—— 判定不再依赖模型记性。
 
 ---
 

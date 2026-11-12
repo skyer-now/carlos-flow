@@ -61,6 +61,13 @@ const ALLOWED_WORDS = new Set([
 const MIN_WORDS = 5;          // 连续 5 个以上英文词才判定为「英文叙述」
 const MIN_COMMIT_WORDS = 3;   // 提交信息阈值低一点（正文段落更短）
 
+// 标准署名 trailer（机器可读的归属标记）豁免中文判定。
+//
+// 理由：这些行是「Token: value」形式的归属信息（谁协助、谁共同署名、谁批准），
+// 不是英文叙述 —— 它们本来就不该写成中文，硬译反而会让工具解析不出来。
+// 豁免范围**只限这三个词**，其他英文行照常判定。
+const TRAILER_RE = /^(Assisted-by|Co-authored-by|Signed-off-by):/i;
+
 // 判定规则：**一行里只要有中文字符就算合规**（标识符、报错原文、引用的英文术语
 // 嵌在中文句子里是正常的）；只有**整行没有中文**、且英文词达到阈值时才算违规。
 // 之前的写法用「英文词数」直接判，会把
@@ -112,6 +119,7 @@ try {
       if (inCode) continue;
       const t = line.trim();
       if (!t) continue;
+      if (TRAILER_RE.test(t)) continue;
       if (!isEnglishNarration(t, MIN_COMMIT_WORDS)) continue;
       report(`提交 ${sha.slice(0, 7)}`, t);
       commitProblems++;

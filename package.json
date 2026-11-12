@@ -1,6 +1,6 @@
 {
   "name": "carlos-flow",
-  "version": "2.10.0",
+  "version": "2.11.0",
   "description": "Carlos 工作流 — AI 编码 Agent 的机械门禁。留痕/派发/验证/裁定/审计/还原，约束写在代码里而非提示词里。单一包支持 Cindy/OpenCode/Cursor/Cline/VS Code/Claude Desktop。",
   "type": "module",
   "main": "src/index.js",
@@ -18,11 +18,12 @@
   "scripts": {
     "test": "node test/smoke.js",
     "test:e2e": "node test/e2e-carlos.mjs",
+    "test:baseline": "node test/audit-baseline.mjs",
     "test:p0": "node test/p0-gates.mjs",
     "test:trigger": "node test/trigger-e2e.mjs",
     "test:concurrency": "node test/concurrency-e2e.mjs",
     "test:acceptance": "node test/e2e-acceptance.mjs",
-    "test:all": "npm run test && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance",
+    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance",
     "test:mutation": "node scripts/mutation-check.mjs",
     "sync:readme": "node scripts/sync-readme.mjs",
     "check:readme": "node scripts/sync-readme.mjs --check",

@@ -69,6 +69,39 @@ const verifyPassed = (state) => {
   return typeof lv.cmd === "string" && lv.cmd.trim() === want;
 };
 
+// WARN 汇总条数上限：防止 WARN 通胀把返回值灌成噪音，主 Agent 反而开始忽略。
+const WARN_FINDINGS_LIMIT = 20;
+
+// 汇总两轴的 WARN 结论（坏味道等 judgement call）。
+//
+// 为什么即时派生、而不是再存一份进 state：
+//   WARN 数据本来就在 state.audit_axes 里；再落一份进 state 就得 bump
+//   schemaVersion 并写迁移分支，而派生是零迁移、零漂移的。
+//
+// 口径与双轴门禁完全一致（复用 axisOk 的 card_ts 绑定）：
+//   只认 card_ts 与当前卡一致的轴结论 —— 换卡后旧卡的 WARN 必须失效，
+//   否则「门禁判未齐、汇总却报 WARN」两种口径会打架。
+//
+// 附带回答 DIRECTION/LOCAL 路径：返工意见恰恰最需要坏味道清单，
+// 所以三种裁定都带这份汇总。
+function collectAxisWarnings(state) {
+  const ax = state && state.audit_axes;
+  if (!ax || typeof ax !== "object") return [];
+  const out = [];
+  for (const name of ["standards", "spec"]) {
+    const a = ax[name];
+    if (!a || !a.verdict) continue;
+    if (a.card_ts !== state.card_ts) continue; // 旧卡结论不算数
+    if (a.verdict !== "WARN") continue;
+    const findings = Array.isArray(a.findings) ? a.findings : [];
+    for (const f of findings) {
+      if (out.length >= WARN_FINDINGS_LIMIT) return out;
+      out.push({ axis: name, finding: String(f) });
+    }
+  }
+  return out;
+}
+
 const TOOLS = [
   // 1 -----------------------------------------------------------------------
   {
@@ -533,6 +566,18 @@ const TOOLS = [
         };
         state.audit_axes_ts = Date.now();
         saveState(sid, state);
+
+        // 审计留痕：轴结论此前只落在 state 里 —— 可被覆盖、不可追溯。
+        // 这里补一条审计事件，回答「这条结论是谁在什么时候提交的」。
+        // 只记结论与证据摘要，不整段拷贝 evidence（验证输出可能很长）。
+        audit("decision", sid, {
+          kind: "audit_axis_submitted",
+          axis: args.axis,
+          verdict: args.verdict,
+          findings: Array.isArray(args.findings) ? args.findings : [],
+          has_evidence: typeof args.evidence === "string" && args.evidence.trim() !== "",
+          card_ts: state.card_ts,
+        });
         const stored = [state.audit_axes.standards, state.audit_axes.spec].filter(Boolean).length;
         return ok({ ok: true, axis: args.axis, stored_axes_count: stored });
       } catch (e) { return fail(String(e)); }
@@ -788,13 +833,19 @@ const TOOLS = [
 
         audit("resolution", sessionId, { kind: "verdict", verdict, notes: a.notes, role: a.role });
 
+        const warns = collectAxisWarnings(state);
         const result = {
           ok: true,
           verdict,
           completed_ok: state.completed_ok,
           notes: a.notes,
           verdict_role: state.verdict_role,
+          // WARN 汇总：两轴里判 WARN（坏味道等 judgement call）的结论。
+          // 以前 WARN 只躺在 state.audit_axes 里，主 Agent 不主动读就看不到，
+          // 「带坏味道通过」在汇报里等于被吞掉 —— 现在随裁定一起返回。
+          warn_count: warns.length,
         };
+        if (warns.length) result.warn_findings = warns;
         if (findings.length) result.findings = findings;
         return ok(result);
       } catch (e) {
@@ -820,6 +871,7 @@ const TOOLS = [
         const a = args || {};
         const sessionId = a.sessionId || "unknown";
         const state = loadState(sessionId);
+        const warns = collectAxisWarnings(state);
 
         const result = {
           sessionId,
@@ -852,7 +904,10 @@ const TOOLS = [
             return axisOk("standards") && axisOk("spec") &&
               ax.standards.verdict !== "FAIL" && ax.spec.verdict !== "FAIL";
           })(),
+          // WARN 汇总（与 flow_verdict 同一份派生口径）：只读镜像，供事后复查。
+          warn_count: warns.length,
         };
+        if (warns.length) result.warn_findings = warns;
         if (state.card && !state.verdict) result.unreviewed = true;
         return ok(result);
       } catch (e) {

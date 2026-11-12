@@ -833,6 +833,67 @@ async function main() {
     r.ok && r.data?.verdict_role === null,
     r.ok ? `verdict_role=${r.data?.verdict_role}` : r.error);
 
+  // 29. WARN 汇总自动可见 + 轴结论审计留痕（v2.11.0）
+  //
+  // 29a. 一轴 WARN → flow_verdict 返回值里带 warn_findings / warn_count
+  //
+  // 以前 WARN 只躺在 state.audit_axes 里：主 Agent 不主动调 flow_status 就看不到，
+  // 「带坏味道通过」在汇报里等于被吞掉。现在 WARN 随裁定一起返回。
+  const W1 = AX("w1");
+  await readyForVerdict(W1, "w1");
+  await axSubmit(W1, "standards", "WARN", ["src/a.js:12 重复代码", "src/b.js:30 长参数列表"]);
+  await axSubmit(W1, "spec", "PASS");
+  r = await call("flow_verdict", { sessionId: W1, verdict: "PASS", notes: "带坏味道通过", cwd: WORK });
+  check("29a. flow_verdict 返回 WARN 汇总（warn_findings/warn_count）",
+    r.ok === true && Array.isArray(r.data?.warn_findings) && r.data?.warn_findings.length === 2 && r.data?.warn_count === 2,
+    r.ok ? `warn_count=${r.data?.warn_count}` : (r.error || "").slice(0, 70));
+
+  // 29b. flow_status 镜像同一份汇总（事后复查也能看到）
+  r = await call("flow_status", { sessionId: W1 });
+  check("29b. flow_status 镜像 WARN 汇总",
+    r.ok === true && r.data?.warn_count === 2 && Array.isArray(r.data?.warn_findings),
+    r.ok ? `warn_count=${r.data?.warn_count}` : r.error);
+
+  // 29c. 两轴全 PASS → 不凭空产生 WARN
+  const W2 = AX("w2");
+  await readyForVerdict(W2, "w2");
+  await submitAxes(W2);
+  r = await call("flow_verdict", { sessionId: W2, verdict: "PASS", notes: "干净", cwd: WORK });
+  check("29c. 两轴全 PASS 时 warn_count=0 且不凭空产生 warn_findings",
+    r.ok === true && r.data?.warn_count === 0 && r.data?.warn_findings === undefined,
+    r.ok ? `warn_count=${r.data?.warn_count}` : (r.error || "").slice(0, 70));
+
+  // 29d. 换卡后旧卡 WARN 失效（口径与双轴门禁一致，按 card_ts 绑定）
+  const W3 = AX("w3");
+  await readyForVerdict(W3, "w3");
+  await axSubmit(W3, "standards", "WARN", ["旧卡坏味道"]);
+  await call("flow_submit_requirement", {
+    sessionId: W3, goal: "换卡后旧 WARN 不得带进来", quote: QUOTE,
+    scope: [axFile("w3")], acceptance: ["x"],
+    verify: { cmd: verifyFor(axFile("w3")) }, confirmed: true, cwd: WORK,
+  });
+  r = await call("flow_status", { sessionId: W3 });
+  check("29d. 换卡后旧卡 WARN 失效（warn_count 归零）",
+    r.ok === true && r.data?.warn_count === 0 && r.data?.warn_findings === undefined,
+    r.ok ? `warn_count=${r.data?.warn_count}` : r.error);
+
+  // 29e. DIRECTION 返工意见同样带汇总（返工恰恰最需要坏味道清单）
+  const W4 = AX("w4");
+  await readyForVerdict(W4, "w4");
+  await axSubmit(W4, "standards", "WARN", ["方向性坏味道"]);
+  r = await call("flow_verdict", { sessionId: W4, verdict: "DIRECTION", notes: "要返工", cwd: WORK });
+  check("29e. DIRECTION 裁定同样带 WARN 汇总",
+    r.ok === true && r.data?.warn_count === 1,
+    r.ok ? `warn_count=${r.data?.warn_count}` : (r.error || "").slice(0, 70));
+
+  // 29f. 轴结论进审计流水（回答「谁在什么时候提交了什么结论」）
+  r = await call("flow_audit", { sessionId: W1, limit: 100 });
+  const axisEvents = (r.data?.events || []).filter((e) => e.kind === "audit_axis_submitted");
+  check("29f. flow_audit_submit 写审计事件（轴结论可追溯）",
+    r.ok === true && axisEvents.length > 0 &&
+    axisEvents.some((e) => e.axis === "standards" && e.verdict === "WARN"),
+    r.ok ? `audit_axis_submitted × ${axisEvents.length}` : r.error);
+
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
   console.log(`sessionId=${SID}`);

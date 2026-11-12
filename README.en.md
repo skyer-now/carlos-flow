@@ -287,14 +287,14 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_claim` | Claim a dispatch slot (executor / auditor) | Rejected while the activation gate is open |
 | `flow_dispatch` | Dispatch a sub-agent per the four-part contract | Auto-snapshots files in scope before dispatch |
 | `flow_audit_axes` | **Dispatch dual-axis audit** (Standards / Spec) | Generates two parallel audit prompts, read-only |
-| `flow_audit_submit` | **Submit one axis's verdict** | Bound to the current `card_ts`; WARN does not hard-block; same axis can be resubmitted |
+| `flow_audit_submit` | **Submit one axis's verdict** | Bound to the current `card_ts`; WARN does not hard-block; same axis can be resubmitted; writes a traceable audit event |
 | `flow_audit_guard` | **Dual-axis gate self-check** | Same criteria as the gate inside `flow_verdict` |
 | `flow_save_result` | Save a sub-agent's result | — |
 | `flow_run_verify` | **Really execute** `verify.cmd` | Returns exitCode / stdout / stderr + `output_hash` |
 | `flow_falsify` | **Negative control**: run `verify.cmd` pre-change (must fail) and post-change (must pass) | Vacuous tests (`|| true`) rejected; required before PASS |
 | `flow_check_scope` | Check whether files are in scope | Empty scope → fail-closed, everything out of scope |
-| `flow_verdict` | Record verdict PASS / DIRECTION / LOCAL | No PASS without dispatch / passing verification / passing negative control / **both audit axes**; any axis FAIL blocks PASS; returns `verdict_role` |
-| `flow_status` | Query gate state | Exposes `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` / `verdict_role` |
+| `flow_verdict` | Record verdict PASS / DIRECTION / LOCAL | No PASS without dispatch / passing verification / passing negative control / **both audit axes**; any axis FAIL blocks PASS; returns `verdict_role` + `warn_findings` (WARN digest) |
+| `flow_status` | Query gate state | Exposes `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` / `verdict_role` / `warn_count` |
 | `flow_audit` | Read the audit stream | Includes 6 activation-related event kinds |
 | `flow_diff_hunks` | Parse `git diff -U0` hunk ranges | — |
 | `flow_bypass` | Toggle bypass mode | Requires `confirmed=true`; auto-cleared on dispatch |
@@ -302,6 +302,8 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_trigger_check` | Smart trigger check | Activates on success; honestly reports score otherwise |
 
 > **Dual-axis review** (anti-false-closure #6): before `flow_verdict` records PASS, run `flow_audit_axes` to dispatch the Standards axis (does it follow repo conventions / any code smells) and the Spec axis (does it faithfully implement acceptance). Each axis gathers evidence independently via sub-agents, then `flow_audit_submit` records the verdict. The gate sits **after** the negative control and is the last one before PASS is written; both axes are bound to the current `card_ts` (a previous card's audit cannot impersonate a new one), any FAIL hard-blocks, while WARN (code smells and other judgement calls) is annotated but allowed.
+>
+> **WARN digest (v2.11.0)**: WARN used to live only in `state.audit_axes` — unless the main agent went looking, "passed with code smells" was effectively swallowed on the way to the user report. Both `flow_verdict` and `flow_status` now return `warn_count` / `warn_findings` directly, counting only axes whose `card_ts` still matches the current card (a previous card's WARN expires automatically). The Standards axis prompt also inlines an explicit code-smell baseline (18 entries, terminology aligned with Fowler's *Refactoring* 2nd ed. ch. 3 — **not** the book's full table), so verdicts no longer depend on the model's memory.
 
 ---
 

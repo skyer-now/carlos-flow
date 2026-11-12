@@ -5,6 +5,54 @@
 
 ---
 
+## [2.11.0] - 2026-11-12 — 双轴审查补缺口：坏味道基线内置 + WARN 自动汇总
+
+> 本版把「未做项」里两条低优先级增强做实，方案经三轴内审（Standards / Spec / 风险）评审后调整：
+> 清单不硬编码「Fowler 12 种」这类无法核实的数字，改为显式可枚举的自维护基线；
+> WARN 汇总采用「即时派生、零 state 变更」的实现，不引入 schema 迁移。
+
+### ✨ 新增 | Added
+
+- **坏味道基线内置进 Standards 轴 prompt**（`src/dispatch.js` 的 `SMELL_BASELINE`，18 条）。
+  - 以前 prompt 只写了一句「对照仓库规范文件 + Fowler 坏味道基线」，基线内容没给，
+    判定质量全看模型自己的记性 —— 不同上下文下结果会漂移。
+  - 现在基线**逐条编号内联进 prompt**（审计 subagent 跑在目标仓库，读不到包内文件，
+    写成 `docs/xxx.md` 让它去读等于没写）。
+  - 出处如实标注：术语对齐 Fowler《Refactoring》第二版第 3 章 Code Smells，
+    **但本表由 Carlos 自维护、非原书全表** —— 流传的「Fowler 12 种坏味道」是二手博客
+    的说法，不是书里的口径，写进审计权威会把事实错误固化下来。
+- **WARN 自动汇总**（`flow_verdict` / `flow_status` 返回 `warn_count` + `warn_findings`）。
+  - 以前 WARN 只躺在 `state.audit_axes` 里，主 Agent 不主动读就看不到，
+    「带坏味道通过」在汇报里等于被吞掉。
+  - 口径与双轴门禁完全一致：**只收 `card_ts` 与当前卡一致的轴结论**，换卡后旧 WARN 自动失效。
+  - 三种裁定（PASS / DIRECTION / LOCAL）都带这份汇总 —— 返工意见恰恰最需要坏味道清单。
+  - **零 state 变更**：WARN 数据本就在 `audit_axes` 里，即时派生即可，
+    不 bump `schemaVersion`、不写迁移分支。
+- **`test/audit-baseline.mjs`** —— 审计基线守护测试（10 条断言）：基线条目齐全、条目名唯一、
+  规模下限、每条都有中文说明、判定词表与 `flow_audit_submit` 的 enum 对齐、
+  基线不泄漏进 executor 合同、prompt 长度上限、出处标注。
+
+### 🐛 修复 | Fixed
+
+- **两轴判定词表与 `flow_audit_submit` 的 enum 错位**：prompt 要求输出「通过/违规/坏味道」，
+  而 enum 只有 `PASS / WARN / FAIL`。词表不一致时 subagent 输出自然语言、由主 Agent 手工映射，
+  而 **FAIL（硬拦）与 WARN（不拦）的差别就在这一步** —— 映射错了硬拦就失效。
+  两轴的 `format` 统一改成 `PASS / WARN / FAIL`，并写明各自判定口径。
+
+### 🔒 变更 | Changed
+
+- **`flow_audit_submit` 写审计事件**（`kind: "audit_axis_submitted"`）：轴结论此前只落在
+  `state` 里 —— 可被覆盖、不可追溯。现在审计流水能回答「谁在什么时候提交了什么结论」。
+
+### 🔬 验证 | Verification
+
+- e2e **85/0**（新增 29a–29f 六条：WARN 汇总随裁定返回 / `flow_status` 镜像 /
+  两轴全 PASS 不凭空产生 / 换卡后旧 WARN 失效 / DIRECTION 同样带汇总 / 轴结论进审计流水）；
+  baseline 10/0；p0 22/0；protocol-consistency 5/0；trigger 29/0；concurrency 3/0；
+  acceptance 13/0；smoke 通过。
+
+---
+
 ## [2.10.0] - 2026-11-12 — 合并 _carlos-flow-remote 分支：verdict_role 落盘 + 协议字段漂移修复
 
 > 本版把 `_carlos-flow-remote` 分支上**发布线缺失**的独有内容合并进来（该分支后被

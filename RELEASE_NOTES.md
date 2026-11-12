@@ -1,5 +1,8 @@
 # Carlos Flow 2.6.0 — 单包统一分发（6 大平台）
 
+> **本文档对应 2.6.0 的单包统一分发发布**（当时的 Breaking Change 与迁移说明）。
+> 2.6.0 之后的版本变更请看 [`CHANGELOG.md`](CHANGELOG.md)（当前最新：v2.11.0）。
+
 > **Breaking Change**：两个包合并为一个。
 > `carlos-flow-cindy` + `carlos-flow-opencode` → **`carlos-flow`**
 >
