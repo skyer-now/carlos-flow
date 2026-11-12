@@ -805,6 +805,34 @@ async function main() {
     r.ok && r.data?.audit_axes && typeof r.data?.axes_ready === "boolean",
     r.ok ? `axes_ready=${r.data?.axes_ready}` : r.error);
 
+  // 28. verdict_role 落盘可追溯（「这条 PASS 是谁落的」）
+  //
+  // 与 claimed_role 的区别：claimed_role 是「会话最近 claim 的角色」（可能已过期），
+  // verdict_role 是「实际写下这条裁定时传进来的 role」。审计流水里也有 role，
+  // 但那是日志；这是状态层的持久记录，可用 flow_status 直接查。
+  const VR_SID = SID + "-verdictrole";
+  await readyForVerdict(VR_SID, "vr");
+  await submitAxes(VR_SID);
+  r = await call("flow_verdict", { sessionId: VR_SID, verdict: "PASS", notes: "显式声明角色", role: "auditor", cwd: WORK });
+  check("28a. flow_verdict 返回 verdict_role",
+    r.ok === true && r.data?.verdict_role === "auditor",
+    r.ok ? `verdict_role=${r.data?.verdict_role}` : (r.error || "").slice(0, 70));
+
+  r = await call("flow_status", { sessionId: VR_SID });
+  check("28b. flow_status 暴露 verdict_role（可查「这条 PASS 是谁落的」）",
+    r.ok && r.data?.verdict_role === "auditor",
+    r.ok ? `verdict_role=${r.data?.verdict_role}` : r.error);
+
+  // 28c. 未显式声明 role 时 verdict_role 落 null（不谎报）
+  const VR2_SID = SID + "-verdictrole2";
+  await readyForVerdict(VR2_SID, "vr2");
+  await submitAxes(VR2_SID);
+  r = await call("flow_verdict", { sessionId: VR2_SID, verdict: "PASS", notes: "未声明角色", cwd: WORK });
+  r = await call("flow_status", { sessionId: VR2_SID });
+  check("28c. 未声明 role 时 verdict_role 为 null（不谎报）",
+    r.ok && r.data?.verdict_role === null,
+    r.ok ? `verdict_role=${r.data?.verdict_role}` : r.error);
+
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
   console.log(`sessionId=${SID}`);

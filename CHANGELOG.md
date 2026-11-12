@@ -5,6 +5,44 @@
 
 ---
 
+## [2.10.0] - 2026-11-12 — 合并 _carlos-flow-remote 分支：verdict_role 落盘 + 协议字段漂移修复
+
+> 本版把 `_carlos-flow-remote` 分支上**发布线缺失**的独有内容合并进来（该分支后被
+> v2.8.0/v2.9.0 取代，其角色门禁实现已被更强的 claimed_role 口径覆盖，故不整支合入）。
+
+### ✨ 新增 | Added
+
+- **`verdict_role` 字段** —— 持久记录「本条裁定是谁落的」。
+  - 与 `claimed_role` 的区别：后者是「会话最近 claim 的角色」（可能已过期），
+    前者是「实际写下这条裁定时传进来的 role」，直接回答「这条 PASS 是谁落的」。
+  - `flow_verdict` 返回值、`flow_status` 均可读；未显式声明 role 时落 `null`（不谎报）。
+- **`test/protocol-consistency.mjs`** —— 协议一致性守护（5 条断言）：
+  字段集合、字段默认值、ERROR_LAYERS 含「门禁拒绝」层、实现方式未回退为手写常量。
+
+### 🐛 修复 | Fixed
+
+- **`protocol.js` 的 `STATE_FIELDS` 与状态结构漂移**：原先是**手写常量**，已漏掉
+  **9 个字段**（`claimed` / `claimed_role` / `activation_pending` / `activation_activated` /
+  `dispatch_baseline` / `last_falsify` / `audit_axes` / `audit_axes_ts` / `schemaVersion`）。
+  Agent 通过 `flow_protocol` 读到过期的字段表，会按错误的字段名做决策。
+  改为从 `defaultState()` 生成，并加测试钉死。
+
+### 🔒 变更 | Changed
+
+- **`ERROR_LAYERS` 新增「门禁拒绝（非错误）」层**：明确告知 Agent 闸门拦不是工具坏了，
+  应按错误信息里的下一步修正后重试，**不要重试同一调用**。
+- **状态结构版本 v3 → v4**：`migrate()` 新增 v3→v4 迁移，补全旧状态的 `verdict_role`。
+
+### 🔬 验证 | Verification
+
+- e2e **79/0**（新增 28a–28c 三条 `verdict_role` 用例）；p0 22/0；scope 10/0；
+  package-e2e 19/0；audit 23/0；bridge 6/0；trigger 29/0；concurrency 3/0；
+  acceptance 13/0；lang 12/0；smoke 通过。
+- `check:full` / `check:parity` / `check:lang` / `check:anchors` 17/17 / `check:readme` /
+  `check:params` / `check:claims` / `check:no-dead-handler` 全部通过。
+
+---
+
 ## [2.9.0] - 2026-11-12 — 双轴审查门禁：PASS 裁定前必须收齐 Standards / Spec 两轴证据
 
 ### ✨ 新增 | Added

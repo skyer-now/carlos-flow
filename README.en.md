@@ -293,8 +293,8 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_run_verify` | **Really execute** `verify.cmd` | Returns exitCode / stdout / stderr + `output_hash` |
 | `flow_falsify` | **Negative control**: run `verify.cmd` pre-change (must fail) and post-change (must pass) | Vacuous tests (`|| true`) rejected; required before PASS |
 | `flow_check_scope` | Check whether files are in scope | Empty scope → fail-closed, everything out of scope |
-| `flow_verdict` | Record verdict PASS / DIRECTION / LOCAL | No PASS without dispatch / passing verification / passing negative control / **both audit axes**; any axis FAIL blocks PASS |
-| `flow_status` | Query gate state | Exposes `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` |
+| `flow_verdict` | Record verdict PASS / DIRECTION / LOCAL | No PASS without dispatch / passing verification / passing negative control / **both audit axes**; any axis FAIL blocks PASS; returns `verdict_role` |
+| `flow_status` | Query gate state | Exposes `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` / `verdict_role` |
 | `flow_audit` | Read the audit stream | Includes 6 activation-related event kinds |
 | `flow_diff_hunks` | Parse `git diff -U0` hunk ranges | — |
 | `flow_bypass` | Toggle bypass mode | Requires `confirmed=true`; auto-cleared on dispatch |

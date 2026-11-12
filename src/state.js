@@ -93,7 +93,7 @@ export function sanitizeId(s) {
 
 // 当前状态文件结构版本号。
 // 改动 defaultState() 的**字段结构**时，必须 +1 并在 migrate() 里加一条迁移。
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /**
  * 迁移旧版本的状态文件。
@@ -111,6 +111,9 @@ export const CURRENT_SCHEMA_VERSION = 3;
  * v2 → v3：新增 audit_axes / audit_axes_ts（双轴审查证据）。
  *   · 旧状态没有这两个字段 → 补默认结构（两轴均为 null = 尚未审查，裁定会拒绝 PASS）
  *   · audit_axes 存在但结构不全时也在此补齐，避免读到半初始化对象
+ *
+ * v3 → v4：新增 verdict_role（本条 PASS 是谁落的）。
+ *   · 旧状态没有这个字段 → 补 null（仅影响可观测性，不影响门禁判定）
  */
 export function migrate(parsed) {
   if (!parsed || typeof parsed !== "object") return parsed;
@@ -144,6 +147,12 @@ export function migrate(parsed) {
     }
     if (typeof out.audit_axes_ts !== "number") out.audit_axes_ts = 0;
     v = 3;
+  }
+
+  if (v < 4) {
+    // v3 → v4
+    if (out.verdict_role === undefined) out.verdict_role = null;
+    v = 4;
   }
 
   out.schemaVersion = CURRENT_SCHEMA_VERSION;
@@ -201,6 +210,11 @@ export function defaultState() {
     audit_axes: { standards: null, spec: null },
     // 两轴最后提交时间（审计链留痕用；不参与冒充校验，校验看 card_ts）。
     audit_axes_ts: 0,
+    // 本条裁定是谁落的（"auditor" | "executor" | null）。
+    // 与 claimed_role 的区别：claimed_role 是「会话最近 claim 的角色」（可能已过期），
+    // verdict_role 是「实际写下这条裁定时传进来的 role」，直接回答「这条 PASS 是谁落的」。
+    // 审计流水里也有 role，但那是日志；这是状态层的持久记录，可用 flow_status 直接查。
+    verdict_role: null,
   };
 }
 

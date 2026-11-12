@@ -782,11 +782,19 @@ const TOOLS = [
         state.verdict = verdict;
         state.completed_ok = verdict === "PASS";
         state.verdict_ts = Date.now();
+        // 落盘裁定者角色：审计链据此回溯「这条 PASS 是谁落的」。
+        state.verdict_role = a.role === undefined ? null : a.role;
         saveState(sessionId, state);
 
         audit("resolution", sessionId, { kind: "verdict", verdict, notes: a.notes, role: a.role });
 
-        const result = { ok: true, verdict, completed_ok: state.completed_ok, notes: a.notes };
+        const result = {
+          ok: true,
+          verdict,
+          completed_ok: state.completed_ok,
+          notes: a.notes,
+          verdict_role: state.verdict_role,
+        };
         if (findings.length) result.findings = findings;
         return ok(result);
       } catch (e) {
@@ -820,6 +828,10 @@ const TOOLS = [
           dispatch_count: state.dispatch_count,
           max_dispatch: MAX_DISPATCH,
           verdict: state.verdict,
+          // 本条裁定是谁落的（"auditor" | "executor" | null）。
+          // 与 claimed_role 不同：后者是「会话最近 claim 的角色」，可能已过期；
+          // 这个字段直接回答「这条 PASS 是谁落的」。
+          verdict_role: state.verdict_role === undefined ? null : state.verdict_role,
           verified: !!state.verdict,
           // verify_passed：真实验证是否通过（last_verify.ok===true 且命令与当前卡片一致）。
           // 注意 verified 只表示「是否已有裁定」，不代表验证通过——两者语义不同，不可混用。

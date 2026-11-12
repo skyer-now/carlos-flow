@@ -1,6 +1,12 @@
 // Carlos Flow 协议 — 路由档位 / 四段合同 / 报告规格 / 错误分层 / 状态字段的唯一真源。
 // 被协调器（coordinator）与各角色 Agent 共同引用。
 
+// 状态字段从 defaultState() 生成，而不是手写常量 ——
+// 手写副本会漂移（历史上就漏过 claimed / claimed_role / activation_* 等 9 个字段），
+// 而协议是 Agent 运行时读取的权威依据，漂移会让 Agent 按错误的字段名做决策。
+// 代价：protocol.js 依赖 state.js（纯数据模块，无副作用，无循环依赖）。
+import { defaultState } from "./state.js";
+
 export const PROTOCOL = {
   ROUTE_TABLE: `| 档 | 场景 | 动作 |
 |---|---|---|
@@ -23,9 +29,12 @@ auditor 报告 ≤200 字，五段式：裁定 / 失败类型 / scope 标注 / �
 |---|---|---|
 | 基础设施故障 | 网络抖动、模型不可用、配额耗尽 | 静默降级或改用 Explore / 自读只读验证，不把原始错误喂回 |
 | Agent 故障 | 工具名错、参数错 | 把错误喂回并附恢复指引 |
-| 接管 | 同一子 Agent 连续 2 次失败 | 接管 = 只读验证，不写文件 |`,
+| 接管 | 同一子 Agent 连续 2 次失败 | 接管 = 只读验证，不写文件 |
+| 门禁拒绝（非错误） | 闸门拦下当前动作（如 PASS 裁定角色不对、验证未跑通、验证已过期、scope 越界、双轴未齐） | **这不是工具坏了**，是门禁在正常工作。按错误信息里的下一步修正后重试：补齐缺失动作（如先 flow_claim role=auditor）再重试。**不要重试同一调用** |`,
 
-  STATE_FIELDS: `{"card":null,"card_ts":0,"tier":"read_only","task_id":null,"dispatch_count":0,"write_files":0,"last_user_ts":0,"bypass":false,"bypass_ts":0,"verdict":null,"completed_ok":false,"stale":false}`,
+  // 从 defaultState() 生成，保证与状态结构永远一致（漂移防护）。
+  // 测试 test/protocol-consistency.mjs 会逐字段比对，手工改回常量会红。
+  STATE_FIELDS: JSON.stringify(defaultState()),
 
   AUDIT_EVENTS: `["run","finding","decision","resolution"]`,
 

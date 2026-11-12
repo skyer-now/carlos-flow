@@ -299,8 +299,8 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_run_verify` | **真实执行** `verify.cmd` | 返回 exitCode / stdout / stderr + `output_hash` |
 | `flow_falsify` | **负对照**：改动前跑 verify.cmd 必须失败、改动后必须通过 | 空测试（`|| true`）会被拒；记 PASS 前必做 |
 | `flow_check_scope` | 检查文件是否越界 | 空 scope → fail-closed 全部越界 |
-| `flow_verdict` | 记录裁定 PASS / DIRECTION / LOCAL | 未派发 / 验证未过 / 负对照未过 / **双轴未齐**均不许 PASS；任一轴 FAIL 不许 PASS |
-| `flow_status` | 查询门禁状态 | 暴露 `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` |
+| `flow_verdict` | 记录裁定 PASS / DIRECTION / LOCAL | 未派发 / 验证未过 / 负对照未过 / **双轴未齐**均不许 PASS；任一轴 FAIL 不许 PASS；返回 `verdict_role` |
+| `flow_status` | 查询门禁状态 | 暴露 `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` / `verdict_role` |
 | `flow_audit` | 读取审计流水 | 含 6 类激活相关事件 |
 | `flow_diff_hunks` | 解析 `git diff -U0` 的 hunk 范围 | — |
 | `flow_bypass` | 开关免检模式 | 需 `confirmed=true`；派发自动清零 |
