@@ -123,7 +123,7 @@ flowchart TB
         Plugin["plugins/carlos-flow-trigger.js<br/>chat.message 钩子"]
     end
 
-    subgraph Core["核心 MCP Server (src/index.js) — 16 个工具"]
+    subgraph Core["核心 MCP Server (src/index.js) — 19 个工具"]
         Protocol["flow_protocol"]
         Submit["flow_submit_requirement"]
         Dispatch["flow_claim / flow_dispatch"]
@@ -283,7 +283,7 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 
 ---
 
-## 🔧 MCP 工具参考（16 个）
+## 🔧 MCP 工具参考（19 个）
 
 | 工具 | 作用 | 关键约束 |
 |------|------|---------|
@@ -292,17 +292,22 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_submit_requirement` | 提交/替换任务卡 | 按风险档强制必填项；伪填充被拒 |
 | `flow_claim` | 领取派发名额（executor / auditor） | 激活闸门未解时拒绝 |
 | `flow_dispatch` | 按四段合同派发子 Agent | 派发前自动快照 scope 内文件 |
+| `flow_audit_axes` | **派发双轴审计**（Standards / Spec） | 生成两段并行审计 prompt，只读不改 |
+| `flow_audit_submit` | **提交某一轴结论** | 按 `card_ts` 绑定当前卡；WARN 不硬拦；同轴可覆盖 |
+| `flow_audit_guard` | **两轴门禁自查** | 与 `flow_verdict` 内的门禁同口径 |
 | `flow_save_result` | 保存子 Agent 执行结果 | — |
 | `flow_run_verify` | **真实执行** `verify.cmd` | 返回 exitCode / stdout / stderr + `output_hash` |
 | `flow_falsify` | **负对照**：改动前跑 verify.cmd 必须失败、改动后必须通过 | 空测试（`|| true`）会被拒；记 PASS 前必做 |
 | `flow_check_scope` | 检查文件是否越界 | 空 scope → fail-closed 全部越界 |
-| `flow_verdict` | 记录裁定 PASS / DIRECTION / LOCAL | 未派发不许 PASS；验证未过不许 PASS；**负对照未过不许 PASS** |
-| `flow_status` | 查询门禁状态 | 暴露 `activation_pending` / `verify_passed` |
+| `flow_verdict` | 记录裁定 PASS / DIRECTION / LOCAL | 未派发 / 验证未过 / 负对照未过 / **双轴未齐**均不许 PASS；任一轴 FAIL 不许 PASS |
+| `flow_status` | 查询门禁状态 | 暴露 `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` |
 | `flow_audit` | 读取审计流水 | 含 6 类激活相关事件 |
 | `flow_diff_hunks` | 解析 `git diff -U0` 的 hunk 范围 | — |
 | `flow_bypass` | 开关免检模式 | 需 `confirmed=true`；派发自动清零 |
 | `flow_revert_plan` | 生成原子还原计划 | 只返回计划，不自动执行 |
 | `flow_trigger_check` | 智能触发检查 | 达标即实际激活；未达标如实返回评分 |
+
+> **双轴审查**（防假闭环之六）：`flow_verdict` 落 PASS 前，必须先 `flow_audit_axes` 派发 Standards（合不合规范 + 坏味道）与 Spec（忠不忠实实现验收）两轴，由 subagent 独立取证后 `flow_audit_submit` 提交。门禁位于负对照**之后**，是 PASS 落定前的最后一道；两轴证据都绑定当前 `card_ts`（旧卡审查不能冒充新卡），任一轴 FAIL 硬拦，WARN 只标注不拦。
 
 ---
 

@@ -99,6 +99,12 @@ async function round(name, { mutate, expectPass, expectFalsify, verify }) {
   }
   // auditor claim 后 verdict
   await tool("flow_claim", { sessionId: sid, role: "auditor" });
+  if (expectPass) {
+    // 双轴门禁：落 PASS 前必须收齐 Standards / Spec 两轴证据（仅正向用例需要）
+    await tool("flow_audit_axes", { sessionId: sid });
+    await tool("flow_audit_submit", { sessionId: sid, axis: "standards", verdict: "PASS", findings: ["符合规范"], evidence: "scope 实测人工核验" });
+    await tool("flow_audit_submit", { sessionId: sid, axis: "spec", verdict: "PASS", findings: ["验收满足"], evidence: "scope 实测人工核验" });
+  }
   const verdict = await tool("flow_verdict", { sessionId: sid, verdict: "PASS", notes: "测试", cwd: repo });
   const gotPass = verdict.ok === true && verdict.completed_ok === true;
   check(`${name}：${expectPass ? "允许 PASS" : "阻断 PASS"}`,

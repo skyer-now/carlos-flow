@@ -7,36 +7,66 @@ import { RUNS_DIR, sanitizeId } from "./state.js";
 
 export const MAX_DISPATCH = 5;
 
+// Dispatcher 配置：双轴审查 prompt 配置表。
+// 新增轴只改这里，不动 buildContractPrompt 的函数体（避免分支膨胀）。
+const AXIS_PROMPTS = {
+  standards: {
+    objective: "审计：仓库代码规范与坏味道",
+    format: "判定（通过/违规/坏味道） / 规范依据 / file:line 证据 / 是否硬违规",
+    guidance: "对照仓库规范文件 + Fowler 坏味道基线，只读取证 git diff，不轻信 executor 自述",
+    boundaries: "零文件改动，只读取证",
+  },
+  spec: {
+    objective: "审计：任务卡验收标准忠实度",
+    format: "判定（通过/未实现验收/越界） / 卡上的验收标准逐条核对 / 越界改动",
+    guidance: "对照任务卡 goal/acceptance/scope，跑 flow_check_scope 校验越界，独立跑验证命令取证",
+    boundaries: "零文件改动，只读取证",
+  },
+};
+
 // role ∈ "executor" | "auditor"
-export function buildContractPrompt(role, card, extra) {
+// axis ∈ undefined（默认四段合同） | "standards" | "spec"（双轴审计模式）
+export function buildContractPrompt(role, card, extra, axis) {
   const isAuditor = role === "auditor";
   const isExecutor = role === "executor";
   if (!isAuditor && !isExecutor) {
     throw new Error(`buildContractPrompt: 未知 role "${role}"（仅支持 executor/auditor）`);
   }
-  const c = card && typeof card === "object" ? card : {};
 
-  const objective = `objective: ${c.goal || ""}`;
+  // 模式注入：指定了 axis 就走配置表（覆盖式），否则走原有逻辑
+  let objective, outputFormat, toolGuidance, taskBoundaries;
 
-  const outputFormat = isExecutor
-    ? "output format: 报告 ≤300 字，四段：结论（一句话，做完/没做完） / 改动（file:line 逐条列出，没改写“无”） / 验证（命令 → 结果摘要，未跑写“未验证”） / 遗留风险"
-    : "output format: 报告 ≤200 字，五段：裁定（通过/不通过） / 失败类型（操作错误/环境问题/卡片问题） / scope 标注（是否越界改动） / 证据（file:line 或实跑命令输出） / 附注";
-
-  const verifyCmd = c.verify && c.verify.cmd ? String(c.verify.cmd) : "";
-  let guidance = verifyCmd || "未指定验证命令，用只读取证";
-  if (isAuditor) {
-    guidance += "；独立跑 git status --porcelain 与 git diff 取证，不轻信 executor 自述";
-  }
-  const toolGuidance = `tool guidance: ${guidance}`;
-
-  const scopeArr = Array.isArray(c.scope) ? c.scope.map(String) : [];
-  let boundaries;
-  if (isAuditor) {
-    boundaries = "零文件改动，只读取证";
+  if (axis && AXIS_PROMPTS[axis]) {
+    const cfg = AXIS_PROMPTS[axis];
+    objective = `objective: ${cfg.objective}`;
+    outputFormat = `output format: ${cfg.format}`;
+    toolGuidance = `tool guidance: ${cfg.guidance}`;
+    taskBoundaries = `task boundaries: ${cfg.boundaries}`;
   } else {
-    boundaries = scopeArr.length > 0 ? scopeArr.join(", ") : "无文件可改，只读任务";
+    const c = card && typeof card === "object" ? card : {};
+
+    objective = `objective: ${c.goal || ""}`;
+
+    outputFormat = isExecutor
+      ? "output format: 报告 ≤300 字，四段：结论（一句话，做完/没做完） / 改动（file:line 逐条列出，没改写“无”） / 验证（命令 → 结果摘要，未跑写“未验证”） / 遗留风险"
+      : "output format: 报告 ≤200 字，五段：裁定（通过/不通过） / 失败类型（操作错误/环境问题/卡片问题） / scope 标注（是否越界改动） / 证据（file:line 或实跑命令输出） / 附注";
+
+    const verifyCmd = c.verify && c.verify.cmd ? String(c.verify.cmd) : "";
+    let guidance = verifyCmd || "未指定验证命令，用只读取证";
+    if (isAuditor) {
+      guidance += "；独立跑 git status --porcelain 与 git diff 取证，不轻信 executor 自述";
+    }
+    toolGuidance = `tool guidance: ${guidance}`;
+
+    const scopeArr = Array.isArray(c.scope) ? c.scope.map(String) : [];
+    let boundaries;
+    if (isAuditor) {
+      boundaries = "零文件改动，只读取证";
+    } else {
+      boundaries = scopeArr.length > 0 ? scopeArr.join(", ") : "无文件可改，只读任务";
+    }
+    taskBoundaries = `task boundaries: ${boundaries}`;
   }
-  const taskBoundaries = `task boundaries: ${boundaries}`;
 
   let prompt = [objective, outputFormat, toolGuidance, taskBoundaries].join("\n");
   if (extra && String(extra) !== "") {

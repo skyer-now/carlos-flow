@@ -5,6 +5,41 @@
 
 ---
 
+## [2.9.0] - 2026-11-12 — 双轴审查门禁：PASS 裁定前必须收齐 Standards / Spec 两轴证据
+
+### ✨ 新增 | Added
+
+- **`flow_audit_axes`** —— 派发两个并行审计 subagent（Standards 轴 / Spec 轴），各生成一段中文审计合同 prompt。
+- **`flow_audit_submit`** —— 保存某一审计轴的结论与证据，按 `card_ts` 绑定当前卡（同轴可重复提交、后者覆盖）。
+- **`flow_audit_guard`** —— 两轴门禁自查，与 `flow_verdict` 内的门禁同口径；给主 Agent 一个「落 PASS 前先自查」的显式工具。
+- **`flow_status` 暴露双轴状态** —— 新增 `audit_axes` / `audit_axes_ts` / `axes_ready`，主 Agent 落 PASS 前可读。
+
+### 🔒 变更 | Changed
+
+- **`flow_verdict` 新增双轴门禁**（防假闭环之六）：落 `PASS` 前必须两轴证据齐全且无轴 FAIL。
+  - **位置**：在负对照门禁**之后**，是 PASS 落定前的最后一道。六道门各自独立、互不掩盖；
+    若前置会让「未验证 / 未派发 / 未做负对照」这些更基础的问题被双轴错误信息掩盖。
+  - **判定**：任一轴 FAIL 硬拦；WARN（坏味道等 judgement call）只标注不拦。
+  - **防冒充**：两轴证据均绑定 `card_ts`，旧卡的审查结果不能冒充新卡（也堵住「卡A的 standards + 卡B的 spec」跨卡拼接）。
+  - `DIRECTION` / `LOCAL` 不受限制（返工意见不构成完成）。
+- **状态结构版本 v2 → v3**：`migrate()` 新增 v2→v3 迁移，补全旧状态的 `audit_axes` / `audit_axes_ts`。
+
+### 🔧 实现 | Implementation
+
+- `src/dispatch.js`：新增 `AXIS_PROMPTS` 配置表，`buildContractPrompt` 加第 4 参 `axis`（可缺省，旧调用不变）；加新轴只改配置表，不动函数体。
+- `src/state.js`：`defaultState()` 新增两字段；`migrate()` 加 v2→v3。
+- `src/index.js`：新增 3 工具；`flow_verdict` 加门禁；`flow_status` 暴露双轴状态。
+- `ghost.json`：工具清单 16 → 19，与服务端逐一对齐。
+
+### 🔬 验证 | Verification
+
+- 新增 11 条双轴专项用例（27a–27k）：未齐拦截 / 单轴拦截 / 双轴 FAIL 对称拦截 / WARN 放行 / DIRECTION 兼容 / 旧卡防冒充 / guard 三种状态 / `flow_status` 暴露。
+- 既有正向 PASS 用例全部补上双轴前置（e2e-carlos / package-e2e / scope-enforcement），负向用例不受影响。
+- 主测试 **76/0** 通过（e2e）；p0 22/0；scope-enforcement 10/0；package-e2e 19/0；trigger 29/0；concurrency 3/0；acceptance 13/0；lang 12/0；smoke 通过。
+- `check:full` / `check:lang` / `check:anchors` / `check:parity` / `check:readme` 全部通过。
+
+---
+
 ## [2.8.0] - 2026-11-08 — 角色门禁绑定会话 claimed_role + auditor 复核流程 + CI 修复
 
 - flow_verdict PASS 现在必须由已 claim "auditor" 角色的会话落下（claimed_role 绑定会话 ID，而非调用方自述字符串）。

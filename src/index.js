@@ -475,10 +475,103 @@ const TOOLS = [
 
   // 5 -----------------------------------------------------------------------
   {
+    name: "flow_audit_axes",
+    description:
+      "派发两个并行审计 subagent（Standards 轴 / Spec 轴），生成两段审计合同 prompt。" +
+      "executor 改动通过 flow_run_verify 与负对照后、落 PASS 裁定前必须先调用本工具。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "会话 ID" },
+        cwd: { type: "string", description: "仓库工作目录，默认 process.cwd()" },
+      },
+    },
+    handler: async (args) => {
+      try {
+        const sid = args.sessionId || "unknown";
+        const state = loadState(sid);
+        if (!state.card) return fail("无卡，无法派发审计轴");
+
+        const cwd = args.cwd || process.cwd();
+        const res = { standards: null, spec: null };
+        for (const axis of ["standards", "spec"]) {
+          const prompt = buildContractPrompt("auditor", state.card, "", axis);
+          const { file } = writeDispatchPrompt(sid, "auditor", prompt, cwd);
+          res[axis] = { prompt, file };
+        }
+        return ok({ ok: true, ...res });
+      } catch (e) { return fail(String(e)); }
+    },
+  },
+  {
+    name: "flow_audit_submit",
+    description:
+      "保存某一审计轴（standards|spec）的结论与证据到会话状态。" +
+      "PASS 裁定前必须两轴都提交，且各自绑定的 card_ts 与当前卡一致。同轴可重复提交（后者覆盖）。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "会话 ID" },
+        axis: { type: "string", enum: ["standards", "spec"], description: "审计轴" },
+        verdict: { type: "string", enum: ["PASS", "FAIL", "WARN"], description: "轴判定；WARN=坏味道等 judgement call，不硬拦" },
+        findings: { type: "array", items: { type: "string" }, description: "每条含 file:line 或证据" },
+        evidence: { type: "string", description: "实跑命令输出 / diff 摘录" },
+      },
+    },
+    handler: async (args) => {
+      try {
+        const sid = args.sessionId || "unknown";
+        const state = loadState(sid);
+        if (!state.card) return fail("无卡，无法提交审计轴结论");
+        state.audit_axes[args.axis] = {
+          verdict: args.verdict,
+          findings: args.findings,
+          evidence: args.evidence,
+          // 绑定提交时的卡片：换卡后该轴证据立即失效，必须重审
+          card_ts: state.card_ts,
+          ts: Date.now(),
+        };
+        state.audit_axes_ts = Date.now();
+        saveState(sid, state);
+        const stored = [state.audit_axes.standards, state.audit_axes.spec].filter(Boolean).length;
+        return ok({ ok: true, axis: args.axis, stored_axes_count: stored });
+      } catch (e) { return fail(String(e)); }
+    },
+  },
+  {
+    name: "flow_audit_guard",
+    description:
+      "校验两轴是否已通过且证据齐全（与 flow_verdict 内的双轴门禁同口径）。" +
+      "主 Agent 落 PASS 前可主动自查；flow_verdict 不受此调用影响，仍会再拦一道。",
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: { type: "string", description: "会话 ID" } },
+    },
+    handler: async (args) => {
+      try {
+        const sid = args.sessionId || "unknown";
+        const state = loadState(sid);
+        const ax = state.audit_axes;
+        // 口径与 flow_verdict 的双轴门禁完全一致：
+        // 两轴都有 verdict（不能缺失/空）、card_ts 与当前卡一致、且无轴 FAIL。
+        const axisOk = (a) => ax && ax[a] && ax[a].verdict && ax[a].card_ts === state.card_ts;
+        if (!axisOk("standards") || !axisOk("spec")) {
+          return fail("两轴审计未齐或证据失效（需 flow_audit_axes 派发 + flow_audit_submit 两轴且 card_ts 与当前卡一致）");
+        }
+        if (ax.standards.verdict === "FAIL" || ax.spec.verdict === "FAIL") {
+          return fail("两轴中至少一轴 FAIL（standards=" + ax.standards.verdict +
+            ", spec=" + ax.spec.verdict + "）。");
+        }
+        return ok({ ok: true });
+      } catch (e) { return fail(String(e)); }
+    },
+  },
+  {
     name: "flow_verdict",
     description:
       "记录 auditor 的裁定结果（PASS / DIRECTION / LOCAL）。只有 PASS 会把 completed_ok 置为 true。" +
-      "DIRECTION 表示方向对但需返工，LOCAL 表示问题局限在局部。在向用户汇报完成前必须先落裁定，否则视为未复核。",
+      "DIRECTION 表示方向对但需返工，LOCAL 表示问题局限在局部。在向用户汇报完成前必须先落裁定，否则视为未复核。" +
+      "【双轴门禁】记 PASS 前必须先 flow_audit_axes 派发 Standards/Spec 两轴、由 subagent 取证后 flow_audit_submit 提交两轴结论；任一轴 FAIL 会被拒，WARN 不硬拦。",
     inputSchema: {
       type: "object",
       properties: {
@@ -638,6 +731,46 @@ const TOOLS = [
             return fail("已有的验证结果与负对照的运行结果不一致，不能记录 PASS 裁定。" +
               "请重新调用 flow_falsify（它会把改动后的运行写为验证证据）。");
           }
+
+          // 防假闭环之六：双轴审查门禁。
+          //
+          // 位置说明（重要）：必须放在负对照**之后**。语义顺序是
+          // 「先证实验证有效 → 再证审查到位」，六道门各自独立、互不掩盖。
+          // 若前置，会让「未验证」「未派发」「未做负对照」这些更基础的问题被
+          // 双轴错误信息掩盖，调用方拿到的是不可操作的下一步。
+          //
+          // 判定口径：
+          //   · 两轴都必须有结论，且 card_ts 与当前卡一致（防旧卡审查结果冒充新卡，
+          //     也防两轴跨卡拼接：卡A的 standards + 卡B的 spec 不算数）；
+          //   · FAIL 硬拦（规范硬违规 / 未实现验收）；
+          //   · WARN 不硬拦（坏味道是 judgement call），由主 Agent 读 audit_axes 后标注。
+          const ax = state.audit_axes;
+          const axisOk = (a) => ax && ax[a] && ax[a].verdict && ax[a].card_ts === state.card_ts;
+          const hasStandards = axisOk("standards");
+          const hasSpec = axisOk("spec");
+          if (!hasStandards || !hasSpec) {
+            audit("decision", sessionId, {
+              kind: "verdict_denied",
+              reason: "两轴审查未齐",
+              standards: ax && ax.standards ? ax.standards.verdict : null,
+              spec: ax && ax.spec ? ax.spec.verdict : null,
+              card_ts: state.card_ts,
+            });
+            return fail("两轴审查未齐，不能记录 PASS 裁定。请先 flow_audit_axes 派发两轴、" +
+              "由 subagent 取证后分别 flow_audit_submit 提交 Standards 与 Spec 两轴结论，再记录裁定。");
+          }
+          const standardsFail = ax.standards.verdict === "FAIL";
+          const specFail = ax.spec.verdict === "FAIL";
+          if (standardsFail || specFail) {
+            audit("decision", sessionId, {
+              kind: "verdict_denied",
+              reason: "有轴不通过",
+              standards: ax.standards.verdict,
+              spec: ax.spec.verdict,
+            });
+            return fail("PASS 被拒：两轴中至少一轴 FAIL（standards=" + ax.standards.verdict +
+              ", spec=" + ax.spec.verdict + "）。请修复后重跑验证与审计。");
+          }
         }
 
         const findings = [];
@@ -697,6 +830,16 @@ const TOOLS = [
           card: state.card,
           card_ts: state.card_ts,
           activation_pending: Array.isArray(state.activation_pending) ? state.activation_pending : [],
+          // 双轴审查证据：主 Agent 落 PASS 前可读它确认两轴状态与 card_ts 绑定。
+          // axes_ready = 两轴都有结论且 card_ts 与当前卡一致且无轴 FAIL。
+          audit_axes: state.audit_axes,
+          audit_axes_ts: state.audit_axes_ts,
+          axes_ready: (() => {
+            const ax = state.audit_axes;
+            const axisOk = (x) => ax && ax[x] && ax[x].verdict && ax[x].card_ts === state.card_ts;
+            return axisOk("standards") && axisOk("spec") &&
+              ax.standards.verdict !== "FAIL" && ax.spec.verdict !== "FAIL";
+          })(),
         };
         if (state.card && !state.verdict) result.unreviewed = true;
         return ok(result);

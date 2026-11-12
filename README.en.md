@@ -118,7 +118,7 @@ flowchart TB
         Plugin["plugins/carlos-flow-trigger.js<br/>chat.message hook"]
     end
 
-    subgraph Core["Core MCP Server (src/index.js) — 16 tools"]
+    subgraph Core["Core MCP Server (src/index.js) — 19 tools"]
         Protocol["flow_protocol"]
         Submit["flow_submit_requirement"]
         Dispatch["flow_claim / flow_dispatch"]
@@ -158,7 +158,7 @@ flowchart TB
 |-------|----------|----------------|-------------------|
 | **Host adapter** | `ghost.json` / `plugins/` / `templates/` | Discovery, launch, config, lifecycle | ⚠️ The **only** platform-specific layer |
 | **Client** | `client/carlos.js` / `bridge/` | CLI, trigger check, Bridge daemon | Bridge is Cindy-only |
-| **Protocol** | `src/index.js` | 16 MCP tools + validation + gate semantics | ✅ Zero coupling, pure standard MCP |
+| **Protocol** | `src/index.js` | 19 MCP tools + validation + gate semantics | ✅ Zero coupling, pure standard MCP |
 | **Engine** | `src/trigger.js` / `src/card.js` / `src/state.js` | Trigger scoring, card validation, state/audit | ✅ Zero coupling, pure JS, no deps |
 | **Persistence** | `~/.carlos-flow/` | State, audit chain, snapshots, trigger history | ✅ Cross-platform path convention |
 
@@ -277,7 +277,7 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 
 ---
 
-## 🔧 MCP Tool Reference (16 tools)
+## 🔧 MCP Tool Reference (19 tools)
 
 | Tool | Purpose | Key constraint |
 |------|---------|----------------|
@@ -286,17 +286,22 @@ node client/carlos.js flow_verdict '{"sessionId":"demo","verdict":"PASS","notes"
 | `flow_submit_requirement` | Submit / replace the task card | Required fields enforced per risk tier; fake fillers rejected |
 | `flow_claim` | Claim a dispatch slot (executor / auditor) | Rejected while the activation gate is open |
 | `flow_dispatch` | Dispatch a sub-agent per the four-part contract | Auto-snapshots files in scope before dispatch |
+| `flow_audit_axes` | **Dispatch dual-axis audit** (Standards / Spec) | Generates two parallel audit prompts, read-only |
+| `flow_audit_submit` | **Submit one axis's verdict** | Bound to the current `card_ts`; WARN does not hard-block; same axis can be resubmitted |
+| `flow_audit_guard` | **Dual-axis gate self-check** | Same criteria as the gate inside `flow_verdict` |
 | `flow_save_result` | Save a sub-agent's result | — |
 | `flow_run_verify` | **Really execute** `verify.cmd` | Returns exitCode / stdout / stderr + `output_hash` |
 | `flow_falsify` | **Negative control**: run `verify.cmd` pre-change (must fail) and post-change (must pass) | Vacuous tests (`|| true`) rejected; required before PASS |
 | `flow_check_scope` | Check whether files are in scope | Empty scope → fail-closed, everything out of scope |
-| `flow_verdict` | Record verdict PASS / DIRECTION / LOCAL | No PASS without dispatch; no PASS without passing verification; **no PASS without a passing negative control** |
-| `flow_status` | Query gate state | Exposes `activation_pending` / `verify_passed` |
+| `flow_verdict` | Record verdict PASS / DIRECTION / LOCAL | No PASS without dispatch / passing verification / passing negative control / **both audit axes**; any axis FAIL blocks PASS |
+| `flow_status` | Query gate state | Exposes `activation_pending` / `verify_passed` / `audit_axes` / `axes_ready` |
 | `flow_audit` | Read the audit stream | Includes 6 activation-related event kinds |
 | `flow_diff_hunks` | Parse `git diff -U0` hunk ranges | — |
 | `flow_bypass` | Toggle bypass mode | Requires `confirmed=true`; auto-cleared on dispatch |
 | `flow_revert_plan` | Generate an atomic restore plan | Returns a plan only, never executes |
 | `flow_trigger_check` | Smart trigger check | Activates on success; honestly reports score otherwise |
+
+> **Dual-axis review** (anti-false-closure #6): before `flow_verdict` records PASS, run `flow_audit_axes` to dispatch the Standards axis (does it follow repo conventions / any code smells) and the Spec axis (does it faithfully implement acceptance). Each axis gathers evidence independently via sub-agents, then `flow_audit_submit` records the verdict. The gate sits **after** the negative control and is the last one before PASS is written; both axes are bound to the current `card_ts` (a previous card's audit cannot impersonate a new one), any FAIL hard-blocks, while WARN (code smells and other judgement calls) is annotated but allowed.
 
 ---
 

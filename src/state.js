@@ -93,7 +93,7 @@ export function sanitizeId(s) {
 
 // 当前状态文件结构版本号。
 // 改动 defaultState() 的**字段结构**时，必须 +1 并在 migrate() 里加一条迁移。
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 /**
  * 迁移旧版本的状态文件。
@@ -107,6 +107,10 @@ export const CURRENT_SCHEMA_VERSION = 2;
  *
  * v1 → v2：新增 last_falsify（负对照记录）。
  *   · 旧状态没有这个字段 → 补 null（表示「还没做负对照」，裁定会拒绝 PASS）
+ *
+ * v2 → v3：新增 audit_axes / audit_axes_ts（双轴审查证据）。
+ *   · 旧状态没有这两个字段 → 补默认结构（两轴均为 null = 尚未审查，裁定会拒绝 PASS）
+ *   · audit_axes 存在但结构不全时也在此补齐，避免读到半初始化对象
  */
 export function migrate(parsed) {
   if (!parsed || typeof parsed !== "object") return parsed;
@@ -126,6 +130,20 @@ export function migrate(parsed) {
     // v1 → v2
     if (out.last_falsify === undefined) out.last_falsify = null;
     v = 2;
+  }
+
+  if (v < 3) {
+    // v2 → v3
+    if (!out.audit_axes || typeof out.audit_axes !== "object") {
+      out.audit_axes = { standards: null, spec: null };
+    } else {
+      out.audit_axes = {
+        standards: out.audit_axes.standards || null,
+        spec: out.audit_axes.spec || null,
+      };
+    }
+    if (typeof out.audit_axes_ts !== "number") out.audit_axes_ts = 0;
+    v = 3;
   }
 
   out.schemaVersion = CURRENT_SCHEMA_VERSION;
@@ -173,6 +191,16 @@ export function defaultState() {
     // 负对照要求：改动前必须失败、改动后必须通过，才证明这个测试真的在测本次改动。
     // null = 还没做负对照（此时 flow_verdict 拒绝 PASS）。
     last_falsify: null,
+    // 双轴审查证据（flow_audit_submit 写入）。
+    // 结构：{ standards: {verdict,findings,evidence,card_ts,ts} | null, spec: {...} | null }
+    //
+    // 为什么按轴绑定 card_ts，而不是只用一个全局时间戳：
+    // 两轴是**分两次**提交的。卡A提交 standards → 换新卡B → 只补 spec，
+    // 此时全局时间戳已被刷新到卡B之后，单看时间戳会放行，而 standards
+    // 仍是卡A的结论 —— 「两轴跨卡拼接」。绑定 card_ts 后，换卡即两轴全失效。
+    audit_axes: { standards: null, spec: null },
+    // 两轴最后提交时间（审计链留痕用；不参与冒充校验，校验看 card_ts）。
+    audit_axes_ts: 0,
   };
 }
 

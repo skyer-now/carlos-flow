@@ -56,6 +56,19 @@ function check(name, cond, detail = "") {
 }
 
 /**
+ * 提交双轴审计结论（Standards + Spec 均 PASS）。
+ *
+ * 双轴门禁口径：PASS 裁定前必须有**当前卡绑定**（card_ts 一致）的两轴证据。
+ * flow_audit_axes 只生成两段 prompt，真正的结论要由 subagent 取证后
+ * 经 flow_audit_submit 提交 —— 这里用人工核验结果模拟 subagent 回传。
+ */
+async function submitAxes(sid) {
+  await call("flow_audit_axes", { sessionId: sid });
+  await call("flow_audit_submit", { sessionId: sid, axis: "standards", verdict: "PASS", findings: ["符合规范"], evidence: "端测人工核验" });
+  await call("flow_audit_submit", { sessionId: sid, axis: "spec", verdict: "PASS", findings: ["验收满足"], evidence: "端测人工核验" });
+}
+
+/**
  * 直接跑客户端进程并捕获 stderr（不走 MCP 直调）。
  *
  * 用途：验证**客户端激活路径**真的执行了动作，而不只是打印日志。
@@ -181,6 +194,8 @@ async function main() {
   check("8. flow_claim auditor", r.ok && r.data?.ok === true && r.data?.role === "auditor", r.ok ? "" : r.error);
 
   // 9. flow_verdict
+  // 双轴门禁：落 PASS 前必须收齐 Standards / Spec 两轴证据。
+  await submitAxes(SID);
   r = await call("flow_verdict", { sessionId: SID, verdict: "PASS", notes: "端测通过", cwd: WORK });
   check("8. flow_verdict", r.ok && r.data?.verdict === "PASS" && r.data?.completed_ok === true, r.ok ? "" : r.error);
 
@@ -604,6 +619,7 @@ async function main() {
 
   // auditor 再 claim 后 verdict
   r = await call("flow_claim", { sessionId: NV_SID, role: "auditor" });
+  await submitAxes(NV_SID);
   r = await call("flow_verdict", { sessionId: NV_SID, verdict: "PASS", notes: "验证已跑通", cwd: WORK });
   const nvPassOk = r.ok && r.data?.verdict === "PASS" && r.data?.completed_ok === true;
   check("24b. 验证通过后记 PASS 放行", nvRan && nvPassOk, r.ok ? "" : r.error);
@@ -666,6 +682,128 @@ async function main() {
   r = await call("flow_status", { sessionId: TRIG_NS2 });
   check("26g. execute=false 时不开卡", r.ok && r.data?.has_card === false,
     r.ok ? `has_card=${r.data?.has_card}` : r.error);
+
+  // 27. 双轴审查门禁（Standards / Spec 两轴独立判定）
+  //
+  // 设计口径（借鉴 mattpocock/skills 的 code-review 双轴并行机制）：
+  //   · Standards 轴：合不合仓库规范 + 有无坏味道
+  //   · Spec 轴：忠不忠实实现任务卡验收
+  //   · 合并成一个结论会互相掩盖 ——「符合规范但做错事」与「做对事但破坏规范」
+  //     必须能分别被看见，所以拆成两轴独立留痕。
+  //   · WARN（坏味道等 judgement call）不硬拦，FAIL（硬违规 / 未实现验收）拦截。
+  //
+  // 门禁位置：在 activation → dispatch → verify → 越界 → claimed_role → 负对照 之后，
+  // 是 PASS 落定前的**最后一道**。下面每个用例都要先满足前七道门，才能测到双轴这一道。
+  const AX = (n) => SID + "-ax" + n;
+  const axFile = (n) => `ax-${n}.txt`;
+
+  /** 把一个会话推到「前七道门全过、只差双轴」的状态 */
+  async function readyForVerdict(sid, n, goal) {
+    const f = axFile(n);
+    // 先建文件：scope 存在性校验要求它已存在；这也是负对照的「改动前」状态
+    writeFileSync(join(WORK, f), "original\n");
+    await call("flow_add_user_msg", { sessionId: sid, text: QUOTE });
+    await call("flow_submit_requirement", {
+      sessionId: sid, goal: goal || "双轴审查验证", quote: QUOTE,
+      scope: [f], acceptance: ["两轴证据齐全且无轴 FAIL 才允许 PASS"],
+      verify: { cmd: verifyFor(f) }, confirmed: true, cwd: WORK,
+    });
+    await call("flow_claim", { sessionId: sid, role: "executor" });
+    await call("flow_dispatch", { sessionId: sid, role: "executor", message: "只读检查", run: false, cwd: WORK });
+    writeFileSync(join(WORK, f), "fixed\n");
+    await call("flow_falsify", { sessionId: sid, cwd: WORK });
+    await call("flow_claim", { sessionId: sid, role: "auditor" });
+  }
+  const axSubmit = (sid, axis, verdict, findings) =>
+    call("flow_audit_submit", { sessionId: sid, axis, verdict, findings: findings || ["ok"], evidence: "manual" });
+
+  // 27a. 两轴未齐（一轴都没提交）→ 拒绝 PASS
+  const AX1 = AX(1);
+  await readyForVerdict(AX1, 1);
+  r = await call("flow_verdict", { sessionId: AX1, verdict: "PASS", notes: "未审计就想通过", cwd: WORK });
+  check("27a. 两轴未齐时拒绝 PASS", r.ok === false && /两轴审查未齐/.test(r.error || ""),
+    r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  // 27b. 只提交一轴 → 仍然拒绝
+  await axSubmit(AX1, "standards", "PASS");
+  r = await call("flow_verdict", { sessionId: AX1, verdict: "PASS", notes: "只审了一轴", cwd: WORK });
+  check("27b. 只提交一轴时拒绝 PASS", r.ok === false && /两轴审查未齐/.test(r.error || ""),
+    r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  // 27c. Spec 轴 FAIL → 拒绝 PASS
+  await axSubmit(AX1, "spec", "FAIL", ["验收未满足"]);
+  r = await call("flow_verdict", { sessionId: AX1, verdict: "PASS", notes: "Spec 挂了", cwd: WORK });
+  check("27c. Spec 轴 FAIL 时拒绝 PASS", r.ok === false && /至少一轴 FAIL/.test(r.error || ""),
+    r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  // 27d. Standards 轴 FAIL → 同样拒绝（两轴对称）
+  await axSubmit(AX1, "standards", "FAIL", ["硬违规"]);
+  await axSubmit(AX1, "spec", "PASS");
+  r = await call("flow_verdict", { sessionId: AX1, verdict: "PASS", notes: "Standards 挂了", cwd: WORK });
+  check("27d. Standards 轴 FAIL 时拒绝 PASS（两轴对称）", r.ok === false && /至少一轴 FAIL/.test(r.error || ""),
+    r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  // 27e. WARN 不硬拦（坏味道是 judgement call）→ 允许 PASS
+  await axSubmit(AX1, "standards", "WARN", ["一处坏味道"]);
+  await axSubmit(AX1, "spec", "PASS");
+  r = await call("flow_verdict", { sessionId: AX1, verdict: "PASS", notes: "带坏味道通过", cwd: WORK });
+  check("27e. WARN 不硬拦（judgement call 允许 PASS）",
+    r.ok === true && r.data?.verdict === "PASS" && r.data?.completed_ok === true,
+    r.ok ? "" : (r.error || "").slice(0, 70));
+
+  // 27f. DIRECTION / LOCAL 不受两轴限制（返工意见不要求双轴证据）
+  const AX2 = AX(2);
+  writeFileSync(join(WORK, axFile(2)), "original\n");
+  await call("flow_add_user_msg", { sessionId: AX2, text: QUOTE });
+  await call("flow_submit_requirement", {
+    sessionId: AX2, goal: "DIRECTION 不受双轴限制", quote: QUOTE,
+    scope: [axFile(2)], acceptance: ["x"],
+    verify: { cmd: verifyFor(axFile(2)) }, confirmed: true, cwd: WORK,
+  });
+  r = await call("flow_verdict", { sessionId: AX2, verdict: "DIRECTION", notes: "方向要调整", cwd: WORK });
+  check("27f. DIRECTION 不受两轴限制（未审计也可记录）", r.ok === true && r.data?.verdict === "DIRECTION",
+    r.ok ? "" : (r.error || "").slice(0, 70));
+
+  // 27g. 旧卡审查结果不冒充新卡（轴证据按 card_ts 绑定）
+  //
+  // submit_requirement 会刷新 card_ts 但**不清空** audit_axes（它是 prev 里的字段），
+  // 所以卡A 的两轴证据会残留 —— 但 card_ts 已不等于卡B，门禁必须判定为「未齐」。
+  const AX3 = AX(3);
+  await readyForVerdict(AX3, 3, "卡A");
+  await call("flow_audit_axes", { sessionId: AX3 });
+  await axSubmit(AX3, "standards", "PASS");
+  await axSubmit(AX3, "spec", "PASS");
+  // 重新提交卡B：card_ts 刷新，卡A 的轴证据必须失效
+  writeFileSync(join(WORK, axFile(3)), "original\n");
+  await call("flow_submit_requirement", {
+    sessionId: AX3, goal: "卡B（新验收）", quote: QUOTE,
+    scope: [axFile(3)], acceptance: ["b"],
+    verify: { cmd: verifyFor(axFile(3)) }, confirmed: true, cwd: WORK,
+  });
+  await call("flow_claim", { sessionId: AX3, role: "executor" });
+  await call("flow_dispatch", { sessionId: AX3, role: "executor", message: "只读检查", run: false, cwd: WORK });
+  writeFileSync(join(WORK, axFile(3)), "fixed\n");
+  await call("flow_falsify", { sessionId: AX3, cwd: WORK });
+  await call("flow_claim", { sessionId: AX3, role: "auditor" });
+  r = await call("flow_verdict", { sessionId: AX3, verdict: "PASS", notes: "用卡A的审计结果冒充卡B", cwd: WORK });
+  check("27g. 旧卡审查结果不冒充新卡（轴按 card_ts 绑定）",
+    r.ok === false && /两轴审查未齐/.test(r.error || ""), r.ok ? "未被拒绝（异常）" : "已拒绝");
+
+  // 27h / 27i / 27j. flow_audit_guard 独立可用（与 verdict 门禁同口径）
+  r = await call("flow_audit_guard", { sessionId: AX3 });
+  check("27h. flow_audit_guard 独立校验（证据失效时拒绝）", r.ok === false, r.ok ? "竟然放行了" : "已拒绝");
+  r = await call("flow_audit_guard", { sessionId: AX1 });
+  check("27i. flow_audit_guard 独立校验（证据齐全时放行）", r.ok === true && r.data?.ok === true, r.ok ? "" : r.error);
+  await axSubmit(AX1, "standards", "FAIL", ["硬违规"]);
+  r = await call("flow_audit_guard", { sessionId: AX1 });
+  check("27j. flow_audit_guard 有轴 FAIL 时拒绝（与 verdict 门禁同口径）",
+    r.ok === false && /至少一轴 FAIL/.test(r.error || ""), r.ok ? "竟然放行了" : "已拒绝");
+
+  // 27k. flow_status 暴露双轴状态（主 Agent 落 PASS 前可读）
+  r = await call("flow_status", { sessionId: AX1 });
+  check("27k. flow_status 暴露 audit_axes / axes_ready",
+    r.ok && r.data?.audit_axes && typeof r.data?.axes_ready === "boolean",
+    r.ok ? `axes_ready=${r.data?.axes_ready}` : r.error);
 
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);

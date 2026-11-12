@@ -125,6 +125,13 @@ try {
     catch { return { ok: false, __raw: text, __isError: r.result?.isError === true }; }
   };
 
+  // 双轴门禁：落 PASS 前必须收齐 Standards / Spec 两轴证据
+  const submitAxes = async (sid) => {
+    await tool("flow_audit_axes", { sessionId: sid });
+    await tool("flow_audit_submit", { sessionId: sid, axis: "standards", verdict: "PASS", findings: ["符合规范"], evidence: "包级实测人工核验" });
+    await tool("flow_audit_submit", { sessionId: sid, axis: "spec", verdict: "PASS", findings: ["验收满足"], evidence: "包级实测人工核验" });
+  };
+
   await req("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "pkg-e2e", version: "1" } });
   await req("notifications/initialized", {});
 
@@ -163,6 +170,7 @@ try {
     r.ok === true && r.verdict === "meaningful", r.ok ? `verdict=${r.verdict}` : (r.__raw || ""));
 
   r = await tool("flow_claim", { sessionId: SID, role: "auditor" });
+  await submitAxes(SID);
   r = await tool("flow_verdict", { sessionId: SID, verdict: "PASS", notes: "验证通过", cwd: pkgRoot });
   check("flow_verdict 记 PASS（有验证证据才放行）", r.ok === true && r.completed_ok === true);
 
