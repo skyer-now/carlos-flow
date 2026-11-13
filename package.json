@@ -52,7 +52,9 @@
     "test:bridge": "node test/bridge-identity.mjs",
     "sync:version": "node scripts/sync-version.mjs",
     "check:version": "node scripts/check-repo-parity.mjs",
-    "test:gate": "node test/publish-gate.test.mjs"
+    "test:gate": "node test/publish-gate.test.mjs",
+    "install:hooks": "node scripts/install-hooks.mjs",
+    "check:hooks": "node scripts/install-hooks.mjs --check"
   },
   "keywords": [
     "carlos",

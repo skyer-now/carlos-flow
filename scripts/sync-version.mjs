@@ -10,6 +10,11 @@
 //   node scripts/sync-version.mjs                     仅同步并校验（不改 CHANGELOG）
 //   node scripts/sync-version.mjs --changelog "标题"   同时在 CHANGELOG 顶部插入新条目
 //   node scripts/sync-version.mjs --date 2026-11-13    指定条目日期（默认今天）
+//   node scripts/sync-version.mjs --check             只读校验：有偏差则退出码 1 且**不写文件**
+//
+// --check 为什么需要：推 tag 前置钩子要判断「版本号是否已对齐且已提交」。
+//   普通模式会写文件（退出码总是 0），没法用来做只读判定；
+//   --check 不写任何文件，有偏差就退出 1。
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -25,7 +30,15 @@ function readText(rel) {
   }
 }
 
+let changedFiles = [];
+
 function writeText(rel, text) {
+  if (CHECK_ONLY) {
+    // --check 模式只记录，不落盘
+    if (!changedFiles.includes(rel)) changedFiles.push(rel);
+    console.log("  ❌ " + rel + " 需同步");
+    return;
+  }
   writeFileSync(join(ROOT, rel), text, "utf8");
   console.log(`  ✏️  ${rel}`);
 }
@@ -39,6 +52,7 @@ function readJson(rel) {
 }
 
 const argv = process.argv.slice(2);
+const CHECK_ONLY = argv.includes("--check");
 const changelogTitle = argv.includes("--changelog")
   ? argv[argv.indexOf("--changelog") + 1]
   : null;
@@ -113,6 +127,10 @@ if (changelog) {
     changelog =
       changelog.slice(0, insertAt) + entry + changelog.slice(insertAt);
     writeText("CHANGELOG.md", changelog);
+  } else if (CHECK_ONLY) {
+    // --check 模式：只报告偏差，不退出（最后统一汇总）
+    if (!changedFiles.includes("CHANGELOG.md")) changedFiles.push("CHANGELOG.md");
+    console.log("  ❌ CHANGELOG.md 顶部需同步");
   } else {
     console.error(
       `❌ CHANGELOG.md 顶部是 ${topVer || "(无)"}，与 ${ver} 不一致。\n` +
@@ -123,4 +141,15 @@ if (changelog) {
   }
 }
 
-console.log("\n✅ 版本号已全部对齐到 " + ver);
+if (CHECK_ONLY) {
+  if (changedFiles.length) {
+    console.error(
+      "\n❌ 版本号未对齐，需同步：" + changedFiles.join("、") +
+        "\n   请运行：npm run sync:version（改完记得提交）",
+    );
+    process.exit(1);
+  }
+  console.log("\n✅ 版本号已全部对齐到 " + ver);
+} else {
+  console.log("\n✅ 版本号已全部对齐到 " + ver);
+}

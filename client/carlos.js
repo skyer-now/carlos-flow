@@ -417,14 +417,28 @@ async function runInit(target) {
     console.log(`✅ 触发器配置已写入: ${tcPath}`);
   }
   
+  // --- __ROOT__ 渲染：必须按目标格式转义 ---
+  //
+  // 背景（2026-11-13 实测）：旧实现直接 `.replace(/__ROOT__/g, ROOT_ABS)`，
+  // 把 Windows 路径的**原始反斜杠**嵌进 JSON 模板，产出
+  //   "D:\dev-env\node-v22.23.4-win-x64\node_modules\carlos-flow/bridge/mcp-bridge.js"
+  // 其中 `\d` `\n` `\v` 都是**非法 JSON 转义序列** —— 文件根本解析不了，
+  // 表现为「安装成功但插件不出现」，而且任何 JSON 解析器都报同一个位置。
+  //
+  // 两种目标格式要分别处理：
+  // - JSON（ghost.json / mcp.json / opencode.json）：必须 JSON 转义（反斜杠 → \\）
+  // - YAML（.mcprc）：Windows 路径一律用正斜杠（反斜杠在 YAML 双引号标量里同样非法）
+  const rootJson = JSON.stringify(ROOT_ABS).slice(1, -1);
+  const rootYaml = ROOT_ABS.replace(/\\/g, "/");
+
   if (target === "cindy") {
     // --- Cindy: 生成 ghost.json 到 ~/.cindy/ghosts/ ---
     const ghostsDir = join(home, ".cindy", "ghosts");
     mkdirSync(ghostsDir, { recursive: true });
     const ghostPath = join(ghostsDir, "carlos-flow.json");
-    
+
     const ghostTemplate = readFileSync(resolve(ROOT_ABS, "ghost.json"), "utf8");
-    const ghostContent = ghostTemplate.replace(/__ROOT__/g, ROOT_ABS);
+    const ghostContent = ghostTemplate.replace(/__ROOT__/g, rootJson);
     writeFileSync(ghostPath, ghostContent, "utf8");
     console.log(`✅ Cindy ghost 已写入: ${ghostPath}`);
     console.log(`   重启 Cindy 后即可在侧栏看到 "Carlos 工作流" 插件`);
@@ -435,13 +449,13 @@ async function runInit(target) {
     const pluginPath = join(pluginDir, "opencode.json");
     
     const pluginTemplate = readFileSync(resolve(ROOT_ABS, "opencode.json.template"), "utf8");
-    const pluginContent = pluginTemplate.replace(/__ROOT__/g, ROOT_ABS);
+    const pluginContent = pluginTemplate.replace(/__ROOT__/g, rootJson);
     writeFileSync(pluginPath, pluginContent, "utf8");
     console.log(`✅ OpenCode 插件配置已写入: ${pluginPath}`);
     
     // 同时生成 .mcprc 到项目根目录（用户可手动复制）
     const mcprcTemplate = readFileSync(resolve(ROOT_ABS, ".mcprc.template"), "utf8");
-    const mcprcContent = mcprcTemplate.replace(/__ROOT__/g, ROOT_ABS);
+    const mcprcContent = mcprcTemplate.replace(/__ROOT__/g, rootYaml);
     const mcprcPath = join(process.cwd(), ".mcprc");
     writeFileSync(mcprcPath, mcprcContent, "utf8");
     console.log(`✅ MCP 配置模板已写入: ${mcprcPath}`);
@@ -454,7 +468,7 @@ async function runInit(target) {
     
     const templatePath = resolve(ROOT_ABS, "templates", target, "mcp.json");
     const template = readFileSync(templatePath, "utf8");
-    const content = template.replace(/__ROOT__/g, ROOT_ABS);
+    const content = template.replace(/__ROOT__/g, rootJson);
     writeFileSync(configPath, content, "utf8");
     console.log(`✅ ${target.charAt(0).toUpperCase() + target.slice(1)} 配置已写入: ${configPath}`);
   } else if (target === "vscode") {
@@ -465,7 +479,7 @@ async function runInit(target) {
     
     const templatePath = resolve(ROOT_ABS, "templates", "vscode", "mcp.json");
     const template = readFileSync(templatePath, "utf8");
-    const content = template.replace(/__ROOT__/g, ROOT_ABS);
+    const content = template.replace(/__ROOT__/g, rootJson);
     writeFileSync(configPath, content, "utf8");
     console.log(`✅ VS Code (Copilot) 配置已写入: ${configPath}`);
   } else if (target === "claude") {
