@@ -25,6 +25,16 @@
 - **子进程启动失败的报错可读性**：改为输出 `[Carlos-Diagnosis]` 现象 +
   `[Carlos-Suggestion]` 修复建议，不再只丢一句 Node 原始异常。
 
+### 🔧 发布基础设施 | Release Infrastructure
+
+- **修发布闸 semver 方向写反的真实 bug**：旧实现里 `process.exit(semver(a,b)<=0?1:0)` 的退出码语义
+  与 shell 的 `elif` 判定相反 —— 结果「版本更高」被拦在 npm 之外、「版本更低」（补历史 tag）反而放行，
+  正好与发布闸的本意完全相反。判定逻辑抽到 `scripts/publish-gate.mjs`，
+  新增 `test/publish-gate.test.mjs` 锁住方向（10 条断言）。
+- **修 CI 上 `check-all.sh` Permission denied**：脚本可执行位在 Windows 提交时丢失
+  （`core.fileMode` 不跟踪 exec bit），Ubuntu runner 直接 126 退出。
+  CI 改用 `bash ./check-all.sh`，并在 git index 层补上 `100755`。
+
 ### 🔒 变更 | Changed
 
 - **`check-all.sh` 升级为 Gatekeeper 统一入口**：语法校验 + 真 RPC 冒烟测试一体，

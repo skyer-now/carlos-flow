@@ -23,7 +23,7 @@
     "test:trigger": "node test/trigger-e2e.mjs",
     "test:concurrency": "node test/concurrency-e2e.mjs",
     "test:acceptance": "node test/e2e-acceptance.mjs",
-    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance",
+    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance && npm run test:gate",
     "test:mutation": "node scripts/mutation-check.mjs",
     "sync:readme": "node scripts/sync-readme.mjs",
     "check:readme": "node scripts/sync-readme.mjs --check",
@@ -51,7 +51,8 @@
     "test:audit": "node test/audit-chain.mjs",
     "test:bridge": "node test/bridge-identity.mjs",
     "sync:version": "node scripts/sync-version.mjs",
-    "check:version": "node scripts/check-repo-parity.mjs"
+    "check:version": "node scripts/check-repo-parity.mjs",
+    "test:gate": "node test/publish-gate.test.mjs"
   },
   "keywords": [
     "carlos",

@@ -87,25 +87,14 @@ jobs:
       # 怎么算版本：semver 比较。最高已发布版本取自 packument 的 dist-tags.latest
       # （用 `--prefer-online` 绕本地缓存；CDN 传播延迟用 registry 版本数做兜底——
       # 版本数>1 才可信，否则按「暂无已发布版本」处理，允许发布）。
+      # ⚠️ 2026-11-13 修过一次真实 bug：旧实现把 semver 比较的**退出码方向写反了** ——
+      #    条件成立时反而进「不高于」分支，于是「版本更高」被拦住、「版本更低」被放行。
+      #    后果：v2.11.2 被拦在 npm 之外，而补历史 tag 反而能发（正好与发布闸本意相反）。
+      # 现在判定逻辑抽到 scripts/publish-gate.mjs，并有单测 test/publish-gate.test.mjs
+      # 锁住方向，workflow 只负责调用。
       - name: 发布闸：tag 版本必须高于已发布最新版本
         id: gate
-        run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          LATEST="$(npm view carlos-flow dist-tags.latest --prefer-online 2>/dev/null || true)"
-          COUNT="$(npm view carlos-flow versions --json --prefer-online 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).length)}catch{console.log("0")}})')"
-          if [ -n "$LATEST" ] && [ "$COUNT" -gt 1 ] && [ "$VERSION" = "$LATEST" ]; then
-            echo "✗ 本次 tag 版本 $VERSION 等于已发布最新版 $LATEST —— 这是补历史 tag，跳过 npm publish（仅建 Release）"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          elif [ -n "$LATEST" ] && [ "$COUNT" -gt 1 ] && node -e "
-              const semver=(a,b)=>{const pa=a.split(/[.-]/).map(Number),pb=b.split(/[.-]/).map(Number);
-              for(let i=0;i<3;i++){if((pa[i]||0)!==(pb[i]||0))return (pa[i]||0)-(pb[i]||0);}return 0;};
-              process.exit(semver('$VERSION','$LATEST')<=0?1:0)"; then
-            echo "✗ 本次 tag 版本 $VERSION 不高于已发布最新版 $LATEST —— 跳过 npm publish（仅建 Release）"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "✓ 本次 tag 版本 $VERSION 是新的（registry 最新 $LATEST）—— 允许发布"
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: node scripts/publish-gate.mjs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
