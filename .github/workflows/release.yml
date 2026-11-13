@@ -76,28 +76,58 @@ jobs:
       #   2) 兜底：即使预检查因**传播延迟**查不到（刚发布完的版本
       #      通常要几十秒才可查），publish 报 409 时也视为成功。
       #      只做第 1 道是不够的 —— 那正是本 workflow 失败的原因。
-      - name: 发布到 npm（已存在则跳过，409 视为成功）
-        id: npm_publish
+      # 发布闸：只有 tag 版本**高于** registry 上已发布的最大版本时才发布。
+      #
+      # 为什么需要：release.yml 触发条件是 `push: tags: ['v*']` —— 补历史版本的
+      # tag（如 v2.10.0）也会触发。若不设版本比较闸，npm publish 会：
+      #   (a) 把 dist-tags.latest 拉回旧版（用户 `npm i carlos-flow` 装到旧代码）；
+      #   (b) 破坏「git tag ↔ npm 版本 ↔ GitHub Release」的对齐。
+      # 加了这道闸，补历史 tag 只建 Release、不发 npm，latest 不被回退。
+      #
+      # 怎么算版本：semver 比较。最高已发布版本取自 packument 的 dist-tags.latest
+      # （用 `--prefer-online` 绕本地缓存；CDN 传播延迟用 registry 版本数做兜底——
+      # 版本数>1 才可信，否则按「暂无已发布版本」处理，允许发布）。
+      - name: 发布闸：tag 版本必须高于已发布最新版本
+        id: gate
         run: |
           VERSION="$(node -p "require('./package.json').version")"
-          if npm view "carlos-flow@${VERSION}" version >/dev/null 2>&1; then
-            echo "⏭  carlos-flow@${VERSION} 已在 registry 中，跳过 npm publish"
+          LATEST="$(npm view carlos-flow dist-tags.latest --prefer-online 2>/dev/null || true)"
+          COUNT="$(npm view carlos-flow versions --json --prefer-online 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).length)}catch{console.log("0")}})')"
+          if [ -n "$LATEST" ] && [ "$COUNT" -gt 1 ] && [ "$VERSION" = "$LATEST" ]; then
+            echo "✗ 本次 tag 版本 $VERSION 等于已发布最新版 $LATEST —— 这是补历史 tag，跳过 npm publish（仅建 Release）"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif [ -n "$LATEST" ] && [ "$COUNT" -gt 1 ] && node -e "
+              const semver=(a,b)=>{const pa=a.split(/[.-]/).map(Number),pb=b.split(/[.-]/).map(Number);
+              for(let i=0;i<3;i++){if((pa[i]||0)!==(pb[i]||0))return (pa[i]||0)-(pb[i]||0);}return 0;};
+              process.exit(semver('$VERSION','$LATEST')<=0?1:0)"; then
+            echo "✗ 本次 tag 版本 $VERSION 不高于已发布最新版 $LATEST —— 跳过 npm publish（仅建 Release）"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "✓ 本次 tag 版本 $VERSION 是新的（registry 最新 $LATEST）—— 允许发布"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 发布到 npm（有发布闸守卫，已存在/旧版本均跳过；409 兜底）
+      - name: 发布到 npm（发布闸放行时才执行）
+        id: npm_publish
+        if: steps.gate.outputs.publish == 'true'
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "registry 暂未查到 ${VERSION}（可能刚发布、传播延迟），尝试发布"
+          set +e
+          npm publish --access public --provenance 2>&1 | tee /tmp/publish.log
+          CODE=${PIPESTATUS[0]}
+          set -e
+          if [ "$CODE" -eq 0 ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          elif grep -qE "E409|Cannot publish over|previously (published|staged)" /tmp/publish.log; then
+            echo "✅ npm 返回 409（该版本已存在）—— 视为已发布，继续后续步骤"
             echo "published=false" >> "$GITHUB_OUTPUT"
           else
-            echo "registry 暂未查到 ${VERSION}（可能刚发布、传播延迟），尝试发布"
-            set +e
-            npm publish --access public --provenance 2>&1 | tee /tmp/publish.log
-            CODE=${PIPESTATUS[0]}
-            set -e
-            if [ "$CODE" -eq 0 ]; then
-              echo "published=true" >> "$GITHUB_OUTPUT"
-            elif grep -qE "E409|Cannot publish over|previously (published|staged)" /tmp/publish.log; then
-              echo "✅ npm 返回 409（该版本已存在）—— 视为已发布，继续后续步骤"
-              echo "published=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "❌ npm publish 失败（退出码 ${CODE}）"
-              exit "$CODE"
-            fi
+            echo "❌ npm publish 失败（退出码 ${CODE}）"
+            exit "$CODE"
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
