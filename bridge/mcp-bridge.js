@@ -3,7 +3,18 @@
 // 用法: node mcp-bridge.js [端口]
 // 环境变量: CARLOS_BRIDGE_TOKEN（必填，用于认证）
 
-import { spawn } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
+
+// === Windows 自保：GUI 父进程 spawn 时隐藏自身控制台窗口 ===
+// 注意 2 点:
+//   1) Add-Type 使用单引号包裹 MemberDefinition，内层双引号才是 C# 字面量
+//   2) .NET IntPtr 不是 IComparable, 必须先 ToInt64() 再 -gt 0，否则报错
+if (process.platform === 'win32') {
+  spawnSync('powershell', [
+    '-NoProfile', '-Command',
+    `$w = (Get-Process -Id ${process.pid}).MainWindowHandle.ToInt64(); if ($w -gt 0) { Add-Type -Name Win32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);' -Namespace Native; [Native.Win32]::ShowWindow([IntPtr]$w, 0) }`
+  ], { stdio: 'ignore', windowsHide: true });
+}
 import { createServer } from "node:net";
 import { createHash } from "node:crypto";
 
