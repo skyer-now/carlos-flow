@@ -219,14 +219,52 @@ export function defaultState() {
 }
 
 export function loadState(sid) {
-  try {
-    const file = path.join(RUNS_DIR, sanitizeId(sid), "state.json");
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return defaultState();
-    return { ...defaultState(), ...migrate(parsed) };
-  } catch {
-    return defaultState();
+  const file = path.join(RUNS_DIR, sanitizeId(sid), "state.json");
+
+  // 读失败必须区分「真的没有」与「暂时读不到」。
+  //
+  // 背景（2026-11-13 实测）：旧实现把**任何**读/解析失败都当成「状态不存在」，
+  // 返回 defaultState()。而 saveState 用的是 tmp+rename，
+  // 在 Windows 上 rename 与其他进程的 readFileSync 存在竞争窗口（EBUSY/EPERM），
+  // 读失败 → prev 退化成默认值 → activation_activated 丢成 false →
+  // 紧接着的写入把「占位卡的 pending=[三项]」覆盖成「普通卡的 pending=[]」
+  // → **激活闸门被绕过**。
+  // 这正是并发测试「零泄漏」偶发失败的根因（实测 370 轮里漏 1）。
+  //
+  // 现在：只有「文件不存在」才返回默认值；
+  // 瞬时错误先重试；仍失败则**报错**（fail-closed），
+  // 绝不静默把一个有闸门的状态当成无闸门的状态。
+  let raw = null;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      raw = fs.readFileSync(file, "utf8");
+      lastErr = null;
+      break;
+    } catch (e) {
+      if (e.code === "ENOENT") return defaultState(); // 真的没有
+      lastErr = e;
+      sleepMs(10 * (attempt + 1)); // 瞬时竞争窗口，退避重试
+    }
   }
+  if (lastErr) {
+    throw new Error(
+      "读取状态失败（" + (lastErr.code || lastErr.message) + "）：" + file +
+        "。为避免丢掉门禁状态，本次操作已中止，请稍后重试。",
+    );
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(
+      "状态文件损坏，无法解析：" + file + "（" + e.message + "）。" +
+        "为避免丢掉门禁状态，本次操作已中止；如确认可丢弃该会话状态，可删除该文件后重试。",
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return defaultState();
+  return { ...defaultState(), ...migrate(parsed) };
 }
 
 export function saveState(sid, state) {
@@ -826,9 +864,19 @@ export function workspaceFingerprint(cwd) {
     .filter(Boolean)
     .sort();
 
+  // 状态目录必须排除（R3）：跑一次检查就会往里写审计/状态文件，
+  // 若计入指纹则「验证 → 落审计 → 记裁定」之间指纹必变 → 每次都误报 STALE。
+  //
+  // ⚠️ 不能只硬编码 ".carlos-flow/"：状态目录由 CARLOS_FLOW_HOME 决定，
+  // 用户完全可以把它设在**项目内部**（如 <repo>/.flowhome），那就会自我失效。
+  // 所以这里按**解析后的绝对路径**排除真正的 FLOW_HOME，
+  // 同时保留 .carlos-flow/ 的字面排除以兼容默认布局。
+  const flowHomeAbs = path.resolve(FLOW_HOME);
   for (const f of files) {
-    // 排除自己的状态目录：跑一次检查就会创建它，若计入指纹则立刻自我失效
-    if (f.startsWith(".carlos-flow/")) continue;
+    const abs = path.resolve(dir, f);
+    const inFlowHome = abs === flowHomeAbs || abs.startsWith(flowHomeAbs + path.sep);
+    if (inFlowHome) continue;
+    if (f.startsWith(".carlos-flow/") || f.startsWith(".carlos-flow\\")) continue;
     h.update(`\u0000untracked-file:${f}\u0000`);
     try {
       const buf = fs.readFileSync(path.join(dir, f));
