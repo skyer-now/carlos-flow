@@ -86,13 +86,15 @@ if ! bash ./check-all.sh; then
   exit 1
 fi
 
-# --- 3. tag 重名检查 ---
-if git rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
-  echo "❌ tag $TAG_NAME 已存在（本地）"
-  echo "   若要重推，先执行：git tag -d $TAG_NAME && git tag $TAG_NAME"
+# --- 3. tag 重名检查（查**远端**，不是本地） ---
+# 正常流程就是「本地先 git tag 再 push」，本地存在是必然的；
+# 真正要拦的是**远端已有同名 tag**（再推要么是空操作，要么需要 force）。
+if git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+  echo "❌ 远端已存在 tag $TAG_NAME"
+  echo "   若确需覆盖：git push --force origin $TAG_NAME"
   exit 1
 fi
-echo "✅ tag 名可用"
+echo "✅ tag 名在远端可用"
 
 echo ""
 echo "=============================================="
