@@ -88,13 +88,26 @@ fi
 
 # --- 3. tag 重名检查（查**远端**，不是本地） ---
 # 正常流程就是「本地先 git tag 再 push」，本地存在是必然的；
-# 真正要拦的是**远端已有同名 tag**（再推要么是空操作，要么需要 force）。
+# 真正要拦的是**远端已有同名 tag**。
+#
+# 但远端已有 tag 不等于一律不能推 —— 有一种合法场景：
+#   「上次发布在门禁阶段失败 → tag 已推上去但 npm 没收到 → 修好后重推同一个 tag」。
+# 区分标准：**该版本是否已经发布到 npm**。
+#   · 已发布  → 移动 tag 会让 npm 版本与 git tag 对不上 → 拦
+#   · 未发布  → 是失败恢复路径 → 放行（并明确告知）
 if git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
-  echo "❌ 远端已存在 tag $TAG_NAME"
-  echo "   若确需覆盖：git push --force origin $TAG_NAME"
-  exit 1
+  VERSION="\${TAG_NAME#v}"
+  PUBLISHED="$(npm view carlos-flow versions --json --prefer-online 2>/dev/null || echo '')"
+  if echo "$PUBLISHED" | grep -q "\"$VERSION\""; then
+    echo "❌ tag $TAG_NAME 对应的版本 $VERSION 已发布到 npm，不能移动"
+    echo "   移动 tag 会让 npm 版本与 git tag 对不上（用户装到的代码与仓库不符）"
+    echo "   若确需继续，请先发新版本号"
+    exit 1
+  fi
+  echo "⚠️  远端已存在 tag $TAG_NAME，但该版本**未发布到 npm**"
+  echo "   （这是「上次发布在门禁阶段失败 → 修好后重推」的标准恢复路径，允许覆盖）"
 fi
-echo "✅ tag 名在远端可用"
+echo "✅ tag 名可用"
 
 echo ""
 echo "=============================================="
