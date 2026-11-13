@@ -1,3 +1,44 @@
+## [2.11.2] - 2026-11-13 — 修复 Bridge 转发通路与 Windows 黑窗，新增路径自探测
+
+### ✨ 新增 | Added
+
+- **路径自探测**（`bridge/mcp-bridge.js`）：Bridge 依据自身文件位置自动定位 `../src/index.js`，
+  不再强制依赖 `CARLOS_FLOW_MCP_ROOT` 绝对路径；该环境变量保留为可选覆盖，向后兼容。
+  接入方只需填 bridge 脚本的路径，Cursor / VS Code / Windsurf 三端通用。
+- **`/health` 返回真实项目根目录**（解析后的绝对路径），供客户端做 Bridge 身份比对，
+  避免端口上跑着「别的 ROOT 的 bridge」时被静默复用。
+- **`INSTALL.md`**：Cursor / VS Code / Windsurf 三平台接入步骤、配置自检与常见问题对照表。
+- **`scripts/sync-version.mjs`**：以 `package.json` 为唯一真源，批量对齐
+  `package-lock.json` / `ghost.json` / `TRIGGER_GUIDE.md` / `CHANGELOG.md` 的版本号，
+  消除「版本散落四处、人工改漏即发布中止」的根因。
+
+### 🐛 修复 | Fixed
+
+- **Bridge 转发通路缺失**：上一版把 Bridge 精简为「只 spawn 子进程、不做转发」，
+  导致平台侧发来的 `tools/list` 永远不会到达 MCP server —— 19 个工具一个都发现不了。
+  现在恢复完整的 TCP → 子进程 stdin → 按 reqId 回包链路。
+- **Windows 黑控制台窗口**：MCP server 子进程改用 `windowsHide: true` 启动，
+  Bridge 重启时不再弹出黑色控制台窗口。
+- **冒烟测试假阳性**：`smoke-test.js` 此前只检查一行启动日志，进程起得来就算「通过」，
+  转发断了也测不出来。现在重写为**真 RPC 往返**：起真实 Bridge → 发 `initialize` →
+  发 `tools/list` → 断言拿回全部 19 个工具。
+- **子进程启动失败的报错可读性**：改为输出 `[Carlos-Diagnosis]` 现象 +
+  `[Carlos-Suggestion]` 修复建议，不再只丢一句 Node 原始异常。
+
+### 🔒 变更 | Changed
+
+- **`check-all.sh` 升级为 Gatekeeper 统一入口**：语法校验 + 真 RPC 冒烟测试一体，
+  退出码非 0 即阻断提交；未设置 `CARLOS_BRIDGE_TOKEN` 时自动用临时值，避免误报失败。
+- **`package.json` 的 `files` 补齐** `INSTALL.md` / `RELEASE_NOTES.md` /
+  `check-all.sh` / `smoke-test.js`，使安装指引与自检脚本随包分发。
+- **移除误提交的 `bridge/mcp-bridge.js.bak`**（内容是早期被截断的残缺版本，会误导后来人）。
+
+### 🔬 验证 | Verification
+
+- `./check-all.sh` 通过：三个文件语法校验通过，真 RPC 往返耗时约 330ms，拿回 19 个工具。
+- 项目自带冒烟测试 `npm test` 通过（SMOKE_OK）。
+- 单包一致性检查 `node scripts/check-repo-parity.mjs` 通过。
+
 # 变更日志 | Changelog
 
 > 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)  

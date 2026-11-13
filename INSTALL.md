@@ -6,7 +6,7 @@
 
 1. 确认已安装 **Node.js 18+**（`node -v`）。
 2. 准备一个 Token 字符串（自行生成，例如 `openssl rand -hex 16`），客户端与 Bridge 用同一个。
-3. 记下 Carlos Flow 项目的安装路径，下文记为 `<INSTALL_PATH>`（例如 `D:/cindy/publish-output/carlos-flow`）。
+3. 记下 Carlos Flow 项目的安装路径，下文记为 `<INSTALL_PATH>`（即你 clone 下来的项目根目录）。
 
 > **Bridge 自带路径自探测**：只要 `<INSTALL_PATH>/bridge/mcp-bridge.js` 在正确位置，
 > Bridge 会自动定位同级的 `src/index.js`，**不需要**再手动设置 `CARLOS_FLOW_MCP_ROOT`。

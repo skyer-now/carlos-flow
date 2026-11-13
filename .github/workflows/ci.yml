@@ -109,6 +109,37 @@ jobs:
       - name: 变异体锚点体检
         run: npm run check:anchors
 
+  # Bridge 门禁：真 RPC 往返验证。
+  #
+  # 为什么单独一个 job：现有门禁擅长查「静态一致性」（文件在不在、版本对不对），
+  # 但查不出「进程起来了、转发断了」这一类缺陷 —— 2026-11-13 的 Bridge 精简事故
+  # 就是静态检查全绿、实际 tools/list 一个工具都拿不到。
+  # 现在起，Bridge 必须真起一遍、真发一遍 initialize + tools/list，
+  # 断言拿回全部 19 个工具，否则本 job 变红。
+  #
+  # 为什么还要跑 windows-latest：黑控制台窗口是 Windows 专属问题，
+  # windowsHide 只有在 Windows 上跑才有意义；ubuntu 只验协议链路。
+  bridge:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Gatekeeper：语法校验 + 真 RPC 往返冒烟测试
+        run: ./check-all.sh
+        env:
+          CARLOS_BRIDGE_TOKEN: ci-gatekeeper-token
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-ci-home
+
   # 变异测试：验证测试套件本身能抓住退化（激活只打印日志 / 闸门失效 / 会话撞名 …）
   # 耗时较长，不在每次 push 跑；手动触发或发布前跑。
   mutation:
