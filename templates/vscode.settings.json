@@ -1,0 +1,14 @@
+{
+  "mcp.servers": {
+    "carlos-flow": {
+      "command": "node",
+      "args": [
+        "D:/cindy/publish-output/carlos-flow/bridge/mcp-bridge.js"
+      ],
+      "env": {
+        "CARLOS_BRIDGE_TOKEN": "YOUR_TOKEN_HERE",
+        "CARLOS_FLOW_MCP_ROOT": "D:/cindy/publish-output/carlos-flow"
+      }
+    }
+  }
+}
