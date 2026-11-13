@@ -1,6 +1,6 @@
 {
   "name": "carlos-flow",
-  "version": "2.11.0",
+  "version": "2.11.2",
   "description": "Carlos 工作流 — AI 编码 Agent 的机械门禁。留痕/派发/验证/裁定/审计/还原，约束写在代码里而非提示词里。单一包支持 Cindy/OpenCode/Cursor/Cline/VS Code/Claude Desktop。",
   "type": "module",
   "main": "src/index.js",
@@ -97,6 +97,10 @@
     "MIGRATION.md",
     "CHANGELOG.md",
     "LICENSE",
-    "AGENTS.md"
+    "AGENTS.md",
+    "INSTALL.md",
+    "RELEASE_NOTES.md",
+    "check-all.sh",
+    "smoke-test.js"
   ]
 }

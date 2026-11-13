@@ -6,10 +6,19 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.argv[2] || process.env.BRIDGE_PORT || "19099", 10);
 const TOKEN = process.env.CARLOS_BRIDGE_TOKEN;
-const MCP_SERVER = process.env.CARLOS_FLOW_MCP_ROOT + "/src/index.js";
+// 路径自探测：环境变量优先（向后兼容），否则按 bridge/ 的位置自动定位项目根目录。
+// 这样在 Cursor / VS Code / Windsurf 里只需填 bridge 脚本路径，无需再手写 ROOT 绝对路径。
+const PROJECT_ROOT = path.resolve(__dirname, "..");
+const MCP_ROOT = process.env.CARLOS_FLOW_MCP_ROOT
+  ? path.resolve(process.env.CARLOS_FLOW_MCP_ROOT)
+  : PROJECT_ROOT;
+const MCP_SERVER = path.resolve(MCP_ROOT, "src/index.js");
 const MAX_REQUEST_SIZE = 1024 * 1024; // 1MB
 const RATE_LIMIT = 10; // 每秒最多请求数
 // 请求超时：必须大于服务端的最长单次执行时间。
@@ -26,9 +35,11 @@ if (!TOKEN) {
 }
 
 // 启动 MCP server 子进程
+// windowsHide: true —— Windows 下隐藏子进程控制台窗口，避免 Bridge 重启时弹黑框。
 const child = spawn(process.execPath, [MCP_SERVER], {
   stdio: ["pipe", "pipe", "pipe"],
   env: { ...process.env },
+  windowsHide: true,
 });
 
 let childStdout = "";
@@ -61,7 +72,12 @@ child.stderr.on("data", (data) => {
 });
 
 child.on("error", (e) => {
-  process.stderr.write("[bridge] 子进程错误: " + e.message + "\n");
+  process.stderr.write("[Carlos-Diagnosis] ❌ MCP server 子进程启动失败: " + e.message + "\n");
+  process.stderr.write(
+    "[Carlos-Suggestion] 💡 请确认 Node.js 可用（node -v），且 " +
+      MCP_SERVER +
+      " 存在；若路径被移动过，可设置环境变量 CARLOS_FLOW_MCP_ROOT 指向项目根目录。\n",
+  );
 });
 
 child.on("exit", (code) => {
@@ -124,7 +140,7 @@ const server = createServer((socket) => {
         // 现在回传 root / flow_home / pid，客户端逐一比对，不符就当“未运行”。
         const health = {
           status: "ok",
-          root: process.env.CARLOS_FLOW_MCP_ROOT || "",
+          root: MCP_ROOT,
           flow_home: process.env.CARLOS_FLOW_HOME || "",
           pid: process.pid,
           port: PORT,

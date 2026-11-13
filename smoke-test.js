@@ -1,98 +1,142 @@
-import net from 'node:net';
-import { performance } from 'node:perf_hooks';
+// 冒烟测试：真 RPC 往返验证 MCP 深度兼容性
+//
+// 关键约束（来自 bridge/mcp-bridge.js）：
+//   1. 每个请求走**独立连接** —— Bridge 响应一个请求后立刻 socket.end()
+//   2. 请求必须带 _token（放在 params._token 或顶层 _token）
+//   3. 速率限制 10 次/秒，本测试仅 2 次
+import { spawn } from "node:child_process";
+import net from "node:net";
+import { performance } from "node:perf_hooks";
 
-const PORT = 19099;
+const PORT = Number(process.env.BRIDGE_PORT || 19099);
+const TOKEN = process.env.CARLOS_BRIDGE_TOKEN || "";
 const EXPECTED_TOOLS_COUNT = 19;
 
-async function runRpcTest() {
+// 单次 RPC：一条连接发一个请求，收满响应就返回
+function rpcOnce(request) {
   return new Promise((resolve, reject) => {
-    const start = performance.now();
-    const client = net.createConnection({ port: PORT, host: '127.0.0.1' }, () => {
-      console.log('>>> Connected to Bridge.');
-      
-      // 1. Send Initialize
-      const initReq = {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: { name: "smoke-test", version: "1.0.0" }
-        }
-      };
-      client.write(JSON.stringify(initReq) + '\n');
-    });
+    const chunks = [];
+    let settled = false;
 
-    let buffer = '';
-    let initialized = false;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      fn(arg);
+    };
 
-    client.on('data', (data) => {
-      buffer += data.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+    const socket = net.createConnection(
+      { port: PORT, host: "127.0.0.1" },
+      () => {
+        socket.write(JSON.stringify(request) + "\n");
+      },
+    );
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          
-          if (msg.id === 1 && msg.result) {
-            console.log('✅ Initialize response received.');
-            initialized = true;
-            
-            // 2. Send tools/list
-            const listReq = {
-              jsonrpc: "2.0",
-              id: 2,
-              method: "tools/list",
-              params: {}
-            };
-            client.write(JSON.stringify(listReq) + '\n');
-          } 
-          else if (msg.id === 2 && msg.result) {
-            const toolCount = msg.result.tools?.length || 0;
-            const end = performance.now();
-            
-            console.log(`>>> Total time: ${(end - start).toFixed(2)}ms`);
-            console.log(`>>> Tools discovered: ${toolCount}`);
-            
-            if (toolCount === EXPECTED_TOOLS_COUNT) {
-              resolve(true);
-            } else {
-              reject(new Error(`Expected ${EXPECTED_TOOLS_COUNT} tools, got ${toolCount}. Compatibility FAILED.`));
-            }
-            client.end();
-          }
-        } catch (e) {
-          // Ignore parse errors for partial lines
-        }
-      }
-    });
+    socket.on("data", (d) => chunks.push(d));
+    socket.on("end", () =>
+      finish(resolve, Buffer.concat(chunks).toString("utf8")),
+    );
+    socket.on("close", () =>
+      finish(resolve, Buffer.concat(chunks).toString("utf8")),
+    );
+    socket.on("error", (err) => finish(reject, err));
 
-    client.on('error', (err) => reject(err));
-    
-    // Timeout safety
     setTimeout(() => {
-      client.destroy();
-      reject(new Error('RPC Test timed out'));
-    }, 5000);
+      socket.destroy();
+      finish(reject, new Error("RPC 超时：" + request.method));
+    }, 10000);
   });
 }
 
-// Start Bridge first
-import { spawn } from 'node:child_process';
-const bridgeProc = spawn(process.execPath, ['bridge/mcp-bridge.js'], { stdio: 'ignore' });
+async function main() {
+  const start = performance.now();
 
-await new Promise(r => setTimeout(r, 1500)); // Wait for bridge startup
+  // 第 1 次：initialize
+  const initRaw = await rpcOnce({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "smoke-test", version: "1.0.0" },
+      _token: TOKEN,
+    },
+  });
+
+  const initMsg = JSON.parse(initRaw.trim().split("\n").filter(Boolean).pop());
+  if (initMsg.error) {
+    throw new Error(
+      "initialize 被拒：" + JSON.stringify(initMsg.error),
+    );
+  }
+  if (!initMsg.result) {
+    throw new Error("initialize 无 result 字段：" + initRaw.trim());
+  }
+  console.log("✅ initialize 握手成功");
+
+  // 第 2 次：tools/list（独立连接）
+  const listRaw = await rpcOnce({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: { _token: TOKEN },
+  });
+
+  const listMsg = JSON.parse(listRaw.trim().split("\n").filter(Boolean).pop());
+  if (listMsg.error) {
+    throw new Error("tools/list 被拒：" + JSON.stringify(listMsg.error));
+  }
+
+  const tools = listMsg.result?.tools || [];
+  const elapsed = (performance.now() - start).toFixed(2);
+
+  console.log(">>> RPC 往返总耗时：" + elapsed + "ms");
+  console.log(">>> 发现工具数：" + tools.length);
+
+  if (tools.length !== EXPECTED_TOOLS_COUNT) {
+    throw new Error(
+      "工具数量不符：期望 " +
+        EXPECTED_TOOLS_COUNT +
+        "，实际 " +
+        tools.length,
+    );
+  }
+
+  console.log("🎉 深度兼容性验证通过（真 RPC 往返拿到 " + tools.length + " 个工具）");
+}
+
+const bridge = spawn(process.execPath, ["bridge/mcp-bridge.js"], {
+  stdio: ["ignore", "ignore", "inherit"],
+  env: { ...process.env },
+});
+
+// 等 Bridge 真正监听端口（最多 8 秒）
+async function waitForPort() {
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    const ok = await new Promise((resolve) => {
+      const s = net.createConnection({ port: PORT, host: "127.0.0.1" });
+      s.on("connect", () => {
+        s.destroy();
+        resolve(true);
+      });
+      s.on("error", () => resolve(false));
+    });
+    if (ok) return true;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return false;
+}
 
 try {
-  await runRpcTest();
-  console.log('🎉 SUCCESS: Deep compatibility verified via real RPC round-trip.');
-  process.exit(0);
+  if (!(await waitForPort())) {
+    throw new Error("Bridge 未能在 8 秒内监听 " + PORT + " 端口");
+  }
+  await main();
+  process.exitCode = 0;
 } catch (err) {
-  console.error(`💥 FAILURE: ${err.message}`);
-  process.exit(1);
+  console.error("💥 冒烟测试失败：" + err.message);
+  process.exitCode = 1;
 } finally {
-  bridgeProc.kill();
+  bridge.kill();
 }
