@@ -9,7 +9,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { PROTOCOL } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
-import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, auditHashMode } from "./state.js";
+import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, auditHashMode, workspaceFingerprint } from "./state.js";
 import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, runNegativeControl, computeOutputHash, enforceScope, MAX_DISPATCH } from "./dispatch.js";
 
 const log = (msg) => {
@@ -67,6 +67,36 @@ const verifyPassed = (state) => {
   const want = cardVerifyCmd(state);
   if (!want) return false;
   return typeof lv.cmd === "string" && lv.cmd.trim() === want;
+};
+
+// 验证状态四态（R4：保持 verify_passed 为 boolean，只**新增**本字段）。
+//
+//   not_run  —— 没跑过 / 没有对应当前卡片的验证结果
+//   fail     —— 跑了但没通过
+//   stale    —— 跑通了，但验证之后代码又变了（指纹不一致）—— 这一态正是 A1 要堵的
+//   pass     —— 跑通且代码自那以后没动过
+//
+// 指纹不可用时（非 git 目录）按 fail-open 处理：算 pass，但在 fingerprint 字段里
+// 如实标注「不可用」，不装作验证过（A1 R1）。
+const verifyState = (state) => {
+  const lv = state && state.last_verify;
+  if (!lv || typeof lv !== "object") return { state: "not_run", fingerprint: "unavailable" };
+  const want = cardVerifyCmd(state);
+  if (!want || typeof lv.cmd !== "string" || lv.cmd.trim() !== want) {
+    return { state: "not_run", fingerprint: "unavailable" };
+  }
+  if (lv.ok !== true) return { state: "fail", fingerprint: "unavailable" };
+
+  const fpWas = lv.fingerprint;
+  if (!fpWas || !fpWas.ok) {
+    return { state: "pass", fingerprint: "unavailable" };
+  }
+  const fpNow = workspaceFingerprint(lv.cwd || process.cwd());
+  if (!fpNow.ok) return { state: "pass", fingerprint: "unavailable" };
+  if (fpNow.diff_sha256 !== fpWas.diff_sha256) {
+    return { state: "stale", fingerprint: fpNow.diff_sha256 };
+  }
+  return { state: "pass", fingerprint: fpNow.diff_sha256 };
 };
 
 // WARN 汇总条数上限：防止 WARN 通胀把返回值灌成噪音，主 Agent 反而开始忽略。
@@ -715,6 +745,31 @@ const TOOLS = [
               "请对当前卡片重新执行 flow_run_verify，再记录裁定。");
           }
 
+          // 防假闭环之五：验证结果必须绑定当时的**代码状态**（A1）。
+          //
+          // 前面三道判断只看「验证跑过 / 跑通了 / 命令对得上」，**不看代码变没变**。
+          // 于是存在这条绕过路径：
+          //   1. flow_run_verify 跑通 → last_verify = {ok:true, cmd:"npm test"}
+          //   2. executor 继续改代码（甚至改坏）
+          //   3. flow_verdict(PASS) → 三道全过 → 放行
+          // 指纹把「验证通过」绑定到一次**可复现的运行**：验证之后再动过代码，指纹就变了。
+          //
+          // 非 git 目录：fail-open（Carlos Flow 支持非 Git 项目），但要在 flow_status
+          // 里如实标注指纹不可用（见 R1）。
+          const fpCwd = a.cwd || (state.last_verify && state.last_verify.cwd) || process.cwd();
+          const fpWas = lv.fingerprint;
+          const fpNow = workspaceFingerprint(fpCwd);
+          if (fpWas && fpWas.ok && fpNow.ok && fpNow.diff_sha256 !== fpWas.diff_sha256) {
+            audit("decision", sessionId, {
+              kind: "verdict_denied",
+              reason: "验证结果已过期（代码在验证后被修改）",
+              fp_was: fpWas.diff_sha256,
+              fp_now: fpNow.diff_sha256,
+            });
+            return fail("验证结果已过期（STALE）：验证通过后代码又被修改，当前 diff 指纹已变化。" +
+              "请重新执行 flow_run_verify 再记录裁定。");
+          }
+
           // 防假闭环之四：越界改动必须被拦住。
           //
           // 「越界直接阻断」的**真实落点**在这里：判定「本次执行有没有改到
@@ -888,6 +943,9 @@ const TOOLS = [
           // verify_passed：真实验证是否通过（last_verify.ok===true 且命令与当前卡片一致）。
           // 注意 verified 只表示「是否已有裁定」，不代表验证通过——两者语义不同，不可混用。
           verify_passed: verifyPassed(state),
+          // 四态验证状态：not_run / fail / stale / pass。
+          // stale = 验证通过后代码被改过 —— 不阻断（fail-open），但必须如实告知。
+          verify_state: verifyState(state).state,
           completed_ok: state.completed_ok === true,
           stale: isStale(state),
           bypass: !!state.bypass,
@@ -1218,6 +1276,9 @@ const TOOLS = [
           ok: result.ok,
           // 输出指纹：把「验证通过」绑定到一次可复现的运行，而不是「我说过了」。
           output_hash: computeOutputHash(result.exitCode, result.stdout, result.stderr),
+          // 代码状态指纹：把「验证通过」绑定到**当时的代码状态**。
+          // 没有它，验证通过后再改坏代码，flow_verdict(PASS) 仍会放行（见 A1）。
+          fingerprint: workspaceFingerprint(workdir || process.cwd()),
         };
         saveState(sessionId, state2);
         
@@ -1279,6 +1340,10 @@ const TOOLS = [
           exitCode: r.after.exitCode,
           ok: r.after.ok,
           output_hash: r.after.hash,
+          // 代码状态指纹：负对照同样是一次「验证通过」，
+          // 必须与 flow_run_verify 一样绑定代码状态，
+          // 否则「先负对照、再改代码、再记 PASS」这条路径会绕过 STALE 闸门。
+          fingerprint: workspaceFingerprint(workdir || process.cwd()),
         };
         saveState(sessionId, state2);
 

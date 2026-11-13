@@ -786,3 +786,66 @@ export function isBypassed(state) {
   if (state.card_ts && state.bypass_ts < state.card_ts) return false;
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// workspaceFingerprint —— 工作区代码状态指纹
+//
+// 为什么需要（A1）：
+//   原来的 PASS 闸门只看 last_verify 的三个字段（存在 / ok===true / cmd 与卡片一致），
+//   **不绑定代码状态**。于是存在这条绕过路径：
+//     1. flow_run_verify 跑通 → last_verify = {ok:true, cmd:"npm test"}
+//     2. executor 继续改代码（甚至改坏）
+//     3. flow_verdict(PASS) → 三个条件全满足 → 放行
+//   指纹把「验证通过」绑定到**一次可复现的运行**：验证之后再动过代码，指纹就变了。
+//
+// 指纹构成：HEAD 提交 + `git diff HEAD` 的全文 + 全部未跟踪文件（路径 + 内容）。
+//   · 未跟踪文件必须计入：新建文件是最常见的越界/破坏手段。
+//   · `.carlos-flow/` 必须排除：跑一次检查会创建状态目录，计入则立即自我失效。
+//
+// 非 git 目录：显式返回 {ok:false, reason:"not_a_git_repo"}，**不崩**。
+//   Carlos Flow 明确支持非 Git 项目，所以调用方要 fail-open（不阻断 PASS），
+//   但要在 flow_status 里如实标注指纹不可用。
+export function workspaceFingerprint(cwd) {
+  const dir = cwd || process.cwd();
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" });
+  if (head.error || head.status !== 0) {
+    return { ok: false, reason: "not_a_git_repo" };
+  }
+  const diff = spawnSync("git", ["diff", "HEAD", "--no-color"], { cwd: dir, encoding: "utf8" });
+  const untracked = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+
+  const h = createHash("sha256");
+  h.update(String(diff.stdout || ""));
+
+  const files = String(untracked.stdout || "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .sort();
+
+  for (const f of files) {
+    // 排除自己的状态目录：跑一次检查就会创建它，若计入指纹则立刻自我失效
+    if (f.startsWith(".carlos-flow/")) continue;
+    h.update(`\u0000untracked-file:${f}\u0000`);
+    try {
+      const buf = fs.readFileSync(path.join(dir, f));
+      // 大文件只入路径 + 大小，不入内容（避免读上万文件/大文件）
+      if (buf.length > 1024 * 1024) {
+        h.update(`size:${buf.length}`);
+      } else {
+        h.update(buf);
+      }
+    } catch (e) {
+      h.update(`<<unreadable: ${e}>>`);
+    }
+  }
+
+  return {
+    ok: true,
+    head: String(head.stdout || "").trim(),
+    diff_sha256: h.digest("hex"),
+  };
+}

@@ -1,3 +1,47 @@
+## [2.11.3] - 2026-11-13 — 多副本治理收敛 + 推 tag 前置门禁 + A1 验证绑代码状态
+
+### 🐛 修复 | Fixed
+
+- **A1：验证结果绑定代码状态（指纹 + 四态）** —— 研究产物《A1-A2-A3 实施前核验清单》确认的绕过路径：
+  `flow_run_verify` 跑通 → executor 继续改代码（甚至改坏）→ `flow_verdict(PASS)` 三道判断全过 → **直接放行**。
+  现在 `last_verify` 记录工作区指纹（HEAD + `git diff HEAD` + 全部未跟踪文件），
+  PASS 闸门新增第四道判断：指纹不一致即拒绝，错误含「验证结果已过期（STALE）」。
+  `flow_status` 新增 `verify_state` 四态（not_run / fail / stale / pass），
+  `verify_passed` **仍保持 boolean** 不破坏下游。
+- **负对照路径同样绑定指纹**：`flow_falsify` 写 `last_verify` 时此前**不记指纹**，
+  于是「先负对照、再改代码、再记 PASS」这条路径会绕过 STALE 闸门 —— 一并修复。
+- **`init` 在 Windows 上产出非法 JSON**（影响所有 Windows 用户的安装）：
+  旧写法把 Windows 路径的**原始反斜杠**塞进 JSON 模板，
+  产出含 `d` `
+` `` 等非法转义序列的配置文件，解析即报
+  「Bad escaped character」，表现为「安装成功但插件不出现」。
+  现在 JSON 目标用 JSON 转义、YAML 目标（.mcprc）用正斜杠路径。
+
+### 🔒 变更 | Changed
+
+- **多副本治理收敛**（本机 5 套副本 → 2 套）：
+  - 归档 `carlos-flow-cindy` / `carlos-flow-opencode` / `_carlos-flow-remote` 等 7 个目录
+    （三个 git 副本的**独有提交实测均为 0**，无内容丢失）；保留发布线与线上运行副本两份。
+  - 线上运行副本（`D:cindycarlos-flow-mcp`）从 2.8.0 **同步到最新发布版**，
+    此前它的 bridge 无 `windowsHide`、无路径自探测 —— 也就是说仓库里修好的黑窗问题**在用户机器上根本没生效**。
+  - Cindy **已安装插件**（旧 v1.0.5 架构）两处 spawn 补上 `windowsHide: true` ——
+    这才是用户实际看到的黑色控制台窗口的来源。
+  - npm 全局安装同步到最新发布版。
+
+### 🧪 新增门禁 | Gates
+
+- **推 tag 前置钩子**（`scripts/install-hooks.mjs`）：只拦截 **tag 推送**，依次校验
+  版本号一致性（`sync-version --check`）/ `check-all.sh` 真 RPC 往返 / tag 重名。
+  背景：推 `v*` tag **等于**触发 npm 自动发布，此前 v2.11.1 那样没跑过验证的提交被打 tag 推上远端。
+- **`check:templates` 模板渲染门禁**：用真实 Windows 路径渲染全部模板，
+  断言产物可解析且路径无损，并校验 `client/carlos.js` 的转义写法与门禁**同源**。
+- **`test:stale` A1 验证测试**：把研究文档里 4 段需要人手敲的命令（V1.1~V1.4）变成 14 条自动化断言。
+
+### ✨ 新增 | Added
+
+- **`sync-version.mjs --check` 只读模式**：有偏差退出码 1 且不写文件，供推 tag 钩子做精确判定。
+- **`sync-version.mjs` 批量对齐版本号**：以 package.json 为唯一真源，同步 package-lock.json / ghost.json / TRIGGER_GUIDE.md / CHANGELOG.md。
+
 ## [2.11.2] - 2026-11-13 — 修复 Bridge 转发通路与 Windows 黑窗，新增路径自探测
 
 ### ✨ 新增 | Added
