@@ -7,6 +7,8 @@
 // 代价：protocol.js 依赖 state.js（纯数据模块，无副作用，无循环依赖）。
 import { defaultState } from "./state.js";
 
+export const GUIDE_MODE = { ROSTER: "主agent(Orchestrator),开发(executor+developer),测试(executor+tester),审核(auditor+reviewer)", TALKING_POINTS: ["一次只说一件事", "术语给类比", "给选择题不抛开放式问题", "复述意图", "明示能力边界"], REPORT_TEMPLATE: "【在做什么】/【已经完成】/【要你选】/【还有什么风险】" };
+
 export const PROTOCOL = {
   ROUTE_TABLE: `| 档 | 场景 | 动作 |
 |---|---|---|

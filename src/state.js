@@ -21,6 +21,11 @@ export function expandHome(p) {
   return p;
 }
 
+// 审计链的「链起点」占位值：64 个 0。
+// 全零 prevHash = 「这条记录开启一条新链」，是合法的链首标记，
+// 不是「校验失败」的证据 —— 早期版本写入器跨天不回连时就是这么写的。
+const ZERO_HASH = "0".repeat(64);
+
 export const FLOW_HOME = path.normalize(
   expandHome(process.env.CARLOS_FLOW_HOME) || path.join(os.homedir(), ".carlos-flow")
 );
@@ -344,7 +349,7 @@ export function withStateLock(sid, fn, opts = {}) {
 // 读取审计文件最后一条记录的 hash（多进程安全：每次从磁盘尾部取，不依赖进程内变量）
 // 旧格式记录没有 hash 字段 → 视为链起点（prev = 全 0）
 function lastHashOf(file) {
-  const ZERO = "0".repeat(64);
+  const ZERO = ZERO_HASH;
   try {
     const stat = fs.statSync(file);
     if (!stat || stat.size === 0) return ZERO;

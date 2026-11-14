@@ -82,17 +82,20 @@ const AXIS_PROMPTS = {
   },
 };
 
+import { PROMPT_PROFILES } from "./profiles.js";
+
 // role ∈ "executor" | "auditor"
-// axis ∈ undefined（默认四段合同） | "standards" | "spec"（双轴审计模式）
-export function buildContractPrompt(role, card, extra, axis) {
+// options ∈ { axis?: "standards"|"spec", profile?: string }
+export function buildContractPrompt(role, card, extra, options = {}) {
   const isAuditor = role === "auditor";
   const isExecutor = role === "executor";
   if (!isAuditor && !isExecutor) {
     throw new Error(`buildContractPrompt: 未知 role "${role}"（仅支持 executor/auditor）`);
   }
 
-  // 模式注入：指定了 axis 就走配置表（覆盖式），否则走原有逻辑
+  // 模式注入：指定了 axis/profile 就走配置表（覆盖式），否则走原有逻辑
   let objective, outputFormat, toolGuidance, taskBoundaries;
+  const { axis, profile } = typeof options === 'string' ? { axis: options } : options;
 
   if (axis && AXIS_PROMPTS[axis]) {
     const cfg = AXIS_PROMPTS[axis];
@@ -100,6 +103,12 @@ export function buildContractPrompt(role, card, extra, axis) {
     outputFormat = `output format: ${cfg.format}`;
     toolGuidance = `tool guidance: ${cfg.guidance}`;
     taskBoundaries = `task boundaries: ${cfg.boundaries}`;
+  } else if (profile && PROMPT_PROFILES[profile]) {
+    const cfg = PROMPT_PROFILES[profile];
+    objective = `objective: ${cfg.objective}`;
+    outputFormat = `output format: ${cfg.format}`;
+    toolGuidance = `tool guidance: ${cfg.guidance}`;
+    taskBoundaries = isAuditor ? "task boundaries: 零文件改动，只读取证" : "task boundaries: 无文件可改，只读任务";
   } else {
     const c = card && typeof card === "object" ? card : {};
 
