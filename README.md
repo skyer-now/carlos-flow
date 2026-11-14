@@ -1,10 +1,12 @@
-# Carlos 工作流
+# Carlos 工作流 (Carlos-Flow)
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/skyer-now/carlos-flow)
-[![Version](https://img.shields.io/badge/version-2.12.1-blue)](https://www.npmjs.com/package/carlos-flow)
+[![Version](https://img.shields.io/badge/version-2.12.2-blue)](https://www.npmjs.com/package/carlos-flow)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-你是否在用 OpenCode、Claude Code 或其他 AI 工具写代码时遇到过困扰？
+[中文版](README.md) | [English Version](README.en.md)
+
+你是否在使用 OpenCode、Claude Code 或其他 AI 编程工具时遇到过困扰？
 * **AI 总是“瞎执行”**：指令明明说得很清楚，AI 却完全没按要求办，还得你花时间纠错。
 * **流程门槛高**：想用 AI 处理复杂任务，却被各种报错和繁琐的工具链挡在门外。
 
@@ -27,10 +29,20 @@
 
 ---
 
+## ⚙️ 工作原理
+
+Carlos 工作流的核心逻辑是“闭环质检”：
+1. **任务录入**：你设定目标，系统将其记录为任务卡。
+2. **角色调度**：自动派发执行与审计角色，规范操作流程。
+3. **自动化质检**：AI 的产出必须通过系统预设的自动化回归测试。
+4. **结论裁定**：只有通过测试与双轴门禁，任务才被判定为“已完成”。
+
+---
+
 ## ❓ 常见问题 (FAQ)
 
 **Q：我用的是 OpenCode / Claude Code，能装吗？**
-A：完全支持！Carlos 工作流不挑工具。只要你用的是主流的 AI 编程环境，直接装上就行。
+A：完全支持！Carlos 工作流不挑工具，装上就能用。
 
 **Q：装上它，我还需要像以前一样写代码吗？**
 A：你需要继续写你的核心逻辑，但 Carlos 会帮你把那些“繁琐的检查”、“步骤引导”和“合规审计”全部自动处理掉。这相当于雇了个专门帮你查错和导航的助理。
@@ -40,6 +52,9 @@ A：完全没问题。它的设计目标就是让不懂复杂技术的人，也�
 
 ---
 
-### 准备好开始了吗？
+## 🚀 准备好开始了吗？
 只需几行命令，为你的 AI 加上这层保护罩。
-(安装指引...)
+```bash
+npm install -g carlos-flow
+carlos init
+```
