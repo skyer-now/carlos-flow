@@ -557,11 +557,23 @@ export function verifyAuditChain(opts = {}) {
   const fullChain = typeof opts.fullChain === "boolean" ? opts.fullChain : true;
   if (fullChain && !opts.date) {
     // 全链验证：逐天（按文件名升序 == 升时）串联，每天的 tail 是下一天的 prevHash。
+    //
+    // 跨天重启容忍（2026-11-14）：
+    //   写入侧 nextPrevHash() 取「当天文件最后一条**带 hash** 的记录」作为前驱；
+    //   若当天先前的记录都是 v2.5 升级上来的 legacy 记录（无 hash），就取不到 tail，
+    //   于是这条链首记录的 prevHash 只能是全 0。
+    //   这不是篡改，是**合法的链首**。旧校验器一律要求 prevHash === 运行中的 prev，
+    //   于是每天的第一条带 hash 记录都被判 broken —— 实测 4 处误报全部是这个形态。
+    //   误报比漏报更伤信任（同 legacy 那条注释的口径）。
+    //
+    // 规则：一天内**第一条带 hash 的记录**若 prevHash 为全 0，
+    //   按链首处理 —— 用它自己的 prevHash（全 0）重算 hash，吻合即放行；
+    //   从它开始照常串联。计数为 dayRestart，与 broken 分开报，不静默吞掉。
     const files = auditDayFiles();
     const byDay = [];
-    let total = 0, broken = 0, legacy = 0;
+    let total = 0, broken = 0, legacy = 0, restart = 0;
     const brokenAt = [];
-    let prev = "0".repeat(64); // 链起点
+    let prev = ZERO_HASH; // 链起点
     for (const f of files) {
       let raw = "";
       try {
@@ -569,7 +581,8 @@ export function verifyAuditChain(opts = {}) {
       } catch {
         continue;
       }
-      let dayBroken = 0, dayLegacy = 0;
+      let dayBroken = 0, dayLegacy = 0, dayRestart = 0;
+      let hashedSeen = 0;
       for (const line of raw.split("\n")) {
         const t = line.trim();
         if (!t) continue;
@@ -586,19 +599,33 @@ export function verifyAuditChain(opts = {}) {
           dayLegacy++;
           continue;
         }
-        const expect = computeAuditHash(r, prev);
-        if (expect !== r.hash || r.prevHash !== prev) {
+        hashedSeen++;
+        // 一天内的首条带 hash 记录且 prevHash 为全 0 → 合法链首（见上）。
+        const isDayStart = hashedSeen === 1 && r.prevHash === ZERO_HASH;
+        const base = isDayStart ? ZERO_HASH : prev;
+        const expect = computeAuditHash(r, base);
+        if (isDayStart) {
+          // 只有当它自己的 hash 确实是用全 0 前驱算出来的才算合法链首；
+          // 否则仍按 broken 处理（防「把任意记录伪装成链首」）。
+          if (expect === r.hash) {
+            restart++;
+            dayRestart++;
+            prev = r.hash;
+            continue;
+          }
+        }
+        if (expect !== r.hash || r.prevHash !== base) {
           broken++;
           dayBroken++;
           if (brokenAt.length < 10) brokenAt.push({ date: f.slice(0, 10), ts: r.ts, type: r.type, kind: r.kind });
         }
         prev = r.hash;
       }
-      byDay.push({ date: f.slice(0, 10), dayBroken, dayLegacy, tailHash: prev });
+      byDay.push({ date: f.slice(0, 10), dayBroken, dayLegacy, dayRestart, tailHash: prev });
     }
     return {
-      ok: broken === 0, total, broken, legacy, brokenAt, byDay, mode: auditHashMode(),
-      note: "全链验证：逐天串联，每天的 tail 是下一天的前驱。",
+      ok: broken === 0, total, broken, legacy, restart, brokenAt, byDay, mode: auditHashMode(),
+      note: "全链验证：逐天串联，每天的 tail 是下一天的前驱。dayRestart 为「当天首条带 hash 记录以全 0 前驱合法起链」的处数，不是篡改。",
     };
   }
 
