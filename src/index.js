@@ -2,6 +2,7 @@
 // Carlos 工作流的机械门禁工具集（留痕 / 派发 / 裁定 / 审计 / 快照还原计划）。
 // 重要：stdout 是 MCP 传输通道，所有日志一律走 stderr。
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createServer, connect } from "node:net";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -1572,8 +1573,20 @@ const TOOLS = [
 
 // ---- 服务器装配 ------------------------------------------------------------
 
+// server 版本号从 package.json 读，避免硬编码与发布版本脱节。
+// 历史问题：此前写死 "1.0.0"，而 package.json 已是 2.12.0 ——
+// 客户端 initialize 拿到的是错版本，无法据此判断真实能力。
+const pkgVersion = (() => {
+  try {
+    const pkgUrl = new URL("../package.json", import.meta.url);
+    return JSON.parse(readFileSync(pkgUrl, "utf8")).version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
+
 const server = new Server(
-  { name: "carlos-flow", version: "1.0.0" },
+  { name: "carlos-flow", version: pkgVersion },
   { capabilities: { tools: {} } },
 );
 

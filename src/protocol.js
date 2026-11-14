@@ -50,15 +50,23 @@ const SENSITIVE_NAMES = new Set([
   "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
   "poetry.lock", "requirements.txt",
   "dockerfile", "docker-compose.yml", "docker-compose.yaml", "makefile",
+  // 凭证与私钥（2026-11-14 补）：此前 .ssh/id_rsa、.npmrc、.aws/credentials
+  // 这类高价值目标一律放行，executor 改它们不会触发 confirmed 确认。
+  "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ed448",
+  ".npmrc", ".netrc", ".pgpass", "credentials", "known_hosts", "authorized_keys",
 ]);
 
 const SENSITIVE_SEGMENTS = new Set([
   "migrations", "deploy", "deployment", "k8s", "kube",
   ".github", ".gitlab", "secrets", "certs", "terraform",
+  // 凭证目录（2026-11-14 补）：只检查目录段，所以 ".ssh" 能拦住 .ssh/id_rsa。
+  ".ssh", ".aws", ".gnupg", ".docker", ".azure", ".gcloud",
 ]);
 
 const SENSITIVE_EXTENSIONS = new Set([
   ".pem", ".key", ".p12", ".pfx", ".env",
+  // 密码库与签名材料（2026-11-14 补）
+  ".kdbx", ".kdb", ".gpg", ".asc", ".crt", ".cer", ".der",
 ]);
 
 export function isSensitive(rel) {

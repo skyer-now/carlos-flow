@@ -4,17 +4,19 @@ import fs from "node:fs";
 
 import os from 'node:os';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 状态/审计根目录默认值：与 src/state.js 的 FLOW_HOME 保持一致（跨平台）
-const DEFAULT_FLOW_HOME = join(os.homedir(), '.carlos-flow');
+// 测试状态目录：**强制隔离**，绝不写真实 ~/.carlos-flow。
+// 历史问题（2026-11-14 修）：旧实现回退到真实 HOME，导致测试会话污染用户数据。
+const FLOW_HOME = process.env.CARLOS_FLOW_HOME || mkdtempSync(join(tmpdir(), 'carlos-p0-home-'));
 
 // 仓库根目录：优先环境变量，缺失时回退到本脚本所在目录的上一级（= 仓库根）
 const REPO_ROOT = dirname(fileURLToPath(import.meta.url)) + "/..";
 const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || REPO_ROOT;
 const CLIENT = [ROOT + "/client/carlos.js", ROOT + "/carlos.js"].find(p => fs.existsSync(p));
-const FLOW_HOME = process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME;
 // 独立 Bridge 端口：避免复用本机已有的 Bridge（它可能带旧的 FLOW_HOME）
 const BRIDGE_PORT = String(process.env.BRIDGE_PORT || (19500 + (process.pid % 400)));
 
@@ -310,3 +312,12 @@ function cleanupBridge() {
 }
 
 main();
+
+// 清理本次测试的隔离状态目录（只在自建时删，显式传入的目录不动）
+process.on('exit', () => {
+  try {
+    if (!process.env.CARLOS_FLOW_HOME && FLOW_HOME && FLOW_HOME.includes('carlos-p0-home-')) {
+      fs.rmSync(FLOW_HOME, { recursive: true, force: true });
+    }
+  } catch { /* 清理失败不影响测试结果 */ }
+});

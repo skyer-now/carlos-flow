@@ -9,8 +9,15 @@ import { join, resolve, dirname } from 'node:path';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 状态/审计根目录默认值：与 src/state.js 的 FLOW_HOME 保持一致（跨平台）
-const DEFAULT_FLOW_HOME = join(os.homedir(), '.carlos-flow');
+// 测试状态目录：**强制隔离**，绝不写真实 ~/.carlos-flow。
+//
+// 历史问题（2026-11-14 修）：旧实现 `process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME`
+// 在未设环境变量时回退到真实 HOME，每跑一次 test:all 就往用户目录里写几百个会话，
+// 实测 6032 个会话目录里 99% 是测试残留，把真实使用数据淹没了。
+//
+// 现在：优先用显式传入的 CARLOS_FLOW_HOME；没传就 mkdtemp 建临时目录，
+// 测试结束在 finally 里删除（见文件末尾）。
+const FLOW_HOME = process.env.CARLOS_FLOW_HOME || mkdtempSync(join(tmpdir(), 'carlos-e2e-home-'));
 
 // 仓库根目录：优先环境变量，缺失时回退到本脚本所在目录的上一级（= 仓库根）
 // 这样本地 `npm run test:e2e` 无需额外配置环境变量也能跑
@@ -22,7 +29,7 @@ const CLIENT = [
   ROOT + "/carlos.js",
 ].find((p) => fs.existsSync(p)) || ROOT + "/client/carlos.js";
 const SID = "e2e-" + Date.now();
-const FLOW_HOME = process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME;
+// FLOW_HOME 已改为强制隔离（见上方声明处）；此处保留常量名避免大面积改动。
 // 独立 Bridge 端口：避免复用本机已有的 Bridge（它可能带旧的 FLOW_HOME），
 // 确保本次测试的状态真正落到 FLOW_HOME
 const BRIDGE_PORT = String(process.env.BRIDGE_PORT || (19100 + (process.pid % 400)));
@@ -228,7 +235,7 @@ async function main() {
 
   // 14. 状态目录落点
   r = await call("flow_status", { sessionId: SID });
-  const runDir = path.join(process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME, "gate-state", "runs", SID);
+  const runDir = path.join(FLOW_HOME, "gate-state", "runs", SID);
   const landed = fs.existsSync(path.join(runDir, "state.json"));
   check("14. 状态落盘到 FLOW_HOME", landed, runDir);
 
@@ -926,3 +933,12 @@ function cleanupBridge() {
 }
 
 main().catch((e) => { console.error("测试异常:", e); process.exit(1); });
+
+// 清理本次测试的隔离状态目录（只在自建时删，显式传入的目录不动）
+process.on('exit', () => {
+  try {
+    if (!process.env.CARLOS_FLOW_HOME && FLOW_HOME && FLOW_HOME.includes('carlos-e2e-home-')) {
+      fs.rmSync(FLOW_HOME, { recursive: true, force: true });
+    }
+  } catch { /* 清理失败不影响测试结果 */ }
+});
