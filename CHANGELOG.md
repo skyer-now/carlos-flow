@@ -28,6 +28,13 @@
     这才是用户实际看到的黑色控制台窗口的来源。
   - npm 全局安装同步到最新发布版。
 
+### 🔒 发布控制 | Release Control
+
+- **发布暂停开关**（`scripts/publish-gate.mjs` + `release.yml`）：
+  `RELEASE_PAUSED=1` 时停止 npm publish，只建 GitHub Release；
+  设为 `0` 恢复。工作区本地操作默认暂停（`RELEASE_PAUSED: '1'`），
+  需要发布时再开启。防止修复未完成时自动把半成品推上 npm。
+
 ### 🧪 新增门禁 | Gates
 
 - **推 tag 前置钩子**（`scripts/install-hooks.mjs`）：只拦截 **tag 推送**，依次校验

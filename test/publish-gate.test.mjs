@@ -9,7 +9,7 @@
 // 运行：node test/publish-gate.test.mjs
 
 import assert from "node:assert";
-import { decidePublish, semverCompare } from "../scripts/publish-gate.mjs";
+import { decidePublish, semverCompare, releasePaused } from "../scripts/publish-gate.mjs";
 
 let passed = 0;
 function check(name, fn) {
@@ -29,6 +29,25 @@ check("2.11.0 > 2.10.0", () => assert.ok(semverCompare("2.11.0", "2.10.0") > 0))
 check("2.11.0 == 2.11.0", () => assert.strictEqual(semverCompare("2.11.0", "2.11.0"), 0));
 check("2.10.0 < 2.11.0", () => assert.ok(semverCompare("2.10.0", "2.11.0") < 0));
 check("2.9.0 < 2.10.0", () => assert.ok(semverCompare("2.9.0", "2.10.0") < 0));
+
+console.log("▶ 发布闸：暂停开关");
+check("RELEASE_PAUSED=1 → 禁止发布", () => {
+  process.env.RELEASE_PAUSED = "1";
+  const r = releasePaused();
+  assert.strictEqual(r, true);
+  delete process.env.RELEASE_PAUSED;
+});
+check("RELEASE_PAUSED=0 → 允许发布", () => {
+  process.env.RELEASE_PAUSED = "0";
+  const r = releasePaused();
+  assert.strictEqual(r, false);
+  delete process.env.RELEASE_PAUSED;
+});
+check("RELEASE_PAUSED 未设置 → 允许发布", () => {
+  delete process.env.RELEASE_PAUSED;
+  const r = releasePaused();
+  assert.strictEqual(r, false);
+});
 
 console.log("▶ 发布闸：放行 / 拦截方向");
 check("registry 无版本 → 放行", () => {

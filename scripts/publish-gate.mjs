@@ -17,6 +17,11 @@
 //   node scripts/publish-gate.mjs --count 12
 //
 // 输出：向 $GITHUB_OUTPUT 写 publish=true/false（若有该环境变量），并打印人话结论。
+//
+// ===== 发布暂停开关 =====
+//   RELEASE_PAUSED=1  → 停止所有 npm publish（仅建 GitHub Release）
+//   RELEASE_PAUSED=0  → 恢复正常发布（由 deploy 方决定是否启用）
+//   本机操作时默认开闸，仅 CI 触发推送时带开关才生效
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, appendFileSync } from "node:fs";
@@ -25,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// 语义化版本比较：a > b 返回正数，a < b 返回负数，相等返回 0
+/** 语义化版本比较：a > b 返回正数，a < b 返回负数，相等返回 0 */
 export function semverCompare(a, b) {
   const pa = String(a).split(/[.-]/).map((x) => Number(x) || 0);
   const pb = String(b).split(/[.-]/).map((x) => Number(x) || 0);
@@ -37,7 +42,7 @@ export function semverCompare(a, b) {
   return 0;
 }
 
-// 纯函数：给定版本与 registry 现状，返回是否允许发布
+/** 纯函数：给定版本与 registry 现状，返回是否允许发布 */
 export function decidePublish({ version, latest, count }) {
   if (!latest || !count || count <= 1) {
     return { publish: true, reason: "registry 暂无已发布版本 —— 允许发布" };
@@ -58,6 +63,13 @@ export function decidePublish({ version, latest, count }) {
     publish: false,
     reason: `本次版本 ${version} 不高于已发布最新版 ${latest} —— 跳过 npm publish（仅建 Release）`,
   };
+}
+
+/** 发布暂停指令：RELEASE_PAUSED 为非空非 0 时禁止 npm publish */
+export function releasePaused() {
+  const v = String(process.env.RELEASE_PAUSED || "").trim().toLowerCase();
+  if (!v || v === "0" || v === "false") return false;
+  return true;
 }
 
 function argOf(name) {
@@ -100,13 +112,22 @@ function main() {
     }
   }
 
+  if (releasePaused()) {
+    const reason = "RELEASE_PAUSED 已设置 → 停止所有 npm publish（仅建 Release）";
+    console.log(`本次版本：${version} ｜ registry latest：${latest || "(无)"} ｜ 已发布版本数：${count}`);
+    console.log(reason);
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, "publish=false\n");
+    console.log("publish=false");
+    return;
+  }
+
   const { publish, reason } = decidePublish({
     version,
     latest: latest || "",
     count,
   });
 
-  console.log(`▶ 本次版本：${version}｜registry latest：${latest || "(无)"}｜已发布版本数：${count}`);
+  console.log(`本次版本：${version} ｜ registry latest：${latest || "(无)"} ｜ 已发布版本数：${count}`);
   console.log(`${publish ? "✓" : "✗"} ${reason}`);
 
   if (process.env.GITHUB_OUTPUT) {
