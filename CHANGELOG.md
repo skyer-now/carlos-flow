@@ -1,3 +1,43 @@
+## [2.12.0] - 2026-11-14 — 发布暂停开关 + 19 个工具的契约文档
+
+### ✨ 新增 | Added
+
+- **发布暂停开关**（`scripts/publish-gate.mjs` + `release.yml`）：
+  `RELEASE_PAUSED=1` 时发布闸直接返回 `publish=false`，不再走版本比较逻辑；
+  设为 `0` 恢复正常发布。工作区默认暂停（`RELEASE_PAUSED: '1'`），
+  需要发版时再开启。背景：推 `v*` tag 等于触发 npm 自动发布，
+  此前出现过修复尚未完成就把版本推上去的情况。
+- **工具契约文档**（`docs/TOOL_CONTRACTS.md`）：把 19 个工具的状态门、问题层、
+  读写字段、测试覆盖固化成一份可核对的文档，供后续维护与新人上手。
+  含 26 个状态字段的读写者清单、v0→v4 迁移链、`flow_verdict` 的
+  9 组判断（15 个 return 点，2 个无条件 + 13 个仅 PASS）。
+- **测试覆盖统计脚本**（`test/count-tool-refs.mjs`、`test/count-tool-calls.mjs`）：
+  统计每个工具在测试里的真实调用文件数与调用次数，文档里的数字可一键复现。
+  调用口径含四种形式：进程内 `call()`、JSON-RPC `name:`、CLI `spawnSync`、
+  激活计划 `s.tool ===` 断言。
+
+### 🐛 修复 | Fixed
+
+- **并发套件误判普通卡后写为泄漏**：`test/concurrency-e2e.mjs` 的零泄漏判定
+  只看 `pending.length === 0 && 卡片字段空`，但用例故意让两个进程提交
+  **不同类型**的卡（占位卡 vs 普通卡）。当两个进程都读到空 prev 时，
+  普通卡后写落盘的 `activation_activated=false + pending=[]` 是**正确行为**
+  （普通卡不上闸门），被误判为泄漏（实测 457 轮里偶发 1 次）。
+  现在 `stillLeak` 增加 `activation_activated === true` 条件：
+  只有「最终状态是占位卡却 `pending=[]`」才算真泄漏。
+  真缺陷（占位卡被错误清空）仍是 `activation_activated=true + pending=[]`，照样能拓住。
+
+### 📚 文档 | Docs
+
+- 新增 `docs/TOOL_CONTRACTS.md`（640 行），含：
+  - 三层分类（状态门 9 个 / 工作流辅助 3 个 / 追溯查询 7 个）
+  - 19 张契约卡，每张固定四维
+  - 26 个状态字段的写入者 / 读取者 / 作用
+  - `flow_verdict` 的 9 组判断与顺序为何不可调换
+  - 读写矩阵总表、维护检查清单、已知局限
+- 如实记录代码注释瑕疵：`src/index.js` 里门禁注释编号「之四」「之五」
+  各出现两次且缺「之一」，不影响执行顺序但会误导维护者
+
 ## [2.11.3] - 2026-11-13 — 多副本治理收敛 + 推 tag 前置门禁 + A1 验证绑代码状态
 
 ### 🐛 修复 | Fixed

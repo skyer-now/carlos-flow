@@ -101,7 +101,7 @@ jobs:
           # RELEASE_PAUSED=1 停止 npm publish（只建 GitHub Release）
           # RELEASE_PAUSED=0 恢复正常发布
           # 恢复指令：把值改为 0 并推 tag，即可获得下一次的 npm 发布
-          RELEASE_PAUSED: '1'
+          RELEASE_PAUSED: '0'
 
       # 发布到 npm（有发布闸守卫，已存在/旧版本均跳过；409 兜底）
       - name: 发布到 npm（发布闸放行时才执行）
