@@ -27,7 +27,9 @@ const SERVER = join(REPO_ROOT, "src", "index.js");
 const QUOTE = "并发回归 请把激活闸门跑通";
 const ROUNDS = Number(process.env.CONCURRENCY_ROUNDS) || 40;
 // 重试次数：**默认 0（不重试）**。
-// 并发套件在高负载下偶发「假泄漏」（读到了写入中间态），偶发红会阻塞合并。
+// 并发套件曾偶发「假泄漏」，根因已查明：用例故意让两个进程提交**不同类型**的卡
+// （占位卡 vs 普通卡），普通卡后写时 activation_activated=false + pending=[] 是正确
+// 行为，被误判为泄漏。已在判定里加 activation_activated 条件修复。
 // 但变���测试正是**期望**套件失败的（用它捕获退化），若套件自带重试会让变异测试耗时翻倍，
 // 所以重试必须**显式开启**：CI 里设 CONCURRENCY_RETRY=1，mutation-check 不设。
 // 重试只在「两次都失败」时才判红 —— 真缺陷不会被重试掩盖（两次都会红）。
@@ -160,7 +162,17 @@ async function main() {
       const s2 = (st2 && st2.card && st2.card.scope) || [];
       const a2 = (st2 && st2.card && st2.card.acceptance) || [];
       const v2 = st2 && st2.card && st2.card.verify;
+      // 只有「最终状态是占位卡（activation_activated=true）却 pending=[]」才算泄漏。
+      //
+      // 为什么必须检查 activation_activated：
+      //   本用例故意让两个进程提交**不同类型**的卡（c1=占位卡 activation:true，
+      //   c2=普通卡）。若两个进程都读到空 prev，普通卡后写时落盘的
+      //   activation_activated=false + pending=[] 是**正确行为**（普通卡不上闸门），
+      //   不是闸门被清空。此前漏掉这个条件，导致普通卡后写被误判为泄漏
+      //   （实测 457 轮里偶发 1 次，repro：组2第37轮 activation_activated=false）。
+      //   真泄漏（占位卡被错误清空）仍是 activation_activated=true + pending=[]，照样能拓住。
       const stillLeak = p2 && p2.length === 0 &&
+        st2.activation_activated === true &&
         (s2.length === 0 || a2.length === 0 || !(v2 && v2.cmd));
       if (!stillLeak) continue; // 假警报（未稳定/被后续写入覆盖）
       leaked++;
