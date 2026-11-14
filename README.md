@@ -1,28 +1,62 @@
 # Carlos-Flow
 
-自动化 AI 审计工作流，通过 Claim-Dispatch-Audit-Verdict 四阶段门禁确保代码安全。
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/skyer-now/carlos-flow)
+[![Version](https://img.shields.io/badge/version-2.12.1-blue)](https://www.npmjs.com/package/carlos-flow)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## 🚀 向导模式 (Wizard Mode)
+**Carlos-Flow** 是一个面向 AI 智能体的安全审计工作流引擎，通过机械化的门禁（Claim-Dispatch-Audit-Verdict）确保每一行 AI 生成的代码都经过合规验证。
 
-Carlos-Flow 现已支持**向导模式**，通过“自动组队”与“风险分级”机制，大幅降低开发门槛：
+---
 
-- **智能组队**：系统根据任务风险 (Tier) 自动派遣 Executor/Auditor。
-- **自动编排**：无需手动提交复杂的合同，Carlos 自动完成 Dispatch → Verify → Verdict 全循环。
-- **双轴审计**：即使在向导模式下，所有改动依然通过“双轴审计”门禁，确保代码生产安全。
+## ⚡️ 核心功能：向导模式 (Wizard Mode)
 
-> 通过 `carlos flow_mode --mode guide` 即可一键激活。
+对于非技术用户，Carlos-Flow 提供全新的**向导模式**，通过“自动组队”与“风险分级”机制，将复杂的审计流程转化为自动化执行：
+
+- **自动化协作**：根据任务目标，系统自动完成组队（开发/测试/审核）与任务派发。
+- **动态风险评估**：基于 Tier 自动匹配门禁强度，无需手动配置。
+- **全流程陪伴**：任务执行过程全透明，实时反馈测试结果与审计意见。
+
+> 开启命令：`carlos flow_mode --mode guide`
+
+---
+
+## 🛡️ 审计门禁链 (Mechanism)
+
+Carlos-Flow 的安全性基于严密的流程节点：
+
+```mermaid
+graph LR
+    A[需求录入] --> B(Claim 角色)
+    B --> C[Dispatch 合同派发]
+    C --> D{Verify 自动化测试}
+    D -->|PASS| E[Verdict 裁定]
+    E -->|PASS| F[审计链归档]
+    D -->|FAIL| C
+```
+
+---
+
+## 🚀 快速上手
+
+```bash
+# 全局安装
+npm install -g carlos-flow
+
+# 初始化工作流
+carlos init
+```
+
+---
 
 ## ❓ 常见问题 (FAQ)
 
-**Q: 向导模式与专业模式有什么区别？**
-A: 专业模式 (Pro) 适合熟练用户，所有派发需手动确认；向导模式 (Guide) 是“自动化陪伴”，系统会主动提示进度并自动触发回归测试。
+**Q: 向导模式能绕过门禁吗？**
+A: **绝对不会**。向导模式仅优化了交互和工作流编排，底层的所有安全门禁（双轴审计、指纹校验）强制执行，确保生产环境安全。
 
-**Q: 开启向导模式会降低安全性吗？**
-A: 不会。向导模式仅优化了交互与指令注入，所有底层的安全门禁 (双轴审计、指纹校验、O1 越界拦截) 依然严格生效。
+**Q: 如何获取任务的审计报告？**
+A: 每项任务执行完毕后，审计记录会自动留痕，你可以使用 `carlos flow_audit` 查看流水，或在 `.carlos-flow/gate-state/` 目录下获取归档文件。
 
-**Q: 如何在 GitHub 上查看详细的设计方案？**
-A: 请参考仓库中的 `docs/PLAN_v4.md`。
+---
 
-## 🛠 核心机制
-
-Carlos-Flow 是一个自动化 AI 审计工作流，通过 Claim-Dispatch-Audit-Verdict 四阶段门禁确保代码安全。
+## 📝 贡献说明
+欢迎提交 Issues 或 Pull Requests。在提交前，请确保通过本地 CI 检查：`npm run test:all`。
