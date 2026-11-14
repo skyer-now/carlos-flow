@@ -910,6 +910,20 @@ const TOOLS = [
     },
   },
 
+    {
+    name: "flow_mode",
+    description: "切换工作流模式：pro（专业）/ guide（向导）。",
+    inputSchema: { type: "object", properties: { sessionId: { type: "string" }, mode: { type: "string", enum: ["pro", "guide"] }, reason: { type: "string" } }, required: ["mode"] },
+    handler: async (args) => {
+      const { sessionId, mode, reason } = args;
+      const state = loadState(sessionId || "unknown");
+      state.mode = mode;
+      state.mode_ts = Date.now();
+      saveState(sessionId, state);
+      audit("decision", sessionId || "unknown", { kind: "mode_on", mode: mode, reason: reason });
+      return ok({ mode: state.mode });
+    }
+  },
   // 6 -----------------------------------------------------------------------
   {
     name: "flow_status",

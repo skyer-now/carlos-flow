@@ -8,9 +8,9 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import { performance } from "node:perf_hooks";
 
-const PORT = Number(process.env.BRIDGE_PORT || 19099);
+const PORT = Number(process.env.BRIDGE_PORT || 20099);
 const TOKEN = process.env.CARLOS_BRIDGE_TOKEN || "";
-const EXPECTED_TOOLS_COUNT = 19;
+const EXPECTED_TOOLS_COUNT = 20;
 
 // 单次 RPC：一条连接发一个请求，收满响应就返回
 function rpcOnce(request) {

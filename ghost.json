@@ -18,6 +18,11 @@
   "settingsHtml": "settings.html",
   "tools": [
     {
+      "name": "flow_mode",
+      "description": "切换工作流模式：pro（专业）/ guide（向导）。",
+      "parameters": { "type": "object", "properties": { "sessionId": { "type": "string" }, "mode": { "type": "string", "enum": ["pro", "guide"] }, "reason": { "type": "string" } }, "required": ["mode"] }
+    },
+    {
       "name": "flow_protocol",
       "description": "读取 Carlos 工作流协议全文（路由档位 T0/T1/T2、四段合同、报告规格、错误分层、状态字段、审计事件类型、免检触发词、任务卡模板）。",
       "parameters": {

@@ -63,7 +63,7 @@ check("MCP server 启动", stderr.includes("connected"), stderr.slice(-60).trim(
 
 // ---- 1. 工具数 ----
 const list = await req("tools/list", {});
-check("19 个工具（含 flow_trigger_check / flow_falsify / 双轴审计三件套）", (list.result?.tools || []).length === 19,
+check("20 个工具（含 flow_trigger_check / flow_falsify / 双轴审计三件套）", (list.result?.tools || []).length === 20,
   `实际 ${(list.result?.tools || []).length}`);
 
 // ---- 2. T-29: MCP 路径自动触发（中文）----

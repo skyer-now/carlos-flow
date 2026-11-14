@@ -165,7 +165,7 @@ export function migrate(parsed) {
 }
 
 export function defaultState() {
-  return {
+  return { mode: "pro", mode_ts: 0, claimed_profile: null,
     // 状态文件结构版本号。
     // 为什么需要：早先靠 {...defaultState(), ...parsed} 做防御性合并，
     // 但**没有版本号** —— 将来改字段名（如 bypass_ts → bypass_at）时，
@@ -269,7 +269,7 @@ export function loadState(sid) {
     );
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return defaultState();
-  return { ...defaultState(), ...migrate(parsed) };
+  return { mode: "pro", mode_ts: 0, claimed_profile: null, ...defaultState(), ...migrate(parsed) };
 }
 
 export function saveState(sid, state) {
@@ -628,7 +628,7 @@ export function verifyAuditChain(opts = {}) {
       }
       byDay.push({ date: f.slice(0, 10), dayBroken, dayLegacy, dayRestart, tailHash: prev });
     }
-    return {
+    return { mode: "pro", mode_ts: 0, claimed_profile: null,
       ok: broken === 0, total, broken, legacy, restart, brokenAt, byDay, mode: auditHashMode(),
       note: "全链验证：逐天串联，每天的 tail 是下一天的前驱。dayRestart 为「当天首条带 hash 记录以全 0 前驱合法起链」的处数，不是篡改。",
     };
@@ -640,7 +640,7 @@ export function verifyAuditChain(opts = {}) {
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch {
-    return { ok: true, total: 0, broken: 0, legacy: 0, brokenAt: [], file, mode: auditHashMode() };
+    return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: true, total: 0, broken: 0, legacy: 0, brokenAt: [], file, mode: auditHashMode() };
   }
   // 单日的链起点：前一个 tail hash（跨天）或全 0（新链第一天）。
   const files = auditDayFiles();
@@ -682,7 +682,7 @@ export function verifyAuditChain(opts = {}) {
   // mode 字段说明本次校验的**保证强度**：
   //   hmac → 带密钥（CARLOS_FLOW_AUDIT_KEY），能发现有意篡改
   //   plain → 裸 SHA-256，只能发现意外损坏（攻击者能重算整条链）
-  return { ok: broken === 0, total, broken, legacy, brokenAt, file, mode: auditHashMode() };
+  return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: broken === 0, total, broken, legacy, brokenAt, file, mode: auditHashMode() };
 }
 
 
@@ -879,7 +879,7 @@ export function workspaceFingerprint(cwd) {
   const dir = cwd || process.cwd();
   const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" });
   if (head.error || head.status !== 0) {
-    return { ok: false, reason: "not_a_git_repo" };
+    return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: false, reason: "not_a_git_repo" };
   }
   const diff = spawnSync("git", ["diff", "HEAD", "--no-color"], { cwd: dir, encoding: "utf8" });
   const untracked = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], {
@@ -923,7 +923,7 @@ export function workspaceFingerprint(cwd) {
     }
   }
 
-  return {
+  return { mode: "pro", mode_ts: 0, claimed_profile: null,
     ok: true,
     head: String(head.stdout || "").trim(),
     diff_sha256: h.digest("hex"),
