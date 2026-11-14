@@ -71,3 +71,7 @@ src/*.patch
 
 # 变异测试报告（mutation-check.mjs 默认写在仓库根，跑一次就脏工作区 → 会卡住 release 的「工作区干净」校验）
 .mutation-report.md
+
+# 本机运维脚本（写死本机路径与 PATH 排查逻辑，对其他环境无用）
+# carlos-syncd.mjs 每 5 分钟巡检 npm 并静默升级全局安装，属个人环境自动化
+sync/
