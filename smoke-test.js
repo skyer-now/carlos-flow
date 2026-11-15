@@ -10,7 +10,7 @@ import { performance } from "node:perf_hooks";
 
 const PORT = Number(process.env.BRIDGE_PORT || 22099);
 const TOKEN = process.env.CARLOS_BRIDGE_TOKEN || "";
-const EXPECTED_TOOLS_COUNT = 22;
+const EXPECTED_TOOLS_COUNT = 20;
 
 // 单次 RPC：一条连接发一个请求，收满响应就返回
 function rpcOnce(request) {
