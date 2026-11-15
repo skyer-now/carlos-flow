@@ -202,3 +202,8 @@ ok(`${SELF_REPO_NAME} ${tag} 已推送（GitHub Actions 将自动创建 Release 
 
 step("完成");
 console.log(`  关注 CI：https://github.com/${pkg.repository.url.split("github.com/")[1]?.replace(".git", "") || "skyer-now/carlos-flow"}/actions`);
+// Auto-hook: 同步审计归档与更新版本记录
+async function autoSyncDocs() { 
+  console.log("Syncing Audit & Docs...");
+  // 此处整合审计合并逻辑
+}

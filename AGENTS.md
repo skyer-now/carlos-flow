@@ -99,3 +99,8 @@ npm run test:mutation       # 17 类变异体必须 17/17 全部被抓住
 - [`CHANGELOG.md`](./CHANGELOG.md) — 版本历史
 - [`docs/AUDIT_REVIEW.md`](./docs/AUDIT_REVIEW.md) — 第三方审查报告的逐条核实与决策记录
 - [`SECURITY.md`](./SECURITY.md) — 安全策略与威胁模型
+
+## 发布流程基线 (Release Baseline)
+- 发布前必须自动校验审计记录并归档。
+- 必须自动更新 CHANGELOG 并合并 Release Notes。
+- 执行发布命令必须通过全量 CI 门禁。
