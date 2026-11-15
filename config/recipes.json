@@ -1,0 +1,9 @@
+[
+  {
+    "id": "publish-release",
+    "signature": "placeholder_ed25519_sig_for_init",
+    "steps": ["test:all", "version patch", "sync", "npm publish"],
+    "rollback_steps": ["revert tag", "delete npm draft"],
+    "ux_narrative": "正在准备发布新版本..."
+  }
+]
