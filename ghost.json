@@ -2,13 +2,13 @@
   "schemaVersion": 3,
   "minCindyVersion": "1.0.2",
   "id": "carlos-flow",
-  "name": "Carlos 工作流",
-  "description": "机械门禁 MCP：留痕/派发/裁定/审计/快照/免检/还原。自动管理 Bridge 后台常驻，首次调用 ~3-5s，后续 ~1s。",
-  "whenToUse": "需要走 Carlos 工作流门禁时使用：留痕/派发/裁定/审计/快照/免检/还原",
-  "version": "2.12.3",
+  "name": "Carlos \u5de5\u4f5c\u6d41",
+  "description": "\u673a\u68b0\u95e8\u7981 MCP\uff1a\u7559\u75d5/\u6d3e\u53d1/\u88c1\u5b9a/\u5ba1\u8ba1/\u5feb\u7167/\u514d\u68c0/\u8fd8\u539f\u3002\u81ea\u52a8\u7ba1\u7406 Bridge \u540e\u53f0\u5e38\u9a7b\uff0c\u9996\u6b21\u8c03\u7528 ~3-5s\uff0c\u540e\u7eed ~1s\u3002",
+  "whenToUse": "\u9700\u8981\u8d70 Carlos \u5de5\u4f5c\u6d41\u95e8\u7981\u65f6\u4f7f\u7528\uff1a\u7559\u75d5/\u6d3e\u53d1/\u88c1\u5b9a/\u5ba1\u8ba1/\u5feb\u7167/\u514d\u68c0/\u8fd8\u539f",
+  "version": "2.12.4",
   "kind": "mcp",
   "entry": "client/carlos.js",
-  "command": "门禁",
+  "command": "\u95e8\u7981",
   "node": {
     "entry": "__ROOT__/bridge/mcp-bridge.js",
     "protocol": "json-rpc-stdio",
@@ -19,7 +19,7 @@
   "tools": [
     {
       "name": "flow_mode",
-      "description": "切换工作流模式：pro（专业）/ guide（向导）。",
+      "description": "\u5207\u6362\u5de5\u4f5c\u6d41\u6a21\u5f0f\uff1apro\uff08\u4e13\u4e1a\uff09/ guide\uff08\u5411\u5bfc\uff09\u3002",
       "parameters": {
         "type": "object",
         "properties": {
@@ -44,7 +44,7 @@
     },
     {
       "name": "flow_protocol",
-      "description": "读取 Carlos 工作流协议全文（路由档位 T0/T1/T2、四段合同、报告规格、错误分层、状态字段、审计事件类型、免检触发词、任务卡模板）。",
+      "description": "\u8bfb\u53d6 Carlos \u5de5\u4f5c\u6d41\u534f\u8bae\u5168\u6587\uff08\u8def\u7531\u6863\u4f4d T0/T1/T2\u3001\u56db\u6bb5\u5408\u540c\u3001\u62a5\u544a\u89c4\u683c\u3001\u9519\u8bef\u5206\u5c42\u3001\u72b6\u6001\u5b57\u6bb5\u3001\u5ba1\u8ba1\u4e8b\u4ef6\u7c7b\u578b\u3001\u514d\u68c0\u89e6\u53d1\u8bcd\u3001\u4efb\u52a1\u5361\u6a21\u677f\uff09\u3002",
       "parameters": {
         "type": "object",
         "properties": {}
@@ -52,45 +52,45 @@
     },
     {
       "name": "flow_submit_requirement",
-      "description": "提交（留痕）一张任务卡，作为后续派发的唯一依据。任何 T2 改动前必须先调用本工具。",
+      "description": "\u63d0\u4ea4\uff08\u7559\u75d5\uff09\u4e00\u5f20\u4efb\u52a1\u5361\uff0c\u4f5c\u4e3a\u540e\u7eed\u6d3e\u53d1\u7684\u552f\u4e00\u4f9d\u636e\u3002\u4efb\u4f55 T2 \u6539\u52a8\u524d\u5fc5\u987b\u5148\u8c03\u7528\u672c\u5de5\u5177\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "goal": {
             "type": "string",
-            "description": "一句话目标（任务卡 objective）"
+            "description": "\u4e00\u53e5\u8bdd\u76ee\u6807\uff08\u4efb\u52a1\u5361 objective\uff09"
           },
           "quote": {
             "type": "string",
-            "description": "用户原话摘录，用于锚点校验，必须能在用户消息中定位"
+            "description": "\u7528\u6237\u539f\u8bdd\u6458\u5f55\uff0c\u7528\u4e8e\u951a\u70b9\u6821\u9a8c\uff0c\u5fc5\u987b\u80fd\u5728\u7528\u6237\u6d88\u606f\u4e2d\u5b9a\u4f4d"
           },
           "scope": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "只准改动的文件清单（相对 cwd 的路径）"
+            "description": "\u53ea\u51c6\u6539\u52a8\u7684\u6587\u4ef6\u6e05\u5355\uff08\u76f8\u5bf9 cwd \u7684\u8def\u5f84\uff09"
           },
           "acceptance": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "可判定的验收标准"
+            "description": "\u53ef\u5224\u5b9a\u7684\u9a8c\u6536\u6807\u51c6"
           },
           "unknowns": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "未知/待澄清事项"
+            "description": "\u672a\u77e5/\u5f85\u6f84\u6e05\u4e8b\u9879"
           },
           "assumptions": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "已做的假设"
+            "description": "\u5df2\u505a\u7684\u5047\u8bbe"
           },
           "files": {
             "type": "array",
@@ -109,7 +109,7 @@
                 "line"
               ]
             },
-            "description": "关键定位点"
+            "description": "\u5173\u952e\u5b9a\u4f4d\u70b9"
           },
           "verify": {
             "type": "object",
@@ -118,34 +118,34 @@
                 "type": "string"
               }
             },
-            "description": "主 Agent 指定的验证命令"
+            "description": "\u4e3b Agent \u6307\u5b9a\u7684\u9a8c\u8bc1\u547d\u4ee4"
           },
           "confirmed": {
             "type": "boolean",
-            "description": "敏感路径是否已获用户确认（sensitive 档必须为 true）"
+            "description": "\u654f\u611f\u8def\u5f84\u662f\u5426\u5df2\u83b7\u7528\u6237\u786e\u8ba4\uff08sensitive \u6863\u5fc5\u987b\u4e3a true\uff09"
           },
           "parallel_plan": {
             "type": "string",
-            "description": "并行派发计划说明（可选）"
+            "description": "\u5e76\u884c\u6d3e\u53d1\u8ba1\u5212\u8bf4\u660e\uff08\u53ef\u9009\uff09"
           },
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "cwd": {
             "type": "string",
-            "description": "工作目录，默认 process.cwd()"
+            "description": "\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           },
           "userMessages": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "用户原话列表（可选）"
+            "description": "\u7528\u6237\u539f\u8bdd\u5217\u8868\uff08\u53ef\u9009\uff09"
           },
           "cardText": {
             "type": "string",
-            "description": "完整任务卡文本，含 FLOW_CARD: 前缀"
+            "description": "\u5b8c\u6574\u4efb\u52a1\u5361\u6587\u672c\uff0c\u542b FLOW_CARD: \u524d\u7f00"
           }
         },
         "required": [
@@ -157,13 +157,13 @@
     },
     {
       "name": "flow_claim",
-      "description": "领取一次派发名额（executor 或 auditor）。返回四段合同 prompt，可直接作为子 Agent 的任务描述。",
+      "description": "\u9886\u53d6\u4e00\u6b21\u6d3e\u53d1\u540d\u989d\uff08executor \u6216 auditor\uff09\u3002\u8fd4\u56de\u56db\u6bb5\u5408\u540c prompt\uff0c\u53ef\u76f4\u63a5\u4f5c\u4e3a\u5b50 Agent \u7684\u4efb\u52a1\u63cf\u8ff0\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "role": {
             "type": "string",
@@ -171,11 +171,11 @@
               "executor",
               "auditor"
             ],
-            "description": "领取角色"
+            "description": "\u9886\u53d6\u89d2\u8272"
           },
           "cwd": {
             "type": "string",
-            "description": "工作目录，默认 process.cwd()"
+            "description": "\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           }
         },
         "required": [
@@ -186,13 +186,13 @@
     },
     {
       "name": "flow_dispatch",
-      "description": "按四段合同派发子 Agent。派发前会自动对 scope 内文件做快照。",
+      "description": "\u6309\u56db\u6bb5\u5408\u540c\u6d3e\u53d1\u5b50 Agent\u3002\u6d3e\u53d1\u524d\u4f1a\u81ea\u52a8\u5bf9 scope \u5185\u6587\u4ef6\u505a\u5feb\u7167\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "role": {
             "type": "string",
@@ -200,19 +200,19 @@
               "executor",
               "auditor"
             ],
-            "description": "派发角色"
+            "description": "\u6d3e\u53d1\u89d2\u8272"
           },
           "message": {
             "type": "string",
-            "description": "附加说明，原样附在合同末尾"
+            "description": "\u9644\u52a0\u8bf4\u660e\uff0c\u539f\u6837\u9644\u5728\u5408\u540c\u672b\u5c3e"
           },
           "run": {
             "type": "boolean",
-            "description": "true = 由本工具直接运行 opencode；false/absent = 只返回 prompt"
+            "description": "true = \u7531\u672c\u5de5\u5177\u76f4\u63a5\u8fd0\u884c opencode\uff1bfalse/absent = \u53ea\u8fd4\u56de prompt"
           },
           "cwd": {
             "type": "string",
-            "description": "工作目录，默认 process.cwd()"
+            "description": "\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           }
         },
         "required": [
@@ -223,30 +223,30 @@
     },
     {
       "name": "flow_audit_axes",
-      "description": "派发两个并行审计 subagent（Standards 轴 / Spec 轴），生成两段审计合同 prompt。executor 改动通过 flow_run_verify 与负对照后、落 PASS 裁定前必须先调用本工具。",
+      "description": "\u6d3e\u53d1\u4e24\u4e2a\u5e76\u884c\u5ba1\u8ba1 subagent\uff08Standards \u8f74 / Spec \u8f74\uff09\uff0c\u751f\u6210\u4e24\u6bb5\u5ba1\u8ba1\u5408\u540c prompt\u3002executor \u6539\u52a8\u901a\u8fc7 flow_run_verify \u4e0e\u8d1f\u5bf9\u7167\u540e\u3001\u843d PASS \u88c1\u5b9a\u524d\u5fc5\u987b\u5148\u8c03\u7528\u672c\u5de5\u5177\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID"
+            "description": "\u4f1a\u8bdd ID"
           },
           "cwd": {
             "type": "string",
-            "description": "仓库工作目录，默认 process.cwd()"
+            "description": "\u4ed3\u5e93\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           }
         }
       }
     },
     {
       "name": "flow_audit_submit",
-      "description": "保存某一审计轴（standards|spec）的结论与证据到会话状态。PASS 裁定前必须两轴都提交，且各自绑定的 card_ts 与当前卡一致。同轴可重复提交（后者覆盖）。",
+      "description": "\u4fdd\u5b58\u67d0\u4e00\u5ba1\u8ba1\u8f74\uff08standards|spec\uff09\u7684\u7ed3\u8bba\u4e0e\u8bc1\u636e\u5230\u4f1a\u8bdd\u72b6\u6001\u3002PASS \u88c1\u5b9a\u524d\u5fc5\u987b\u4e24\u8f74\u90fd\u63d0\u4ea4\uff0c\u4e14\u5404\u81ea\u7ed1\u5b9a\u7684 card_ts \u4e0e\u5f53\u524d\u5361\u4e00\u81f4\u3002\u540c\u8f74\u53ef\u91cd\u590d\u63d0\u4ea4\uff08\u540e\u8005\u8986\u76d6\uff09\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID"
+            "description": "\u4f1a\u8bdd ID"
           },
           "axis": {
             "type": "string",
@@ -254,7 +254,7 @@
               "standards",
               "spec"
             ],
-            "description": "审计轴"
+            "description": "\u5ba1\u8ba1\u8f74"
           },
           "verdict": {
             "type": "string",
@@ -263,44 +263,44 @@
               "FAIL",
               "WARN"
             ],
-            "description": "轴判定；WARN=坏味道等 judgement call，不硬拦"
+            "description": "\u8f74\u5224\u5b9a\uff1bWARN=\u574f\u5473\u9053\u7b49 judgement call\uff0c\u4e0d\u786c\u62e6"
           },
           "findings": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "每条含 file:line 或证据"
+            "description": "\u6bcf\u6761\u542b file:line \u6216\u8bc1\u636e"
           },
           "evidence": {
             "type": "string",
-            "description": "实跑命令输出 / diff 摘录"
+            "description": "\u5b9e\u8dd1\u547d\u4ee4\u8f93\u51fa / diff \u6458\u5f55"
           }
         }
       }
     },
     {
       "name": "flow_audit_guard",
-      "description": "校验两轴是否已通过且证据齐全（与 flow_verdict 内的双轴门禁同口径）。主 Agent 落 PASS 前可主动自查；flow_verdict 不受此调用影响，仍会再拦一道。",
+      "description": "\u6821\u9a8c\u4e24\u8f74\u662f\u5426\u5df2\u901a\u8fc7\u4e14\u8bc1\u636e\u9f50\u5168\uff08\u4e0e flow_verdict \u5185\u7684\u53cc\u8f74\u95e8\u7981\u540c\u53e3\u5f84\uff09\u3002\u4e3b Agent \u843d PASS \u524d\u53ef\u4e3b\u52a8\u81ea\u67e5\uff1bflow_verdict \u4e0d\u53d7\u6b64\u8c03\u7528\u5f71\u54cd\uff0c\u4ecd\u4f1a\u518d\u62e6\u4e00\u9053\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID"
+            "description": "\u4f1a\u8bdd ID"
           }
         }
       }
     },
     {
       "name": "flow_verdict",
-      "description": "记录 auditor 的裁定结果（PASS / DIRECTION / LOCAL）。只有 PASS 会把 completed_ok 置为 true。",
+      "description": "\u8bb0\u5f55 auditor \u7684\u88c1\u5b9a\u7ed3\u679c\uff08PASS / DIRECTION / LOCAL\uff09\u3002\u53ea\u6709 PASS \u4f1a\u628a completed_ok \u7f6e\u4e3a true\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "verdict": {
             "type": "string",
@@ -309,19 +309,19 @@
               "DIRECTION",
               "LOCAL"
             ],
-            "description": "裁定结果"
+            "description": "\u88c1\u5b9a\u7ed3\u679c"
           },
           "notes": {
             "type": "string",
-            "description": "裁定说明/证据摘要"
+            "description": "\u88c1\u5b9a\u8bf4\u660e/\u8bc1\u636e\u6458\u8981"
           },
           "role": {
             "type": "string",
-            "description": "记录裁定者角色（通常 auditor）"
+            "description": "\u8bb0\u5f55\u88c1\u5b9a\u8005\u89d2\u8272\uff08\u901a\u5e38 auditor\uff09"
           },
           "cwd": {
             "type": "string",
-            "description": "工作目录，默认 process.cwd()"
+            "description": "\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           }
         },
         "required": [
@@ -332,13 +332,13 @@
     },
     {
       "name": "flow_status",
-      "description": "查询当前会话的门禁状态：是否有任务卡、风险档、已派发次数/上限、裁定结果、是否过期、是否处于免检模式。",
+      "description": "\u67e5\u8be2\u5f53\u524d\u4f1a\u8bdd\u7684\u95e8\u7981\u72b6\u6001\uff1a\u662f\u5426\u6709\u4efb\u52a1\u5361\u3001\u98ce\u9669\u6863\u3001\u5df2\u6d3e\u53d1\u6b21\u6570/\u4e0a\u9650\u3001\u88c1\u5b9a\u7ed3\u679c\u3001\u662f\u5426\u8fc7\u671f\u3001\u662f\u5426\u5904\u4e8e\u514d\u68c0\u6a21\u5f0f\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           }
         },
         "required": [
@@ -348,45 +348,45 @@
     },
     {
       "name": "flow_audit",
-      "description": "读取审计流水，返回事件列表与按 type/kind 的统计。",
+      "description": "\u8bfb\u53d6\u5ba1\u8ba1\u6d41\u6c34\uff0c\u8fd4\u56de\u4e8b\u4ef6\u5217\u8868\u4e0e\u6309 type/kind \u7684\u7edf\u8ba1\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID；不传则聚合全部"
+            "description": "\u4f1a\u8bdd ID\uff1b\u4e0d\u4f20\u5219\u805a\u5408\u5168\u90e8"
           },
           "type": {
             "type": "string",
-            "description": "事件类型过滤：run / finding / decision / resolution"
+            "description": "\u4e8b\u4ef6\u7c7b\u578b\u8fc7\u6ee4\uff1arun / finding / decision / resolution"
           },
           "limit": {
             "type": "number",
-            "description": "最多返回最近 N 条"
+            "description": "\u6700\u591a\u8fd4\u56de\u6700\u8fd1 N \u6761"
           },
           "date": {
             "type": "string",
-            "description": "YYYY-MM-DD，默认今天"
+            "description": "YYYY-MM-DD\uff0c\u9ed8\u8ba4\u4eca\u5929"
           }
         }
       }
     },
     {
       "name": "flow_diff_hunks",
-      "description": "对指定文件跑 git diff -U0 并解析出每个文件的 hunk 范围。",
+      "description": "\u5bf9\u6307\u5b9a\u6587\u4ef6\u8dd1 git diff -U0 \u5e76\u89e3\u6790\u51fa\u6bcf\u4e2a\u6587\u4ef6\u7684 hunk \u8303\u56f4\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "cwd": {
             "type": "string",
-            "description": "仓库工作目录，默认 process.cwd()"
+            "description": "\u4ed3\u5e93\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           },
           "paths": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "要检查的文件路径列表"
+            "description": "\u8981\u68c0\u67e5\u7684\u6587\u4ef6\u8def\u5f84\u5217\u8868"
           }
         },
         "required": [
@@ -396,21 +396,21 @@
     },
     {
       "name": "flow_bypass",
-      "description": "开关免检模式。仅在用户明确授权时使用。",
+      "description": "\u5f00\u5173\u514d\u68c0\u6a21\u5f0f\u3002\u4ec5\u5728\u7528\u6237\u660e\u786e\u6388\u6743\u65f6\u4f7f\u7528\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "on": {
             "type": "boolean",
-            "description": "true 开启免检，false 关闭"
+            "description": "true \u5f00\u542f\u514d\u68c0\uff0cfalse \u5173\u95ed"
           },
           "reason": {
             "type": "string",
-            "description": "开启/关闭理由（建议写用户原话）"
+            "description": "\u5f00\u542f/\u5173\u95ed\u7406\u7531\uff08\u5efa\u8bae\u5199\u7528\u6237\u539f\u8bdd\uff09"
           }
         },
         "required": [
@@ -421,17 +421,17 @@
     },
     {
       "name": "flow_add_user_msg",
-      "description": "写入一条用户原话到会话消息文件，供 quote 锚点校验使用。",
+      "description": "\u5199\u5165\u4e00\u6761\u7528\u6237\u539f\u8bdd\u5230\u4f1a\u8bdd\u6d88\u606f\u6587\u4ef6\uff0c\u4f9b quote \u951a\u70b9\u6821\u9a8c\u4f7f\u7528\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "text": {
             "type": "string",
-            "description": "用户原话原文"
+            "description": "\u7528\u6237\u539f\u8bdd\u539f\u6587"
           }
         },
         "required": [
@@ -442,13 +442,13 @@
     },
     {
       "name": "flow_save_result",
-      "description": "保存子 Agent 执行结果到会话目录。",
+      "description": "\u4fdd\u5b58\u5b50 Agent \u6267\u884c\u7ed3\u679c\u5230\u4f1a\u8bdd\u76ee\u5f55\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "role": {
             "type": "string",
@@ -456,19 +456,19 @@
               "executor",
               "auditor"
             ],
-            "description": "执行角色"
+            "description": "\u6267\u884c\u89d2\u8272"
           },
           "stdout": {
             "type": "string",
-            "description": "子 Agent 的 stdout"
+            "description": "\u5b50 Agent \u7684 stdout"
           },
           "stderr": {
             "type": "string",
-            "description": "子 Agent 的 stderr"
+            "description": "\u5b50 Agent \u7684 stderr"
           },
           "code": {
             "type": "number",
-            "description": "退出码"
+            "description": "\u9000\u51fa\u7801"
           }
         },
         "required": [
@@ -479,17 +479,17 @@
     },
     {
       "name": "flow_revert_plan",
-      "description": "根据本次会话的快照 manifest 生成还原计划。只返回计划，不自动执行。",
+      "description": "\u6839\u636e\u672c\u6b21\u4f1a\u8bdd\u7684\u5feb\u7167 manifest \u751f\u6210\u8fd8\u539f\u8ba1\u5212\u3002\u53ea\u8fd4\u56de\u8ba1\u5212\uff0c\u4e0d\u81ea\u52a8\u6267\u884c\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "cwd": {
             "type": "string",
-            "description": "工作目录，默认 process.cwd()"
+            "description": "\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           }
         },
         "required": [
@@ -499,58 +499,58 @@
     },
     {
       "name": "flow_run_verify",
-      "description": "执行卡片中指定的验证命令，返回执行结果（退出码、stdout、stderr）。用于在派发 executor 后验证其工作成果，或手动触发验证。记 PASS 裁定前必须先跑通本工具。",
+      "description": "\u6267\u884c\u5361\u7247\u4e2d\u6307\u5b9a\u7684\u9a8c\u8bc1\u547d\u4ee4\uff0c\u8fd4\u56de\u6267\u884c\u7ed3\u679c\uff08\u9000\u51fa\u7801\u3001stdout\u3001stderr\uff09\u3002\u7528\u4e8e\u5728\u6d3e\u53d1 executor \u540e\u9a8c\u8bc1\u5176\u5de5\u4f5c\u6210\u679c\uff0c\u6216\u624b\u52a8\u89e6\u53d1\u9a8c\u8bc1\u3002\u8bb0 PASS \u88c1\u5b9a\u524d\u5fc5\u987b\u5148\u8dd1\u901a\u672c\u5de5\u5177\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "cwd": {
             "type": "string",
-            "description": "工作目录，默认 process.cwd()"
+            "description": "\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           }
         }
       }
     },
     {
       "name": "flow_falsify",
-      "description": "负对照（negative control）：把工作区还原到派发时的「改动前」状态跑同一 verify.cmd，要求它失败；再还原「改动后」状态跑一次，要求它通过。只有「改动前失败 + 改动后通过」才证明这个测试真的在测本次改动（而不是 `|| true` / `echo ok` 这类空测试）。记 PASS 裁定前必须先做负对照。",
+      "description": "\u8d1f\u5bf9\u7167\uff08negative control\uff09\uff1a\u628a\u5de5\u4f5c\u533a\u8fd8\u539f\u5230\u6d3e\u53d1\u65f6\u7684\u300c\u6539\u52a8\u524d\u300d\u72b6\u6001\u8dd1\u540c\u4e00 verify.cmd\uff0c\u8981\u6c42\u5b83\u5931\u8d25\uff1b\u518d\u8fd8\u539f\u300c\u6539\u52a8\u540e\u300d\u72b6\u6001\u8dd1\u4e00\u6b21\uff0c\u8981\u6c42\u5b83\u901a\u8fc7\u3002\u53ea\u6709\u300c\u6539\u52a8\u524d\u5931\u8d25 + \u6539\u52a8\u540e\u901a\u8fc7\u300d\u624d\u8bc1\u660e\u8fd9\u4e2a\u6d4b\u8bd5\u771f\u7684\u5728\u6d4b\u672c\u6b21\u6539\u52a8\uff08\u800c\u4e0d\u662f `|| true` / `echo ok` \u8fd9\u7c7b\u7a7a\u6d4b\u8bd5\uff09\u3002\u8bb0 PASS \u88c1\u5b9a\u524d\u5fc5\u987b\u5148\u505a\u8d1f\u5bf9\u7167\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "cwd": {
             "type": "string",
-            "description": "工作目录，默认 process.cwd()"
+            "description": "\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           }
         }
       }
     },
     {
       "name": "flow_check_scope",
-      "description": "检查指定文件列表是否在卡片 scope 范围内。用于在提交裁定前自查越界改动。空 scope 判定为全部越界（fail-closed）。",
+      "description": "\u68c0\u67e5\u6307\u5b9a\u6587\u4ef6\u5217\u8868\u662f\u5426\u5728\u5361\u7247 scope \u8303\u56f4\u5185\u3002\u7528\u4e8e\u5728\u63d0\u4ea4\u88c1\u5b9a\u524d\u81ea\u67e5\u8d8a\u754c\u6539\u52a8\u3002\u7a7a scope \u5224\u5b9a\u4e3a\u5168\u90e8\u8d8a\u754c\uff08fail-closed\uff09\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "paths": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "要检查的文件路径列表"
+            "description": "\u8981\u68c0\u67e5\u7684\u6587\u4ef6\u8def\u5f84\u5217\u8868"
           },
           "cwd": {
             "type": "string",
-            "description": "仓库工作目录，默认 process.cwd()"
+            "description": "\u4ed3\u5e93\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           }
         },
         "required": [
@@ -560,35 +560,43 @@
     },
     {
       "name": "flow_trigger_check",
-      "description": "智能触发检查：判断当前这条用户消息是否应该启动 Carlos 工作流，并在达标时实际完成激活（写入用户原话 + 开占位卡 → 会话进入门禁态）。宿主在收到用户消息时调用本工具，就能获得与命令行客户端完全一致的自动触发行为。未达阈值时只如实返回评分与决策，不做任何动作；被限流时也如实返回真实评分。中文流程词（工作流/门禁/派发/审计…）已内置，中文需求同样能触发。",
+      "description": "\u667a\u80fd\u89e6\u53d1\u68c0\u67e5\uff1a\u5224\u65ad\u5f53\u524d\u8fd9\u6761\u7528\u6237\u6d88\u606f\u662f\u5426\u5e94\u8be5\u542f\u52a8 Carlos \u5de5\u4f5c\u6d41\uff0c\u5e76\u5728\u8fbe\u6807\u65f6\u5b9e\u9645\u5b8c\u6210\u6fc0\u6d3b\uff08\u5199\u5165\u7528\u6237\u539f\u8bdd + \u5f00\u5360\u4f4d\u5361 \u2192 \u4f1a\u8bdd\u8fdb\u5165\u95e8\u7981\u6001\uff09\u3002\u5bbf\u4e3b\u5728\u6536\u5230\u7528\u6237\u6d88\u606f\u65f6\u8c03\u7528\u672c\u5de5\u5177\uff0c\u5c31\u80fd\u83b7\u5f97\u4e0e\u547d\u4ee4\u884c\u5ba2\u6237\u7aef\u5b8c\u5168\u4e00\u81f4\u7684\u81ea\u52a8\u89e6\u53d1\u884c\u4e3a\u3002\u672a\u8fbe\u9608\u503c\u65f6\u53ea\u5982\u5b9e\u8fd4\u56de\u8bc4\u5206\u4e0e\u51b3\u7b56\uff0c\u4e0d\u505a\u4efb\u4f55\u52a8\u4f5c\uff1b\u88ab\u9650\u6d41\u65f6\u4e5f\u5982\u5b9e\u8fd4\u56de\u771f\u5b9e\u8bc4\u5206\u3002\u4e2d\u6587\u6d41\u7a0b\u8bcd\uff08\u5de5\u4f5c\u6d41/\u95e8\u7981/\u6d3e\u53d1/\u5ba1\u8ba1\u2026\uff09\u5df2\u5185\u7f6e\uff0c\u4e2d\u6587\u9700\u6c42\u540c\u6837\u80fd\u89e6\u53d1\u3002",
       "parameters": {
         "type": "object",
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "会话 ID，默认 unknown"
+            "description": "\u4f1a\u8bdd ID\uff0c\u9ed8\u8ba4 unknown"
           },
           "message": {
             "type": "string",
-            "description": "用户本轮消息原文（必须是真实原话，用于 quote 锚点）"
+            "description": "\u7528\u6237\u672c\u8f6e\u6d88\u606f\u539f\u6587\uff08\u5fc5\u987b\u662f\u771f\u5b9e\u539f\u8bdd\uff0c\u7528\u4e8e quote \u951a\u70b9\uff09"
           },
           "complexity": {
             "type": "number",
-            "description": "任务复杂度系数，默认 1.0"
+            "description": "\u4efb\u52a1\u590d\u6742\u5ea6\u7cfb\u6570\uff0c\u9ed8\u8ba4 1.0"
           },
           "execute": {
             "type": "boolean",
-            "description": "true = 达标时实际执行激活步骤（默认 true）；false = 只评分不动作"
+            "description": "true = \u8fbe\u6807\u65f6\u5b9e\u9645\u6267\u884c\u6fc0\u6d3b\u6b65\u9aa4\uff08\u9ed8\u8ba4 true\uff09\uff1bfalse = \u53ea\u8bc4\u5206\u4e0d\u52a8\u4f5c"
           },
           "cwd": {
             "type": "string",
-            "description": "工作目录，默认 process.cwd()"
+            "description": "\u5de5\u4f5c\u76ee\u5f55\uff0c\u9ed8\u8ba4 process.cwd()"
           }
         },
         "required": [
           "message"
         ]
       }
+    },
+    {
+      "name": "flow_recipe_list",
+      "description": "\u83b7\u53d6\u53ef\u7528\u573a\u666f\u5305\u6e05\u5355"
+    },
+    {
+      "name": "flow_recipe_run",
+      "description": "\u6267\u884c\u573a\u666f\u5305\u4efb\u52a1"
     }
   ]
 }

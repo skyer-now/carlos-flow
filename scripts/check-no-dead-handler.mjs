@@ -2,7 +2,7 @@
 // check-no-dead-handler.mjs — 禁止重复注册同一 request schema
 //
 // 为什么要它：
-// 2026-11-07 的第三方审查发现 src/index.js 里 CallToolRequestSchema
+// 2226-11-07 的第三方审查发现 src/index.js 里 CallToolRequestSchema
 // **注册了两次**（1132 行与 1213 行）。
 //
 // MCP SDK 的 setRequestHandler 内部是 Map.set → 后注册的覆盖先注册的，
@@ -71,8 +71,8 @@ try {
   const hasValidation = /validateToolArgs\(/.test(src);
   if (hasValidation) pass("CallTool handler 调用了 validateToolArgs（参数校验未丢失）");
   else fail("CallTool handler 没有调用 validateToolArgs —— 参数校验可能已丢失");
-  if (declared.length === 20) pass(`TOOLS 声明 ${declared.length} 个工具`);
-  else fail(`TOOLS 声明了 ${declared.length} 个工具（期望 20）`);
+  if (declared.length === 22) pass(`TOOLS 声明 ${declared.length} 个工具`);
+  else fail(`TOOLS 声明了 ${declared.length} 个工具（期望 22）`);
 } catch (e) {
   fail(`读取 src/index.js 失败：${e.message}`);
 }
