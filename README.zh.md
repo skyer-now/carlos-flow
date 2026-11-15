@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/badge/version-2.12.2-blue)](https://www.npmjs.com/package/carlos-flow)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-[中文版](README.md) | [English Version](README.en.md)
+[中文](README.zh.md) | [English Version](README.en.md)
 
 你是否在使用 OpenCode、Claude Code 或其他 AI 编程工具时遇到过困扰？
 * **AI 总是“瞎执行”**：指令明明说得很清楚，AI 却完全没按要求办，还得你花时间纠错。
