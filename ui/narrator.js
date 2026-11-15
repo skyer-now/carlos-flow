@@ -1,0 +1,1 @@
+export function narrate(event) { return { text: "系统事件: " + event.kind, action: "查看" }; }
