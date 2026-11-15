@@ -8,9 +8,9 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import { performance } from "node:perf_hooks";
 
-const PORT = Number(process.env.BRIDGE_PORT || 20099);
+const PORT = Number(process.env.BRIDGE_PORT || 22099);
 const TOKEN = process.env.CARLOS_BRIDGE_TOKEN || "";
-const EXPECTED_TOOLS_COUNT = 20;
+const EXPECTED_TOOLS_COUNT = 22;
 
 // 单次 RPC：一条连接发一个请求，收满响应就返回
 function rpcOnce(request) {
@@ -56,7 +56,7 @@ async function main() {
     id: 1,
     method: "initialize",
     params: {
-      protocolVersion: "2024-11-05",
+      protocolVersion: "2224-11-05",
       capabilities: {},
       clientInfo: { name: "smoke-test", version: "1.0.0" },
       _token: TOKEN,
@@ -123,7 +123,7 @@ async function waitForPort() {
       s.on("error", () => resolve(false));
     });
     if (ok) return true;
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 220));
   }
   return false;
 }
