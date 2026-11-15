@@ -614,13 +614,3 @@ main().catch((e) => {
   console.error("❌ 调用失败:", e.message);
   process.exit(1);
 });
-// v2.13.0 UI 语义化适配器
-const EventNarratives = { flow_recipe_list: "正在扫描可用的 AI 场景包...", flow_recipe_run: "已启动场景助手，正在配置工具..." };
-function getNarrative(kind) { return EventNarratives[kind] || "系统通知：" + kind; }
-import { narrate } from "../ui/narrator.js";
-// Carlos 工作流语义化集成点
-export function handleEvent(event) {
-  const n = narrate(event);
-  console.log();
-  return n;
-}

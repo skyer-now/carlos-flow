@@ -1,7 +1,7 @@
 {
   "name": "carlos-flow",
   "version": "2.12.5",
-  "description": "Carlos 工作流 — AI 编码 Agent 的机械门禁。留痕/派发/验证/裁定/审计/还原，约束写在代码里而非提示词里。单一包支持 Cindy/OpenCode/Cursor/Cline/VS Code/Claude Desktop。",
+  "description": "Carlos \u5de5\u4f5c\u6d41 \u2014 AI \u7f16\u7801 Agent \u7684\u673a\u68b0\u95e8\u7981\u3002\u7559\u75d5/\u6d3e\u53d1/\u9a8c\u8bc1/\u88c1\u5b9a/\u5ba1\u8ba1/\u8fd8\u539f\uff0c\u7ea6\u675f\u5199\u5728\u4ee3\u7801\u91cc\u800c\u975e\u63d0\u793a\u8bcd\u91cc\u3002\u5355\u4e00\u5305\u652f\u6301 Cindy/OpenCode/Cursor/Cline/VS Code/Claude Desktop\u3002",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -24,7 +24,7 @@
     "test:concurrency": "node test/concurrency-e2e.mjs",
     "test:ui": "node test/verify-ui.mjs",
     "test:acceptance": "node test/e2e-acceptance.mjs",
-    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge",
+    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:ui",
     "test:mutation": "node scripts/mutation-check.mjs",
     "sync:readme": "node scripts/sync-readme.mjs",
     "check:readme": "node scripts/sync-readme.mjs --check",

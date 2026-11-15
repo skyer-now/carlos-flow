@@ -989,18 +989,6 @@ const TOOLS = [
     },
   },
 
-    {
-    name: "flow_recipe_list",
-    description: "获取可用场景包清单",
-    inputSchema: { type: "object" },
-    handler: async () => { return ok({ packs: [] }); }
-  },
-  {
-    name: "flow_recipe_run",
-    description: "执行场景包任务",
-    inputSchema: { type: "object", properties: { packId: { type: "string" } } },
-    handler: async (args) => { return ok({ status: "started" }); }
-  },
   // 7 -----------------------------------------------------------------------
   {
     name: "flow_audit",
