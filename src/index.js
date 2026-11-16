@@ -1328,13 +1328,7 @@ const TOOLS = [
         const cardProject = state.card.env && typeof state.card.env.project === "string"
           ? state.card.env.project
           : "";
-        let workdir = a.cwd || cardProject || undefined;
-        // 兜底：如果 project 不是有效项目目录（里面没有 package.json），向上找项目根
-        // （例如 server 从全局包 src 目录启动时，project 指向的目录不存在或没有 package.json）
-        if (workdir && !existsSync(path.join(workdir, "package.json"))) {
-          const root = findProjectRoot(workdir) || findProjectRoot(process.cwd());
-          if (root) workdir = root;
-        }
+        const workdir = a.cwd || cardProject || undefined;
         const result = await runVerifyCommand(state.card.verify.cmd, workdir);
         const state2 = loadState(sessionId);
         state2.last_verify = {
@@ -1383,12 +1377,7 @@ const TOOLS = [
         const cardProject = state.card.env && typeof state.card.env.project === "string"
           ? state.card.env.project
           : "";
-        let workdir = a.cwd || cardProject || undefined;
-        // 兜底：如果 project 不是有效项目目录（里面没有 package.json），向上找项目根
-        if (workdir && !existsSync(path.join(workdir, "package.json"))) {
-          const root = findProjectRoot(workdir) || findProjectRoot(process.cwd());
-          if (root) workdir = root;
-        }
+        const workdir = a.cwd || cardProject || undefined;
 
         const r = await runNegativeControl(sessionId, state.card.verify.cmd, workdir);
         if (!r.ok) {
