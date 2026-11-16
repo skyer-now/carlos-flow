@@ -38,6 +38,41 @@ const ok = (obj) => {
 };
 const fail = (message) => ({ content: [{ type: "text", text: "ERROR: " + String(message) }], isError: true });
 
+// ---- 向导模式（mode==='guide'）报错人话翻译 --------------------------------
+//
+// 目的：普通用户看不懂技术性门禁报错（STALE / 未 claim / 占位卡未补齐…），
+// 在 guide 模式下把技术码翻译成「发生了什么 + 下一步该怎么做」的中文人话。
+// pro 模式或未知 mode → 原样返回 technicalMsg，行为绝对不变（向后兼容守护）。
+//
+// 接入原则：最小侵入——只在**典型门禁拦截点**调用，不做大规模重构。
+function guideError(state, technicalMsg) {
+  if (!state || state.mode !== "guide") return technicalMsg;
+  const msg = String(technicalMsg);
+  // 按关键词映射到通俗解释 + 操作指引
+  const translations = [
+    { match: /没有留痕|record/, human: "还没有提交任务卡哦。请先让主 Agent 调用 flow_submit_requirement 提交一张任务卡，把要做的事写清楚，然后才能继续。" },
+    { match: /stale|过期/i, human: "这张任务卡已经过期了（可能太久没动或者被新的卡替换了）。请重新提交一张新的任务卡（flow_submit_requirement），然后再继续操作。" },
+    { match: /未\s*claim|领取派发名额/, human: "你还没有领取这次工作的「入场券」。请先调用 flow_claim 领取 executor 或 auditor 角色，领取成功后再派发。" },
+    { match: /占位卡尚未补齐|激活占位卡/, human: "系统自动创建了一张待填写的任务卡，但还缺少一些必要信息（比如要改哪些文件、怎么算做完了、用什么命令验证）。请先补齐这些信息后重新提交（flow_submit_requirement），补齐后才能开始干活。" },
+    { match: /派发次数已达上限/, human: "这个任务的派发次数已经用完了，不能再继续派发了。请向用户汇报当前进度，让用户决定是否需要重新开始。" },
+    { match: /非法\s*role/, human: "角色名称不对哦，只能是 executor（执行者）或 auditor（审计员）这两种。请检查后重试。" },
+    { match: /两轴审查未齐|双轴/, human: "在宣布任务完成之前，需要先做两项独立审查（规范审查 + 验收审查）。请先调用 flow_audit_axes 派发审查，再由审查员分别提交结论（flow_audit_submit），两轴都通过后才能记 PASS。" },
+    { match: /至少一轴\s*FAIL/, human: "审查发现了问题，有一项审查没通过。请先修复这些问题，重新跑验证和审查后再试。" },
+    { match: /尚未执行验证|验证.*不能记录\s*PASS/, human: "还没有运行验证命令来确认改动是否正确。请先调用 flow_run_verify 跑通卡片里指定的验证命令，通过后再记录裁定。" },
+    { match: /验证未通过/, human: "验证命令跑失败了，说明还有问题没解决。请先修复代码，让验证命令能通过（flow_run_verify），然后再记录裁定。" },
+    { match: /越界改动/, human: "发现有些改动超出了任务卡允许的范围（改了不该改的文件）。请把多改的文件撤销掉，或者把它们加进任务卡的 scope 列表里重新提交。" },
+    { match: /负对照|falsify/, human: "需要做一次「反向验证」来证明测试确实在起作用。请先调用 flow_falsify 做负对照，通过后再记录裁定。" },
+    { match: /卡片未指定\s*verify/, human: "任务卡里没有写验证命令，没法确认改动对不对。请重新提交一张带 verify.cmd 的任务卡（flow_submit_requirement），这样才有办法验证。" },
+  ];
+  for (const t of translations) {
+    if (t.match.test(msg)) {
+      return t.human + "\n（原始提示：" + msg + "）";
+    }
+  }
+  // 无匹配时仍给人话兜底
+  return "遇到一个问题：" + msg + "\n如果你不确定怎么处理，可以让主 Agent 帮你看看具体原因。";
+}
+
 const asStringArray = (v) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
 
 // 卡片文本字段（scope / acceptance / unknowns / assumptions）**保留原始元素类型**，
@@ -393,18 +428,18 @@ const TOOLS = [
         const state = loadState(sessionId);
 
         if (!state.card) {
-          return fail("没有留痕（record），executor/auditor 不得开工。请先由主 Agent 调用 flow_submit_requirement 提交任务卡。");
+          return fail(guideError(state, "没有留痕（record），executor/auditor 不得开工。请先由主 Agent 调用 flow_submit_requirement 提交任务卡。"));
         }
         if (isStale(state)) {
-          return fail("留痕已过期（stale），请重新提交任务卡。");
+          return fail(guideError(state, "留痕已过期（stale），请重新提交任务卡。"));
         }
         if (state.dispatch_count >= MAX_DISPATCH) {
-          return fail("派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。");
+          return fail(guideError(state, "派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。"));
         }
         // 激活占位卡闸门：占位卡未补齐字段时不允许领取派发名额
         if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
-          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
-            "）。请先补齐后重新调用 flow_submit_requirement，再来领取派发名额。");
+          return fail(guideError(state, "激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "）。请先补齐后重新调用 flow_submit_requirement，再来领取派发名额。"));
         }
 
         // Phase 1-1: 不在 claim 时增加 dispatch_count，改在 dispatch 时增加
@@ -463,16 +498,16 @@ const TOOLS = [
         // Phase 1-1: dispatch 前强制校验 stale / dispatch_count / claim
         const sessionId = a.sessionId || "unknown";
         const state = loadState(sessionId);
-        if (!state.card) return fail("没有留痕，不允许派发。");
-        if (isStale(state)) return fail("留痕已过期（stale），请重新提交任务卡。");
-        if (state.dispatch_count >= MAX_DISPATCH) return fail("派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。");
+        if (!state.card) return fail(guideError(state, "没有留痕，不允许派发。"));
+        if (isStale(state)) return fail(guideError(state, "留痕已过期（stale），请重新提交任务卡。"));
+        if (state.dispatch_count >= MAX_DISPATCH) return fail(guideError(state, "派发次数已达上限 " + MAX_DISPATCH + "，停止派发并向用户汇报。"));
         // 激活占位卡闸门：占位卡未补齐字段时不允许派发
         if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
-          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
-            "）。请先补齐后重新调用 flow_submit_requirement，再来派发。");
+          return fail(guideError(state, "激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "）。请先补齐后重新调用 flow_submit_requirement，再来派发。"));
         }
         // 必须先 flow_claim 领取派发名额（claimed 标记由 claim 设置）
-        if (state.claimed !== true) return fail("未 claim，请先 flow_claim 领取派发名额。");
+        if (state.claimed !== true) return fail(guideError(state, "未 claim，请先 flow_claim 领取派发名额。"));
 
         const cwd = a.cwd || process.cwd();
 
@@ -664,7 +699,7 @@ const TOOLS = [
         const sessionId = a.sessionId || "unknown";
         const state = loadState(sessionId);
 
-        if (!state.card) return fail("没有留痕，无法记录裁定。");
+        if (!state.card) return fail(guideError(state, "没有留痕，无法记录裁定。"));
 
         const verdict = a.verdict;
 
@@ -677,8 +712,8 @@ const TOOLS = [
             reason: "激活占位卡未补齐",
             pending: state.activation_pending,
           });
-          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
-            "），不能记录裁定。请先补齐后重新调用 flow_submit_requirement。");
+          return fail(guideError(state, "激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "），不能记录裁定。请先补齐后重新调用 flow_submit_requirement。"));
         }
 
         // 防假闭环之二：从未派发过任何执行，就不允许落 PASS 裁定。
@@ -691,8 +726,8 @@ const TOOLS = [
             reason: "尚未派发任何执行",
             dispatch_count: state.dispatch_count,
           });
-          return fail("尚未派发任何执行（dispatch_count=0），不能记录 PASS 裁定。" +
-            "请先 flow_claim / flow_dispatch 派发并完成验证后再落 PASS。");
+          return fail(guideError(state, "尚未派发任何执行（dispatch_count=0），不能记录 PASS 裁定。" +
+            "请先 flow_claim / flow_dispatch 派发并完成验证后再落 PASS。"));
         }
 
         // 防假闭环之三：记 PASS 必须有**真实验证通过**的证据。

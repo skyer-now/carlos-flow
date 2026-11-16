@@ -901,6 +901,74 @@ async function main() {
     axisEvents.some((e) => e.axis === "standards" && e.verdict === "WARN"),
     r.ok ? `audit_axis_submitted × ${axisEvents.length}` : r.error);
 
+  // ── 第 30 组：向导模式报错人话翻译 --------------------------------------
+  //
+  // 目的：验证 mode==='guide' 时门禁拦截返回「通俗解释 + 操作指引」，
+  //       且 mode==='pro'（默认）时行为绝对不变（向后兼容守护）。
+  //
+  // 隔离策略：用独立 sessionId（GUIDE_SID / PRO_SID），绝不碰主流程 SID 的 state，
+  //           避免中途切 mode 污染前面 29 组本该是 pro 态的用例。
+  //
+  // ★ 关键认知（2026-11-16 修正）：flow_claim / flow_dispatch / flow_verdict 等操作
+  //   在被门禁拒绝时，客户端进程以**非零退出码**结束，call() 走进 code!==0 分支，
+  //   返回 {ok:false, error:"ERROR: ..."}。这与 flow_submit_requirement 不同——后者
+  //   MCP 层正常返回 JSON（exit 0），只是里面 ok:false。
+  //   因此断言必须检查 r.ok===false + r.error 内容，不能用 r.data?.ok===false。
+  //
+  // 断言锚点：guideError 的输出格式是「人话 + \n（原始提示：<技术码>）」，
+  //           即原始技术码在两种模式下都可能出现在串尾。因此**不能用「是否包含技术码」**
+  //           区分二者（两边都命中=假绿），必须用「人话前缀特征句」作为唯一判别锚点。
+  const GUIDE_HUMAN_NO_CARD = "还没有提交任务卡哦";  // 对应 /没有留痕|record/
+  const GUIDE_HUMAN_ENTRY   = "你还没有领取这次工作的「入场券」"; // 对应 /未\s*claim|领取派发名额/
+  const TECH_NO_RECORD      = "没有留痕";            // 原始技术码稳定子串
+
+  // 30a. guide 模式：未留痕直接 claim → 必须返回人话
+  {
+    const GUIDE_SID = "guide-e2e-" + Date.now();
+    await call("flow_mode", { sessionId: GUIDE_SID, mode: "guide", reason: "e2e-guide-test" });
+    const gClaim = await call("flow_claim", { sessionId: GUIDE_SID, role: "executor" });
+    const errStr = String(gClaim.error || "");
+    check(
+      "30a. guide 模式：未留痕 claim 返回人话而非纯技术码",
+      gClaim.ok === false && errStr.includes(GUIDE_HUMAN_NO_CARD),
+      gClaim.ok ? "意外成功（不应放行）" : (errStr.includes(GUIDE_HUMAN_NO_CARD) ? "已翻译成人话" : "仍是技术码")
+    );
+  }
+
+  // 30b. pro 模式（默认，不显式设 mode）：同场景 claim → 必须是原始技术码，不含人话前缀
+  {
+    const PRO_SID = "pro-e2e-" + Date.now();
+    const pClaim = await call("flow_claim", { sessionId: PRO_SID, role: "executor" });
+    const errStr = String(pClaim.error || "");
+    check(
+      "30b. pro 模式：同场景 claim 保持原始技术码（向后兼容守护）",
+      pClaim.ok === false && errStr.includes(TECH_NO_RECORD) && !errStr.includes(GUIDE_HUMAN_NO_CARD),
+      pClaim.ok ? "意外成功（不应放行）" : (!errStr.includes(GUIDE_HUMAN_NO_CARD) ? "未被翻译（正确）" : "被人话污染（回归！）")
+    );
+  }
+
+  // 30c. guide 模式第二类报错（未 claim 直接 dispatch）：换一条映射，证明不只硬编码一句
+  {
+    const GUIDE_SID2 = "guide-e2e2-" + Date.now();
+    await call("flow_mode", { sessionId: GUIDE_SID2, mode: "guide", reason: "e2e-guide-test-2" });
+    // 留痕一张合法卡（使「没有留痕」不再是拦截原因），然后不 claim 直接 dispatch
+    await call("flow_add_user_msg", { sessionId: GUIDE_SID2, text: QUOTE });
+    await call("flow_submit_requirement", {
+      sessionId: GUIDE_SID2, goal: "guide-dispatch-test", quote: QUOTE,
+      scope: [ROOT + "/README.md"], acceptance: ["无副作用"],
+      files: [{ path: ROOT + "/README.md", line: 1 }],
+      verify: { cmd: "echo OK" }, confirmed: true,
+    });
+    // 不 claim，直接 dispatch → 应命中 /未\s*claim|领取派发名额/ 映射
+    const g2Dispatch = await call("flow_dispatch", { sessionId: GUIDE_SID2, role: "executor", message: "test" });
+    const errStr = String(g2Dispatch.error || "");
+    check(
+      "30c. guide 模式：未 claim 直接 dispatch 翻译成「入场券」人话",
+      g2Dispatch.ok === false && errStr.includes(GUIDE_HUMAN_ENTRY),
+      g2Dispatch.ok ? "意外放行（不应允许未 claim dispatch）" : (errStr.includes(GUIDE_HUMAN_ENTRY) ? "第二条映射也生效" : "未命中预期人话")
+    );
+  }
+
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
   console.log(`sessionId=${SID}`);
