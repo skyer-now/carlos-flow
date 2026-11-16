@@ -224,6 +224,35 @@ One package, six platforms. The init command generates the right config file for
 
 ---
 
+## 📦 Version Consistency Convention (Dev Environment)
+
+When you configure Carlos Flow for your AI, there are three conventions worth knowing:
+
+**1. The version you call = the current disk version**
+
+The Bridge (`bridge/mcp-bridge.js`) restarts a new node process on *every call*, loading `D:\cindy\publish-output\carlos-flow\src\index.js`. There is no "old code resident" problem — every `flow_*` instruction you send, from phone or PC, always executes the latest version on disk.
+
+**2. Version confirmation after key commits**
+
+Once a new functional commit is pushed to `main`, I will actively run a consistency check in the **next session**:
+```bash
+# Compare working tree vs main branch code differences
+git status --short
+
+# Confirm the specified files are fully consistent
+git diff HEAD -- src/index.js src/dispatch.js
+
+# Confirm the remote push is complete
+git log --oneline origin/main -1
+```
+When the result shows "working tree == HEAD (no differences)" and "origin/main == HEAD", the version you call is confirmed green.
+
+**3. Maintain version consistency**
+
+If you modify `src/index.js` / `src/dispatch.js` but haven't pushed yet, the next call may still run the old version. **Solution**: run `git push origin main` after each key change, and the next call will automatically pull the newest code. The bridge doesn't care about "what's pushed" — it only looks at the disk.
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Install and initialize

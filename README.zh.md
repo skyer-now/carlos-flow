@@ -52,6 +52,35 @@ A：完全没问题。它的设计目标就是让不懂复杂技术的人，也�
 
 ---
 
+## 📦 版本一致性约定（开发环境篇）
+
+给你的 AI 配置 Carlos 工作流时，有三条约定需要知道：
+
+**1. 你调用的版本 = 当前磁盘版本**
+
+桥接器（`bridge/mcp-bridge.js`）每次调用都会重新启动一个 node 进程，加载 `D:\cindy\publish-output\carlos-flow\src\index.js`。不存在“旧代码驻留”的问题，你通过手机或电脑发出的每一条 `flow_*` 指令，执行的永远是磁盘上的最新版本。
+
+**2. 关键 Commit 后的版本确认**
+
+一旦有新的功能性 commit 推送到 `main`，我会主动执行一次确认循环（在下次会话中）：
+```bash
+# 对比工作区与 main 分支的代码差异
+git status --short
+
+# 确认指定文件已全部一致
+git diff HEAD -- src/index.js src/dispatch.js
+
+# 确认远端推送完成
+git log --oneline origin/main -1
+```
+确认结果显示「工作区与 HEAD 无差异」且「origin/main 与 HEAD 一致」，你调用的版本才算点绿。
+
+**3. 保持版本一致**
+
+如果你在进一步开发中修改了 `src/index.js` / `src/dispatch.js` 但尚未 push，那么下一轮调用可能仍执行旧版本。**解决方案**：每次关键修改后先 `git push origin main`，你的下一次调用就会自动拉取最新代码。桥接器不参与“已推送”的选择，它只看磁盘。
+
+---
+
 ## 🚀 准备好开始了吗？
 只需几行命令，为你的 AI 加上这层保护罩。
 ```bash
