@@ -19,21 +19,21 @@
 必须按以下顺序调用 Carlos 插件工具：
 1. **负对照验证**：证明测试用例对本次改动有效。
    ```bash
-   carlos call_tool --name flow_falsify --args '{}'
+   npx carlos call_tool --name flow_falsify --args '{}'
    ```
 2. **双轴审计派发**：派发 Standards/Spec 双轴审计 subagent。
    ```bash
-   carlos call_tool --name flow_audit_axes --args '{}'
+   npx carlos call_tool --name flow_audit_axes --args '{}'
    ```
 3. **门禁保护校验**：校验证据是否齐全且符合门禁口径。
    ```bash
-   carlos call_tool --name flow_audit_guard --args '{}'
+   npx carlos call_tool --name flow_audit_guard --args '{}'
    ```
 
 #### 第三阶段：裁定与发布 (Finalize)
 1. **落定裁定**：正式记录审计结论，将项目标记为已复核。
    ```bash
-   carlos call_tool --name flow_verdict --args '{"role":"auditor","verdict":"PASS"}'
+   npx carlos call_tool --name flow_verdict --args '{"role":"auditor","verdict":"PASS"}'
    ```
 2. **版本与发布**：更新版本号并推送远端。
    ```bash
