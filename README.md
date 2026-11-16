@@ -81,6 +81,16 @@ git log --oneline origin/main -1
 
 ---
 
+## 📚 关联文档
+
+| 文档 | 说明 |
+|------|------|
+| [TRIGGER_GUIDE.md](./TRIGGER_GUIDE.md) | 智能触发引擎深度指南（配置、评分、激活、反馈学习） |
+| [CHANGELOG.md](./CHANGELOG.md) | 版本历史（遵循 Keep a Changelog + SemVer） |
+| [MIGRATION.md](./MIGRATION.md) | 从 `carlos-flow-cindy` / `carlos-flow-opencode` 迁移 |
+| [QA 报告](./docs/QA_REPORT_v2.5.5.md) | 第三方只读审计（13/13 变异体检测通过） |
+| [变异报告](./docs/MUTATION_REPORT_v2.5.5.md) | 变异注入详情与结果 |
+
 ## 🚀 准备好开始了吗？
 只需几行命令，为你的 AI 加上这层保护罩。
 ```bash

@@ -589,12 +589,6 @@
           "message"
         ]
       }
-    },
-    {
-      "description": "获取可用场景包清单"
-    },
-    {
-      "description": "执行场景包任务"
     }
   ]
 }
