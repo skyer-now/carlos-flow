@@ -2,7 +2,7 @@
 // Carlos 工作流的机械门禁工具集（留痕 / 派发 / 裁定 / 审计 / 快照还原计划）。
 // 重要：stdout 是 MCP 传输通道，所有日志一律走 stderr。
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createServer, connect } from "node:net";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -19,7 +19,20 @@ const log = (msg) => {
   } catch {
     /* stderr 不可写时静默 */
   }
-};
+}
+// 往上找**第一个包含 package.json 的目录**（项目根），处理 server 从包 src 目录启动导致 workdir 错位的场景
+function findProjectRoot(dir) {
+  if (!dir) return undefined;
+  let cur = dir;
+  for (let i = 0; i < 10; i++) {
+    const parent = path.dirname(cur);
+    if (parent === cur) return undefined;
+    if (existsSync(path.join(cur, "package.json"))) return cur;
+    cur = parent;
+  }
+  return undefined;
+}
+;
 
 // ---- 通用工具函数 ----------------------------------------------------------
 
@@ -1315,7 +1328,13 @@ const TOOLS = [
         const cardProject = state.card.env && typeof state.card.env.project === "string"
           ? state.card.env.project
           : "";
-        const workdir = a.cwd || cardProject || undefined;
+        let workdir = a.cwd || cardProject || undefined;
+        // 兜底：如果 project 不是有效项目目录（里面没有 package.json），向上找项目根
+        // （例如 server 从全局包 src 目录启动时，project 指向的目录不存在或没有 package.json）
+        if (workdir && !existsSync(path.join(workdir, "package.json"))) {
+          const root = findProjectRoot(workdir) || findProjectRoot(process.cwd());
+          if (root) workdir = root;
+        }
         const result = await runVerifyCommand(state.card.verify.cmd, workdir);
         const state2 = loadState(sessionId);
         state2.last_verify = {
@@ -1364,7 +1383,12 @@ const TOOLS = [
         const cardProject = state.card.env && typeof state.card.env.project === "string"
           ? state.card.env.project
           : "";
-        const workdir = a.cwd || cardProject || undefined;
+        let workdir = a.cwd || cardProject || undefined;
+        // 兜底：如果 project 不是有效项目目录（里面没有 package.json），向上找项目根
+        if (workdir && !existsSync(path.join(workdir, "package.json"))) {
+          const root = findProjectRoot(workdir) || findProjectRoot(process.cwd());
+          if (root) workdir = root;
+        }
 
         const r = await runNegativeControl(sessionId, state.card.verify.cmd, workdir);
         if (!r.ok) {
@@ -1619,6 +1643,53 @@ const TOOLS = [
     },
   },
 ];
+
+// ---- 工具去重自检 ----------------------------------------------------------
+//
+// 历史事故：TOOLS 数组里曾同时存在两个同名工具（flow_run_verify）定义。
+// 路由用 TOOLS.find((t) => t.name === name) **只取第一个匹配项**，
+// 后一份健壮实现就成了永不执行的死代码 —— 而整个过程**没有任何报错**，
+// 属于静默失效，非常危险。
+//
+// 这里在模块加载时做一次硬校验：一旦发现重名就抛出带明确信息的 Error
+// （指出工具名 + 首次/重复出现的索引），让 MCP server 拒绝启动。
+// 正常情况下（无重名）不产生任何副作用，直接返回 true。
+function assertNoDuplicateTools(tools = TOOLS) {
+  const seen = new Map(); // 工具名 -> 首次出现的索引
+  const dups = []; // { name, first, second }
+  tools.forEach((tool, idx) => {
+    const key = tool && tool.name;
+    if (typeof key !== "string" || key.length === 0) {
+      throw new Error("TOOLS[" + idx + "] 缺少合法的 name 字段，无法完成工具去重校验");
+    }
+    if (seen.has(key)) {
+      dups.push({ name: key, first: seen.get(key), second: idx });
+    } else {
+      seen.set(key, idx);
+    }
+  });
+  if (dups.length > 0) {
+    const detail = dups
+      .map((d) => "「" + d.name + "」（首次出现于 TOOLS[" + d.first + "]，重复出现于 TOOLS[" + d.second + "]）")
+      .join("、");
+    throw new Error(
+      "TOOLS 中存在重复的工具名：" + detail +
+        " —— 重名会导致 TOOLS.find() 只路由到第一份，后一份成为永不执行的死代码。已拒绝启动 MCP server。",
+    );
+  }
+  return true;
+}
+
+// 启动前自检：重名即拒绝启动，并打印清晰错误（不静默失效）。
+try {
+  assertNoDuplicateTools();
+} catch (e) {
+  process.stderr.write(
+    "[carlos-flow] 致命错误：工具定义校验失败，MCP server 拒绝启动 —— " +
+      (e && e.message ? e.message : String(e)) + "\n",
+  );
+  throw e;
+}
 
 // ---- 服务器装配 ------------------------------------------------------------
 

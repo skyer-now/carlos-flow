@@ -377,13 +377,109 @@ function restoreFromManifest(entries) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 负对照的状态工具：把「改动前态」「改动后态」显式化、可证明
+// ---------------------------------------------------------------------------
+
+// 文件内容摘要：存在→sha256 十六进制；不存在→"ABSENT"；无法读取→"UNKNOWN"
+function digestOf(file) {
+  if (!file) return "ABSENT";
+  try {
+    return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  } catch (e) {
+    if (e && (e.code === "ENOENT" || e.code === "ENOTDIR")) return "ABSENT";
+    return "UNKNOWN";
+  }
+}
+
+// 状态指纹：一组 {文件路径: 摘要} → 稳定 sha256。
+// 用途：证明「改动前」「改动后」确实是**两个可区分的状态**，而不是同一份内容跑两遍。
+function fingerprintOfState(digests) {
+  const lines = Object.keys(digests).sort().map((k) => k + "=" + digests[k]);
+  return createHash("sha256").update(lines.join("\n")).digest("hex");
+}
+
+// 比较「改动前」态与某个候选「改动后」态。
+//   changed：内容确实不同的文件（= 本次改动留下的痕迹）
+//   unknown：状态不可还原/不可读的文件（无法证明）
+function diffStates(pre, post) {
+  const changed = [];
+  const unknown = [];
+  for (const k of Object.keys(pre)) {
+    const a = pre[k];
+    const b = Object.prototype.hasOwnProperty.call(post, k) ? post[k] : "UNKNOWN";
+    if (a === "UNKNOWN" || b === "UNKNOWN") { unknown.push(k); continue; }
+    if (a !== b) changed.push(k);
+  }
+  for (const k of Object.keys(post)) {
+    if (Object.prototype.hasOwnProperty.call(pre, k)) continue;
+    const b = post[k];
+    if (b === "UNKNOWN") { unknown.push(k); continue; }
+    if (b !== "ABSENT") changed.push(k);
+  }
+  return { changed, unknown };
+}
+
+// 「改动后」态的**显式记录**文件。
+//
+// 为什么要单独一个文件：manifest.jsonl 的语义是「派发时的改动前快照」，
+// restoreFromManifest() 完全依赖这个语义。把改动后态写进 manifest 会污染它，
+// 导致「还原改动前」还原成「改动后」——负对照直接失效。
+// 因此改动后态单独落在 backup/after_state.jsonl + backup/after_state_<ts>/ 目录。
+function afterStateFile(sid) {
+  return path.join(RUNS_DIR, sanitizeId(sid), "backup", "after_state.jsonl");
+}
+
+// 读取本会话最近一次记录的「改动后」态（按追加顺序，后写的覆盖先写的）
+function readAfterState(sid) {
+  const latest = new Map();
+  try {
+    const raw = fs.readFileSync(afterStateFile(sid), "utf8");
+    for (const line of raw.split("\n")) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        const e = JSON.parse(t);
+        if (!e || !e.orig) continue;
+        latest.set(e.orig, e);
+      } catch {}
+    }
+  } catch {}
+  return Array.from(latest.values());
+}
+
+// 追加记录「改动后」态
+function writeAfterState(sid, records) {
+  try {
+    const file = afterStateFile(sid);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const lines = records.map((r) => JSON.stringify(r)).join("\n") + "\n";
+    fs.appendFileSync(file, lines, "utf8");
+  } catch (e) {
+    try { process.stderr.write(`[flow-falsify] 记录改动后态失败: ${e && e.message ? e.message : e}\n`); } catch {}
+  }
+}
+
 // 负对照：证明 verify.cmd 真的在测「本次改动」。
 //
 // 层次：这是「证据门禁」的执行侧 —— 不是让 LLM 声称「我试图证伪但没成功」，
 // 而是让 harness 真的把工作区还原到改动前，跑同一命令，看它是否失败。
 // 一个改动前就退 0 的测试是**空测试**，不构成任何证据（`|| true` / `echo ok` 就是这么漏过去的）。
 //
-// 安全：先把「改动后」的 scope 文件备份到临时目录，finally 里一定还原；
+// 判定依据（本次修复的核心 —— 去掉隐含前提）：
+//   before 与 after 必须是**两个可区分的状态**，否则「前失败/后通过」就没有归因意义。
+//   本实现把两态都显式构造出来，并逐文件比对内容摘要：
+//     · 改动前态 = 派发快照 manifest 的备份（restoreFromManifest）；
+//     · 改动后态 = ①当前工作区（显式捕获后再显式还原），
+//                  ②本会话上次负对照**显式记录**下来的改动后态（backup/after_state.jsonl）；
+//       当①与改动前态逐字节一致（=工作区里根本没有改动后状态，例如主 Agent 手工改动后
+//       未走标准派发窗口、或改动被回退）时，才启用②作为改动后态；
+//       两者都没有可用时，如实标注「前后是同一状态」，并按保守口径判负对照，
+//       绝不把「同一状态跑两遍」当成 meaningful。
+//   改动后态在每次负对照后被显式落盘记录（after_state.jsonl + after_state_<ts>/），
+//   于是「改动后应有的状态」不再依赖「调用时工作区恰好已经是改动后」这个隐含前提。
+//
+// 安全：先把进入时的 scope 文件备份到临时目录，finally 里一定还原成进入时的样子；
 // 即使 verify 命令本身改动文件，也不会把工作区留在改动前状态。
 //
 // 局限（如实说明）：快照只覆盖卡片 scope 内的文件。如果 verify.cmd 依赖 scope 外的
@@ -398,7 +494,16 @@ export async function runNegativeControl(sid, cmd, cwd) {
     return { ok: false, error: "无法创建负对照临时目录：" + (e && e.message ? e.message : e) };
   }
 
-  // 1. 备份「改动后」的当前状态
+  // ---- 状态 A：改动前态（派发时的快照，来自 manifest 备份） ----
+  const preDigests = {};
+  for (const e of entries) {
+    if (!e || !e.orig) continue;
+    if (e.created === true) preDigests[e.orig] = "ABSENT";
+    else if (e.backup) preDigests[e.orig] = digestOf(e.backup);
+    else preDigests[e.orig] = "UNKNOWN"; // 备份缺失 → 改动前态无法完整还原
+  }
+
+  // ---- 状态 B：改动后候选① —— 当前工作区（显式捕获，之后显式还原） ----
   const saved = [];
   for (const e of entries) {
     if (!e || !e.orig) continue;
@@ -414,6 +519,38 @@ export async function runNegativeControl(sid, cmd, cwd) {
       }
     }
     saved.push({ orig, savedPath, existed });
+  }
+  const currentDigests = {};
+  for (const s of saved) {
+    if (!s.existed) currentDigests[s.orig] = "ABSENT";
+    else if (s.savedPath) currentDigests[s.orig] = digestOf(s.savedPath);
+    else currentDigests[s.orig] = "UNKNOWN";
+  }
+
+  // ---- 状态 C：改动后候选② —— 本会话显式记录过的改动后态 ----
+  const recorded = readAfterState(sid);
+  const recordedMap = new Map();
+  const recordedDigests = {};
+  for (const r of recorded) {
+    if (!r || !r.orig) continue;
+    recordedMap.set(r.orig, r);
+    recordedDigests[r.orig] = r.absent === true ? "ABSENT" : digestOf(r.backup);
+  }
+  // 只有当记录覆盖了本次快照的全部文件时，才敢把它当作完整的「改动后态」
+  const recordedCoversAll = entries.every((e) => e && e.orig && recordedMap.has(e.orig));
+
+  // ---- 选定改动后态：优先当前工作区；当前工作区与改动前态完全一致时，退回显式记录 ----
+  const curDiff = diffStates(preDigests, currentDigests);
+  const recDiff = diffStates(preDigests, recordedDigests);
+  let afterSource = "workspace";
+  let afterDigests = currentDigests;
+  let changedFiles = curDiff.changed;
+  let unknownFiles = curDiff.unknown;
+  if (curDiff.changed.length === 0 && recordedCoversAll && recDiff.changed.length > 0) {
+    afterSource = "recorded";
+    afterDigests = recordedDigests;
+    changedFiles = recDiff.changed;
+    unknownFiles = recDiff.unknown;
   }
 
   // 还原「改动后」状态（无论后续发生什么）
@@ -433,37 +570,94 @@ export async function runNegativeControl(sid, cmd, cwd) {
     }
   };
 
+  // 还原「显式记录的改动后态」
+  const restoreRecorded = () => {
+    for (const r of recorded) {
+      if (!r || !r.orig) continue;
+      try {
+        if (r.absent === true) {
+          try { fs.unlinkSync(r.orig); } catch {}
+        } else if (r.backup) {
+          fs.mkdirSync(path.dirname(r.orig), { recursive: true });
+          fs.copyFileSync(r.backup, r.orig);
+        }
+      } catch (err) {
+        try { process.stderr.write(`[flow-falsify] 还原记录的改动后态失败 ${r.orig}: ${err && err.message ? err.message : err}\n`); } catch {}
+      }
+    }
+  };
+
+  // ---- 把选定的「改动后态」显式落盘记录（让下次负对照能按记录还原，而不是靠隐含前提） ----
+  try {
+    const afterDir = path.join(RUNS_DIR, sanitizeId(sid), "backup", "after_state_" + Date.now());
+    fs.mkdirSync(afterDir, { recursive: true });
+    const ts = new Date().toISOString();
+    const records = [];
+    for (const s of saved) {
+      let backup = null;
+      let absent = false;
+      if (afterSource === "recorded") {
+        const r = recordedMap.get(s.orig);
+        if (r) { absent = r.absent === true; backup = r.absent === true ? null : r.backup; }
+      } else if (!s.existed) {
+        absent = true;
+      } else if (s.savedPath) {
+        backup = path.join(afterDir, `${records.length}_${path.basename(s.orig)}`);
+        fs.copyFileSync(s.savedPath, backup);
+      }
+      records.push({ ts, orig: s.orig, backup, absent });
+    }
+    writeAfterState(sid, records);
+  } catch (e) {
+    try { process.stderr.write(`[flow-falsify] 快照改动后态失败: ${e && e.message ? e.message : e}\n`); } catch {}
+  }
+
   let before = null;
   let after = null;
   try {
-    // 2. 还原「改动前」
+    // 1. 还原「改动前」（派发快照）—— 必须失败
     restoreFromManifest(entries);
-    // 3. 跑改动前 —— 必须失败
     before = await runVerifyCommand(cmd, cwd);
-    // 4. 还原「改动后」
-    restoreCurrent();
-    // 5. 跑改动后 —— 必须通过
+    // 2. 显式还原「改动后」态再跑第二次 —— 必须通过
+    if (afterSource === "recorded") restoreRecorded();
+    else restoreCurrent();
     after = await runVerifyCommand(cmd, cwd);
   } finally {
-    // 无论如何都还原改动后状态
+    // 无论如何都把工作区还原成进入负对照时的样子
     restoreCurrent();
   }
 
   const beforeHash = computeOutputHash(before.exitCode, before.stdout, before.stderr);
   const afterHash = computeOutputHash(after.exitCode, after.stdout, after.stderr);
+  const beforeStateHash = fingerprintOfState(preDigests);
+  const afterStateHash = fingerprintOfState(afterDigests);
 
-  let verdict = "inconclusive";
+  // 两态是否可区分 —— 判定的前提，必须写进 reason（不能靠隐含假设）
+  const stateNote = changedFiles.length > 0
+    ? "；改动后态来源=" + (afterSource === "recorded" ? "上次负对照显式记录的改动后态" : "当前工作区") +
+      "，检出改动文件 " + changedFiles.length + " 个：" + changedFiles.join(", ")
+    : (unknownFiles.length > 0
+      ? "；无法确认改动后态：" + unknownFiles.length + " 个文件状态不可还原/不可读（" + unknownFiles.join(", ") + "）"
+      : "；未检出任何改动：工作区与派发快照逐字节一致，「改动前」「改动后」是同一状态");
+
+  let verdict = "";
   let reason = "";
   if (before.ok === true) {
     // 改动前就通过 → 空测试
     verdict = "vacuous";
-    reason = "verify.cmd 在改动前就通过（exitCode=" + before.exitCode + "）—— 它没有测本次改动，是空测试";
+    reason = "verify.cmd 在改动前就通过（exitCode=" + before.exitCode + "）—— 它没有测本次改动，是空测试" + stateNote;
   } else if (after.ok !== true) {
     verdict = "not_passing";
-    reason = "verify.cmd 在改动后未通过（exitCode=" + after.exitCode + "）—— 改动本身有问题";
-  } else {
+    reason = "verify.cmd 在改动后未通过（exitCode=" + after.exitCode + "）—— 改动本身有问题" + stateNote;
+  } else if (changedFiles.length > 0) {
     verdict = "meaningful";
-    reason = "改动前失败（exitCode=" + before.exitCode + "）+ 改动后通过（exitCode=" + after.exitCode + "）—— 测试有判别力";
+    reason = "改动前失败（exitCode=" + before.exitCode + "）+ 改动后通过（exitCode=" + after.exitCode + "）—— 测试有判别力" + stateNote;
+  } else {
+    // 两次运行处于同一状态 → 结果差异不可能来自本次改动（只可能来自命令本身的不确定）
+    verdict = "vacuous";
+    reason = "改动前失败（exitCode=" + before.exitCode + "）+ 改动后通过（exitCode=" + after.exitCode + "），" +
+      "但两次运行处于同一状态（未检出任何改动文件）—— 结果差异无法归因于本次改动，" +
+      "不能证明该命令在测本次改动，按保守口径记为空测试" + stateNote;
   }
 
   // 清理临时目录（还原已完成，不再需要备份）
@@ -473,11 +667,10 @@ export async function runNegativeControl(sid, cmd, cwd) {
     ok: true,
     verdict,
     reason,
-    before: { exitCode: before.exitCode, ok: before.ok, hash: beforeHash, stdout: before.stdout, stderr: before.stderr },
-    after: { exitCode: after.exitCode, ok: after.ok, hash: afterHash, stdout: after.stdout, stderr: after.stderr },
+    before: { exitCode: before.exitCode, ok: before.ok, hash: beforeHash, stdout: before.stdout, stderr: before.stderr, state_hash: beforeStateHash },
+    after: { exitCode: after.exitCode, ok: after.ok, hash: afterHash, stdout: after.stdout, stderr: after.stderr, state_hash: afterStateHash },
   };
 }
-
 // Phase 1-1: scope 机器校验 - 对比 diff 与 card.scope
 //
 // 用法：enforceScope(scope, cwd, diffFiles?)
