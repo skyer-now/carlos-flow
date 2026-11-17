@@ -17,7 +17,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -192,15 +192,55 @@ async function main() {
   // 清理本次运行的隔离目录（不影响其他运行的目录）
   try { rmSync(HOME, { recursive: true, force: true }); } catch { /* ignore */ }
 
-  results.total = 3;
+  // ---- 用例 4：锁排他性（跨进程读-改-写不得丢更新）----
+  // 背景：M12 变异体把锁文件从 'wx'（O_EXCL 原子排他）改成 'a'（非排他），
+  // 两个进程会同时进入临界区 → 读-改-写交错 → 计数丢更新。
+  // 旧用例只查 activation_pending 泄漏，判定条件依赖竞态碰巧产生特定状态，
+  // 对「锁失效」检出率低。这里直接对锁做压力测试：两进程各 100 次读-改-写，
+  // 锁有效则计数必为 200；丢更新即说明锁失去排他性。
+  let lockLost = -1;
+  {
+    const cntFile = join(HOME, "lock-count.json");
+    try { rmSync(cntFile, { force: true }); } catch {}
+    const lockProbe = `
+import { withStateLock } from ${JSON.stringify(pathToFileURL(join(REPO_ROOT, "src", "state.js")).href)};
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const cnt = ${JSON.stringify(cntFile)};
+for (let i = 0; i < 100; i++) {
+  withStateLock("lock-probe", () => {
+    let v = 0;
+    try { v = JSON.parse(readFileSync(cnt, "utf8")).v || 0; } catch {}
+    writeFileSync(cnt, JSON.stringify({ v: v + 1 }));
+  });
+}
+console.log("done");
+`;
+    const runProbe = () => new Promise((res, rej) => {
+      const cp = spawn(process.execPath, ["--input-type=module", "-e", lockProbe], {
+        env: { ...process.env, CARLOS_FLOW_HOME: HOME }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+      });
+      let err = ""; cp.stderr.on("data", (d) => { err += d.toString(); });
+      cp.on("exit", (code) => code === 0 ? res() : rej(new Error(err.slice(0, 200))));
+    });
+    await Promise.all([runProbe(), runProbe()]);
+    let v = 0;
+    try { v = JSON.parse(readFileSync(cntFile, "utf8")).v || 0; } catch {}
+    lockLost = 200 - v; // >0 即丢更新
+    try { rmSync(cntFile, { force: true }); } catch {}
+  }
+
+  results.total = 4;
   const okNoLeak = leaked === 0;
   const okNoExploit = exploited === 0;
   const okStateConsistent = rounds > 0;
+  const okLockExclusive = lockLost === 0;
 
   const cases = [
     ["并发提交后闸门不得被清空（零泄漏）", okNoLeak, `泄漏=${leaked}/${rounds}`],
     ["并发后字段不全的卡不得被放行派发（零利用）", okNoExploit, `利用=${exploited}`],
     ["并发用例确实执行了（轮次 > 0）", okStateConsistent, `轮次=${rounds}`],
+    ["锁排他性：跨进程读-改-写零丢更新（M12 盲区）", okLockExclusive, `丢更新=${lockLost}`],
   ];
   for (const [name, ok, detail] of cases) {
     if (ok) { results.pass.push(name); log(`✅ ${name}  ${detail}`); }

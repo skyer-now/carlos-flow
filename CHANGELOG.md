@@ -1,3 +1,9 @@
+## [2.13.0]
+- CI 全绿：修复 3 个漂移的变异锚点（M2/M3 claim/verdict 闸门、M15 审计链校验），check:anchors 恢复 17/17
+- 工具清单对齐：ghost.json 与 src/index.js 统一为 20 个工具（移除空名称残留）
+- 文档完善：README 增加关联文档链接与「版本一致性约定」章节（中/简/英三份同步）
+- 门禁一致性：check:no-dead-handler 期望工具数 22→20
+
 ## [2.12.8]
 - 发布版本一致性约定到双语 README；修复 flow_run_verify 验证目录错位根因（workdir 保留相对路径、不再上溯项目根）
 

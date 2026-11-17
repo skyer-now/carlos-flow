@@ -150,6 +150,29 @@ v = JSON.parse(r.stdout.trim().split("\n").pop());
 check("date=2020-01-01 读到 0 条（不再误读今天的数据）", v.total === 0, JSON.stringify(v));
 check("date=2020-01-01 校验的是那一天的文件（broken=0）", v.chainBroken === 0, JSON.stringify(v));
 
+// ---- 4b. 单日校验也必须能发现篡改（堵 M15 盲区）----
+// 背景：M15 变异体把单日分支的返回改成恒 ok:true，而旧用例只测全链（无 date），
+// 单日分支恒真时测试仍全绿 —— 守护静默失效。这里直接对单日分支做真实篡改。
+console.log("\n> 4b. 单日校验篡改检测");
+rmSync(join(home, "gate-audit"), { recursive: true, force: true });
+r = runInChild("plain", WRITE_SCRIPT);
+const todayStr = localDateStr();
+const dayFile = join(home, "gate-audit", todayStr + ".jsonl");
+check("单日审计文件已写入", existsSync(dayFile), dayFile);
+const dayLines = readFileSync(dayFile, "utf8").split("\n").filter(Boolean);
+const dayRec = JSON.parse(dayLines[1]);
+dayRec.kind = "TAMPERED_BY_ATTACKER";
+dayLines[1] = JSON.stringify(dayRec);
+writeFileSync(dayFile, dayLines.join("\n") + "\n", "utf8");
+const DAY_TAMPER_SCRIPT = `
+import { verifyAuditChain } from ${JSON.stringify(pathToFileURL(join(ROOT, "src", "state.js")).href)};
+const r = verifyAuditChain({ date: ${JSON.stringify(todayStr)} });
+console.log(JSON.stringify({ ok: r.ok, broken: r.broken, total: r.total, file: r.file }));
+`;
+r = runInChild("plain", DAY_TAMPER_SCRIPT);
+v = JSON.parse(r.stdout.trim().split("\n").pop());
+check("⚠️  单日校验：篡改被检测出来（ok=false, broken>0）", v.ok === false && v.broken > 0, JSON.stringify(v));
+
 // ---- 5. 跨天断链回连：今天第一条记录的 prevHash 必须来自昨天的 tail ----
 console.log("\n> 5. 跨天链");
 const YESTERDAY = (n) => localDateStr(new Date(Date.now() - n * 86400000));
