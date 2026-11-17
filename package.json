@@ -50,7 +50,7 @@
     "check:no-dead-handler": "node scripts/check-no-dead-handler.mjs",
     "test:scope": "node test/scope-enforcement.mjs",
     "test:audit": "node test/audit-chain.mjs",
-    "test:bridge": "node test/bridge-identity.mjs",
+    "test:bridge": "node test/bridge-identity.mjs && node test/bridge-idle.mjs",
     "sync:version": "node scripts/sync-version.mjs",
     "check:version": "node scripts/check-repo-parity.mjs",
     "test:gate": "node test/publish-gate.test.mjs",

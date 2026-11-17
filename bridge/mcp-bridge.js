@@ -6,6 +6,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { createHash } from "node:crypto";
+import { readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -28,6 +29,28 @@ const RATE_LIMIT = 10; // 每秒最多请求数
 // 用户只看到「Timeout」，而服务端那边命令其实跑得好好的。
 // 现在默认 180s（> 服务端 120s 上限），可用 CARLOS_BRIDGE_TIMEOUT_MS 覆盖。
 const REQUEST_TIMEOUT = Number(process.env.CARLOS_BRIDGE_TIMEOUT_MS) || 180000; // 180s
+
+// ---- 空闲退出（idle reaper）----
+//
+// 为什么必须有：ghost.json 一直声明着 `"idleTimeoutSeconds": 300` 与
+// `"lifecycle": "on-demand"`，但本文件从来没有任何空闲退出实现。
+// 结果实测（2026-11-17）：机器上常驻 14 个进程、私有内存 430MB，
+// 仓库里还堆着 40 个 bridge-*.pid（36 个指向已死进程）。
+//
+// 代价很低：实测 bridge 从启动到 /health 就绪只要 118ms（server 155ms），
+// 所以「用的时候起、闲了就退」几乎无感。默认 30 分钟（不是 5 分钟），
+// 避免短暂休息就触发冷启动。
+// CARLOS_BRIDGE_IDLE_MS=0 可关闭本机制（常驻场景）。
+const IDLE_MS = (() => {
+  const raw = process.env.CARLOS_BRIDGE_IDLE_MS;
+  if (raw === undefined || raw === "") return 30 * 60 * 1000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 30 * 60 * 1000;
+  return n;
+})();
+let lastActivity = Date.now();
+let activeSockets = 0;
+const touch = () => { lastActivity = Date.now(); };
 
 if (!TOKEN) {
   process.stderr.write("[bridge] ❌ CARLOS_BRIDGE_TOKEN 未设置（fail-closed）\n");
@@ -87,6 +110,10 @@ child.on("exit", (code) => {
     try { c.socket.end(); } catch {}
   }
   pendingClients.clear();
+  // 子进程没了，这个 bridge 已经没用了：必须跟着退出。
+  // 否则会留下「端口活着、服务死了」的僵尸 —— 调用方连得上却永远等不到回包，
+  // 只能等到 180s 超时（比进程根本不存要难查得多）。
+  shutdown(code === 0 ? 0 : 1);
 });
 
 // 速率限制（per-connection sliding window）
@@ -108,7 +135,13 @@ const server = createServer((socket) => {
   let buf = "";
   let size = 0;
 
+  // 活跃连接计数：只要还有连接就不算空闲（客户端可能正在等长调用）
+  activeSockets++;
+  touch();
+  socket.on("close", () => { activeSockets = Math.max(0, activeSockets - 1); touch(); });
+
   socket.on("data", (data) => {
+    touch();
     size += data.length;
     if (size > MAX_REQUEST_SIZE) {
       socket.write(JSON.stringify({ error: "413 Payload Too Large" }) + "\n");
@@ -195,10 +228,39 @@ server.listen(PORT, "127.0.0.1", () => {
   process.stderr.write(`[bridge] Carlos MCP Bridge listening on 127.0.0.1:${PORT}\n`);
 });
 
+let shuttingDown = false;
+function shutdown(code) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // 自己把自己的工牌拆下来 —— 否则仓库里会继续堆死 pid 文件
+  // （实测 40 个，其中 36 个指向已不存在的进程）。
+  // 只删「内容是本进程 pid」的那个，避免两个桥互删工牌。
+  try {
+    const pidFile = path.join(MCP_ROOT, `bridge-${PORT}.pid`);
+    if (parseInt(readFileSync(pidFile, "utf8").trim(), 10) === process.pid) {
+      unlinkSync(pidFile);
+    }
+  } catch { /* 文件不存在 / 已属于别人：忽略 */ }
+  try { child.stdin.end(); } catch {}
+  try { child.kill("SIGTERM"); } catch {}
+  try { server.close(); } catch {}
+  setTimeout(() => process.exit(code), 150).unref?.();
+}
+
+// 空闲巡检：只有「无活跃连接 + 无待回包请求」才算真空闲
+if (IDLE_MS > 0) {
+  const tickMs = Math.min(15000, Math.max(500, Math.floor(IDLE_MS / 4)));
+  const timer = setInterval(() => {
+    if (activeSockets > 0 || pendingClients.size > 0) { touch(); return; }
+    const idleFor = Date.now() - lastActivity;
+    if (idleFor < IDLE_MS) return;
+    process.stderr.write(`[bridge] 已空闲 ${Math.round(idleFor / 1000)}s，按空闲策略退出（CARLOS_BRIDGE_IDLE_MS=${IDLE_MS}）\n`);
+    shutdown(0);
+  }, tickMs);
+  // 定时器本身不能让进程活着（否则空闲退出永远等不到）
+  timer.unref?.();
+}
+
 // 优雅退出
-process.on("SIGTERM", () => {
-  child.stdin.end();
-  child.kill("SIGTERM");
-  server.close();
-  process.exit(0);
-});
+process.on("SIGTERM", () => shutdown(0));
+process.on("SIGINT", () => shutdown(0));

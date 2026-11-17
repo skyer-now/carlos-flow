@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pickFreePort } from './_free-port.mjs';
 
 // 测试状态目录：**强制隔离**，绝不写真实 ~/.carlos-flow。
 // 历史问题（2026-11-14 修）：旧实现回退到真实 HOME，导致测试会话污染用户数据。
@@ -17,8 +18,10 @@ const FLOW_HOME = process.env.CARLOS_FLOW_HOME || mkdtempSync(join(tmpdir(), 'ca
 const REPO_ROOT = dirname(fileURLToPath(import.meta.url)) + "/..";
 const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || REPO_ROOT;
 const CLIENT = [ROOT + "/client/carlos.js", ROOT + "/carlos.js"].find(p => fs.existsSync(p));
-// 独立 Bridge 端口：避免复用本机已有的 Bridge（它可能带旧的 FLOW_HOME）
-const BRIDGE_PORT = String(process.env.BRIDGE_PORT || (19500 + (process.pid % 400)));
+// 独立 Bridge 端口（2026-11-17）：旧写法 `19500 + (process.pid % 400)` 只有 400 个
+// 槽位，几百次运行后必撞上残留的旧 bridge，请求被它接走 → 状态写进别人的 FLOW_HOME。
+// 改为向操作系统要一个确定空闲的端口。
+const BRIDGE_PORT = String(process.env.BRIDGE_PORT || (await pickFreePort()));
 
 let pass = 0, fail = 0;
 const lines = [];

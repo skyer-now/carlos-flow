@@ -6,7 +6,7 @@
 
 import { createConnection, createServer } from "node:net";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -522,7 +522,44 @@ async function runInit(target) {
   console.log(`   提示: 设置环境变量 CARLOS_FLOW_HOME 可自定义状态目录（默认 ~/.carlos-flow）`);
 }
 
+// 清理「指向已死进程」的 bridge-*.pid。
+//
+// 背景：bridge 以前从不退出，pid 文件也没人回收，实测仓库根里积了 40 个，
+// 36 个指向早已不存在的进程。那些文件除了干扰人工排查，还会让新启动的
+// 客户端误以为「某个端口上有 bridge」。
+// 只删**确认已死**的，活着的一个不动。返回删掉的个数。
+function sweepStalePidFiles() {
+  try {
+    const names = readdirSync(ROOT_ABS).filter((f) => /^bridge-\d+\.pid$/.test(f));
+    let removed = 0;
+    for (const n of names) {
+      const full = join(ROOT_ABS, n);
+      let pid = 0;
+      try { pid = parseInt(readFileSync(full, "utf8").trim(), 10); } catch { continue; }
+      if (!pid) {
+        // 内容坏了：直接删，它已经提供不了任何信息
+        try { unlinkSync(full); removed++; } catch {}
+        continue;
+      }
+      if (pid === process.pid) continue;
+      let alive = true;
+      try { process.kill(pid, 0); } catch { alive = false; }
+      if (!alive) {
+        try { unlinkSync(full); removed++; } catch {}
+      }
+    }
+    if (removed > 0) process.stderr.write(`[carlos] 已清理 ${removed} 个失效的 bridge pid 文件\n`);
+    return removed;
+  } catch {
+    return 0;
+  }
+}
+
 async function main() {
+  // 启动前先扫一遍死工牌：bridge 现在会空闲自退，历史遗留的 pid 文件
+  // 必须自动回收，不能越积越多。
+  sweepStalePidFiles();
+
   // 确保 bridge 运行（带重试）
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {

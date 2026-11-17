@@ -104,6 +104,33 @@ function guideError(state, technicalMsg) {
 
 const asStringArray = (v) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
 
+// ---- 路径基准统一 ----------------------------------------------------------
+//
+// scope 的校验基准必须与 `git diff --name-only` 的基准**完全一致**。
+//
+// 实测事实（2026-11-17）：git diff 即使在子目录里执行，输出的也是**仓库根相对路径**；
+// 而旧实现拿 process.cwd() 当基准去校验 scope。MCP server 是常驻进程，
+// 它的 cwd 是**启动时**的目录（可能是几个月前的旧仓库，也可能只是用户
+// 随手打开终端的位置），于是出现「明明文件就在那，却报 scope 路径不存在」——
+// 使用者根本猜不到真实原因是「基准目录不对」。
+//
+// 现在：一律先求 git 仓库根；非 git 项目才退回调用方给的目录（与旧行为一致）。
+function resolveRepoRoot(cwd) {
+  const base = cwd || process.cwd();
+  try {
+    const r = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: base,
+      encoding: "utf8",
+      timeout: 5000,
+      windowsHide: true,
+      shell: false,
+    });
+    const top = r.status === 0 ? String(r.stdout || "").trim() : "";
+    if (top) return top;
+  } catch { /* git 不可用：退回原目录 */ }
+  return base;
+}
+
 // 卡片文本字段（scope / acceptance / unknowns / assumptions）**保留原始元素类型**，
 // 不做任何过滤/转换。
 // 背景：早先用 asStringArray（String(x)）会把 null→「null」、{}→「[object Object]」，
@@ -255,7 +282,11 @@ const TOOLS = [
       try {
         const a = args || {};
         const sessionId = a.sessionId || "unknown";
-        const cwd = a.cwd || process.cwd();
+        // scope 校验基准 = git 仓库根（与 git diff 同基准）；
+        // verify 执行目录 = 调用方显式给的目录，没给才用仓库根。
+        const cwdInput = a.cwd || process.cwd();
+        const scopeRoot = resolveRepoRoot(cwdInput);
+        const execDir = a.cwd || scopeRoot;
 
         let card = null;
         if (typeof a.cardText === "string" && a.cardText.trim() !== "") {
@@ -289,7 +320,7 @@ const TOOLS = [
 
         const options = {
           userMessages: messages,
-          scopeExists: (p) => pathExists(cwd, p),
+          scopeExists: (p) => pathExists(scopeRoot, p),
           // 走 cardText 提交的卡片，其自身的 confirmed 字段同样必须生效，否则敏感路径永远无法通过
           confirmed: (a.confirmed === true) || card.confirmed === true,
         };
@@ -305,7 +336,7 @@ const TOOLS = [
           return ok({ ok: false, reason, findings, tier });
         }
 
-        card.env = { git_head: gitHead(cwd), project: cwd };
+        card.env = { git_head: gitHead(execDir), project: execDir };
 
         // ---- 闸门待补项：服务端从当前卡片内容**幂等派生** ----
         // 内容判定：与 validateCard 的必填字段口径**严格一致**（两边都要求
@@ -538,9 +569,9 @@ const TOOLS = [
         // 必须先 flow_claim 领取派发名额（claimed 标记由 claim 设置）
         if (state.claimed !== true) return fail(guideError(state, "未 claim，请先 flow_claim 领取派发名额。"));
 
-        const cwd = a.cwd || process.cwd();
-
-        // Phase 1-1: dispatch 时才增加 dispatch_count（claim 不计数）
+        // 派发基准同样必须对齐 git 仓库根：scope 是仓库根相对路径，
+        // snapshot / baseline / 裁定三处要用同一个基准，否则越界判定会自相矛盾。
+        const cwd = resolveRepoRoot(a.cwd || process.cwd());
         state.dispatch_count = (Number(state.dispatch_count) || 0) + 1;
         // 额度已消耗，需要重新 claim 才能再次派发
         state.claimed = false;
@@ -839,11 +870,12 @@ const TOOLS = [
           // 无基线（未走过 flow_dispatch）时退化为「全量改动」判定：
           // 此时没有参照点，用全量更保守（fail-closed）。
           const scopeNow = Array.isArray(state.card.scope) ? state.card.scope : [];
-          const current = enforceScope(scopeNow, a.cwd || process.cwd());
+          const scopeRootNow = resolveRepoRoot(a.cwd || process.cwd());
+          const current = enforceScope(scopeNow, scopeRootNow);
           const baseline = Array.isArray(state.dispatch_baseline) ? state.dispatch_baseline : [];
           const baselineSet = new Set(baseline.map((f) => path.normalize(f)));
           const introduced = (current.checked || []).filter((f) => !baselineSet.has(path.normalize(f)));
-          const scopeCheck = enforceScope(scopeNow, a.cwd || process.cwd(), introduced);
+          const scopeCheck = enforceScope(scopeNow, scopeRootNow, introduced);
           if (!scopeCheck.ok) {
             audit("decision", sessionId, {
               kind: "scope_violation",
@@ -1109,7 +1141,7 @@ const TOOLS = [
     handler: async (args) => {
       try {
         const a = args || {};
-        const cwd = a.cwd || process.cwd();
+        const cwd = resolveRepoRoot(a.cwd || process.cwd());
         const paths = asStringArray(a.paths);
 
         const proc = spawnSync("git", ["diff", "-U0", "--no-color", ...paths], {
@@ -1468,9 +1500,11 @@ const TOOLS = [
         const paths = Array.isArray(a.paths) ? a.paths : [];
         // 不传 paths → 自动跑 `git diff --name-only` 取当前实际改动清单。
         // 传了 paths → 用调用方给的清单（自查场景）。
+        // 自查同样按仓库根基准，否则「自查没越界、裁定却报越界」会自相矛盾
+        const scopeRoot = resolveRepoRoot(a.cwd || process.cwd());
         const result = paths.length
-          ? enforceScope(scope, a.cwd, paths)
-          : enforceScope(scope, a.cwd);
+          ? enforceScope(scope, scopeRoot, paths)
+          : enforceScope(scope, scopeRoot);
         
         return ok({ ok: result.ok, scope, checked: paths.length ? paths : result.checked || [], ...result });
       } catch (e) {

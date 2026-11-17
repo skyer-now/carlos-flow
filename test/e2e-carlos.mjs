@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pickFreePort, assertBridgeIdentity } from './_free-port.mjs';
 
 // 测试状态目录：**强制隔离**，绝不写真实 ~/.carlos-flow。
 //
@@ -30,9 +31,13 @@ const CLIENT = [
 ].find((p) => fs.existsSync(p)) || ROOT + "/client/carlos.js";
 const SID = "e2e-" + Date.now();
 // FLOW_HOME 已改为强制隔离（见上方声明处）；此处保留常量名避免大面积改动。
-// 独立 Bridge 端口：避免复用本机已有的 Bridge（它可能带旧的 FLOW_HOME），
-// 确保本次测试的状态真正落到 FLOW_HOME
-const BRIDGE_PORT = String(process.env.BRIDGE_PORT || (19100 + (process.pid % 400)));
+//
+// 独立 Bridge 端口（2026-11-17 重构）：
+//   旧写法 `19100 + (process.pid % 400)` 只有 400 个槽位，几百次运行必撞上
+//   **上一次测试残留的 bridge**；那个 bridge 的 FLOW_HOME 是旧的（甚至就是真实的
+//   ~/.carlos-flow），于是请求被它接走 —— 测试全绿但脏数据写进真实状态目录。
+//   现在改为向操作系统要一个确定空闲的端口，并在启动后校验 /health 身份。
+const BRIDGE_PORT = String(process.env.BRIDGE_PORT || (await pickFreePort()));
 
 let pass = 0, fail = 0;
 const results = [];
@@ -145,6 +150,21 @@ async function main() {
   let r = await call("flow_protocol", {});
   check("1. flow_protocol", r.ok && r.data?.protocol?.ROUTE_TABLE?.includes("T2"), r.ok ? "" : r.error);
 
+  // 1b. Bridge 身份闸门：端口上的 bridge 必须是本次测试起的那个
+  //
+  // 为什么单独一条用例：端口/身份不符时请求会被**别人的 bridge** 接走，
+  // 状态写进别人的 FLOW_HOME（实测污染事故就是这么发生的）。
+  // 这里一旦不符就中止，宁可红也不要把脏数据写进真实目录。
+  {
+    const id = await assertBridgeIdentity(BRIDGE_PORT, FLOW_HOME);
+    check("1b. Bridge 身份隔离（flow_home 一致）", id.ok, id.reason);
+    if (!id.ok) {
+      console.error("\n❌ " + id.reason + "\n   已中止，避免把测试状态写进不属于本次测试的目录。");
+      cleanupBridge();
+      process.exit(1);
+    }
+  }
+
   // 2. flow_add_user_msg
   r = await call("flow_add_user_msg", { sessionId: SID, text: QUOTE });
   check("2. flow_add_user_msg", r.ok && r.data?.ok === true, r.ok ? `text_len=${r.data.text_len}` : r.error);
@@ -171,6 +191,28 @@ async function main() {
     scope: [process.env.REA_MCP_ROOT + "/package.json"], acceptance: ["a"], confirmed: false,
   });
   check("3c. 敏感路径拦截", r.ok && r.data?.ok === false, r.ok ? "已拒绝" : r.error);
+
+  // 3d. 不传 cwd + 相对路径 scope：必须自动按 git 仓库根解析（而不是报「文件不存在」）
+  //
+  // 为什么单列一条：这是「技术门槛」最坑人的一处。旧实现拿 MCP server 进程的
+  // cwd（= 用户随手打开终端的位置）当基准，而 git diff 输出的永远是仓库根相对路径，
+  // 两边基准不一致 → 合法卡片被拒，报错只说「路径不存在」，使用者猜不到真因。
+  {
+    const SID_CWD = SID + "-cwd";
+    await call("flow_add_user_msg", { sessionId: SID_CWD, text: QUOTE });
+    // 故意不传 cwd；scope 用仓库根相对路径
+    r = await call("flow_submit_requirement", {
+      sessionId: SID_CWD, goal: "不传 cwd 也能用相对路径", quote: QUOTE,
+      scope: ["README.md"], acceptance: ["自动按仓库根解析"],
+      verify: { cmd: "echo ok" }, confirmed: true,
+    });
+    const project = r.ok && r.data?.card?.env?.project;
+    check(
+      "3d. 不传 cwd 时 scope 按 git 仓库根解析",
+      r.ok && r.data?.ok === true && !!project,
+      r.ok ? (r.data?.ok ? `env.project=${project}` : r.data?.reason) : r.error,
+    );
+  }
 
   // 4. flow_status
   r = await call("flow_status", { sessionId: SID });
