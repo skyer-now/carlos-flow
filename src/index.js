@@ -544,15 +544,7 @@ const TOOLS = [
         audit("run", sessionId, { kind: "snapshot", role, files: scope.length, ok: true });
 
         // Phase 1-1: 记录「派发前基线」。
-        //
-        // 为什么是记录而不是当场阻断：
-        //   派发这一刻，子 Agent **还没动手** —— 它之后会改哪些文件根本无从得知。
-        //   此时跑 git diff 得到的是「用户自己已有的未提交改动」，
-        //   拿它当越界拦下来会**误伤正常用法**（用户本来就在改这些文件）。
-        //
-        // 正确的时机是**裁定前**：用「当前改动 - 派发基线」算出**本次执行引入的**
-        // 改动，再与卡片 scope 比对 —— 这才是「越界直接阻断」的真实落点，
-        // 阻断的是「越界之后仍然拿到 PASS」这个闭环。
+        // 使用与后续校验一致的 cwd，修正基准
         const baseline = enforceScope(scope, cwd);
         state.dispatch_baseline = Array.isArray(baseline.checked) ? baseline.checked : [];
         saveState(sessionId, state);
