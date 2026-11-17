@@ -13,7 +13,7 @@
 // 跑法：node test/bridge-idle.mjs
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
-import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,10 +95,67 @@ async function case3_disabledByEnv() {
   try { rmSync(b.home, { recursive: true, force: true }); } catch {}
 }
 
+// 启动时清理僵尸工牌 + /health 可观测字段
+//
+// 只删 pid 已死的工牌：活着的一律不动（pid 可能被复用，误删会掩盖真实端口占用）。
+async function case4_pidSweepAndHealth() {
+  const { writeFileSync, mkdtempSync: mk } = await import("node:fs");
+  const tmpHome = mk(join(tmpdir(), "carlos-sweep-home-"));
+  const port = await pickFreePort();
+  // 造两个工牌：一个指向必然不存在的 pid（应被清），一个指向当前进程（应保留）
+  const deadPort = port + 1;
+  const deadFile = join(ROOT, `bridge-${deadPort}.pid`);
+  const liveFile = join(ROOT, `bridge-${deadPort + 1}.pid`);
+  try { writeFileSync(deadFile, "999999", "utf8"); } catch {}
+  try { writeFileSync(liveFile, String(process.pid), "utf8"); } catch {}
+
+  const proc = spawn(process.execPath, [BRIDGE, String(port)], {
+    env: {
+      ...process.env,
+      CARLOS_FLOW_HOME: tmpHome,
+      CARLOS_BRIDGE_TOKEN: "sweep-test-token",
+      CARLOS_BRIDGE_IDLE_MS: "0",
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+    windowsHide: true,
+  });
+  proc.stderr.on("data", () => {});
+  const id = await assertBridgeIdentity(port, tmpHome);
+  check("6. 清理场景 bridge 已就绪", id.ok, id.reason);
+  await sleep(500);
+  check("7. 启动时清掉 pid 已死的僵尸工牌", !existsSync(deadFile), `bridge-${deadPort}.pid`);
+  check("8. 指向活进程的工牌不被误删", existsSync(liveFile), `bridge-${deadPort + 1}.pid`);
+
+  // /health 必须暴露空闲策略，便于排查「它为什么退了 / 为什么不退」
+  const health = await new Promise((resolve) => {
+    const s = createConnection(port, "127.0.0.1");
+    let buf = "";
+    s.on("connect", () => s.write("GET /health\n"));
+    s.on("data", (d) => { buf += d.toString(); });
+    s.on("error", () => resolve(null));
+    setTimeout(() => { try { s.destroy(); } catch {} resolve(buf); }, 1200);
+  });
+  let parsed = null;
+  try { parsed = JSON.parse(String(health).trim()); } catch {}
+  check(
+    "9. /health 暴露 idle_ms / idle_for_ms / active_sockets",
+    !!parsed && parsed.status === "ok" && typeof parsed.idle_ms === "number" &&
+      typeof parsed.idle_for_ms === "number" && typeof parsed.active_sockets === "number",
+    parsed ? `idle_ms=${parsed.idle_ms}` : "无响应",
+  );
+
+  try { process.kill(proc.pid, "SIGTERM"); } catch {}
+  await sleep(400);
+  try { unlinkSync(deadFile); } catch {}
+  try { unlinkSync(liveFile); } catch {}
+  try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+}
+
 console.log("════ Bridge 空闲退出验证 ════\n");
 await case1_idleExit();
 await case2_busyNotIdle();
 await case3_disabledByEnv();
+await case4_pidSweepAndHealth();
 
 console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
 process.exit(fail > 0 ? 1 : 0);

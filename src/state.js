@@ -307,6 +307,7 @@ export function withStateLock(sid, fn, opts = {}) {
   const staleMs = Number(opts.staleMs) || 30000;
   const deadline = Date.now() + timeoutMs;
   let acquired = false;
+  let attempt = 0;
 
   for (;;) {
     try {
@@ -314,14 +315,34 @@ export function withStateLock(sid, fn, opts = {}) {
       // wx = O_CREAT|O_EXCL，文件已存在则抛 EEXIST —— 原子排他
       const fd = fs.openSync(lockFile, "wx");
       fs.closeSync(fd);
+      // 把持有者 pid 写进锁文件：**排他性仍完全由 O_CREAT|O_EXCL 保证**，
+      // 写内容只发生在拿到锁之后，用途有两个：
+      //   ① 诊断 —— 锁超时时能说清「是哪个进程占着」；
+      //   ② 即时回收 —— 持有者崩了（ESRCH）可以立刻回收，不必干等满 staleMs。
+      try { fs.writeFileSync(lockFile, String(process.pid), "utf8"); } catch { /* 内容非必需 */ }
       acquired = true;
       break;
     } catch (e) {
       if (e.code !== "EEXIST") throw e;
-      // 陈旧锁（持有者已崩溃）→ 回收
+      // 陈旧锁（持有者已崩溃）→ 回收。两道判定：
+      //   ① 锁文件里记录的 pid 已不是活进程（ESRCH）→ 立即回收；
+      //   ② 老版本锁文件没有 pid，或 pid 不可解析 → 只能按 mtime 超过 staleMs 判陈旧。
+      // EPERM 表示「进程存在但无权发信号」→ 按活着处理，绝不误删别人的锁。
       try {
         const st = fs.statSync(lockFile);
-        if (Date.now() - st.mtimeMs > staleMs) {
+        let holderDead = false;
+        let holderPid = 0;
+        try {
+          holderPid = parseInt(fs.readFileSync(lockFile, "utf8").trim(), 10);
+          if (Number.isInteger(holderPid) && holderPid > 0 && holderPid !== process.pid) {
+            try {
+              process.kill(holderPid, 0);
+            } catch (err) {
+              if (err && err.code === "ESRCH") holderDead = true;
+            }
+          }
+        } catch { /* 内容读不到：按时间判定 */ }
+        if (holderDead || Date.now() - st.mtimeMs > staleMs) {
           fs.unlinkSync(lockFile);
           continue;
         }
@@ -330,9 +351,20 @@ export function withStateLock(sid, fn, opts = {}) {
       }
       if (Date.now() > deadline) {
         // 拿不到锁：fail-closed —— 宁可报错也不要在无锁下写状态
-        throw new Error(`获取状态锁超时（session=${sanitizeId(sid)}），请稍后重试`);
+        let holder = "";
+        try {
+          const pid = parseInt(fs.readFileSync(lockFile, "utf8").trim(), 10);
+          if (Number.isInteger(pid) && pid > 0) holder = `（持有者 pid=${pid}）`;
+        } catch { /* 读不到内容就不提 */ }
+        throw new Error(`获取状态锁超时（session=${sanitizeId(sid)}${holder}），请稍后重试`);
       }
-      sleepMs(15);
+      // 指数退避 + 抖动。
+      // 固定 15ms 会让多个进程「同步醒来」反复撞在一起（并发套件里表现为偶发超时）；
+      // 抖动把重试错开，退避上限 120ms 保证总吞吐不被拖垮。
+      attempt++;
+      const base = Math.min(120, 5 * Math.pow(1.6, attempt));
+      const jitter = Math.floor(Math.random() * base * 0.3);
+      sleepMs(Math.floor(base + jitter));
     }
   }
 

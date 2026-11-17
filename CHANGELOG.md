@@ -1,3 +1,12 @@
+## [2.14.0] - 2026-11-17
+- 项目级敏感路径扩展：仓库根 `.carlos.json` 可追加 `sensitive.names/segments/extensions/prefixes`（只能追加，否定式 `!` `-` 一律忽略；配置损坏自动退回内置基线）
+- 负对照安全性：`flow_falsify` 进入前写还原日志、还原后逐文件核对摘要；被强杀留下的 pending 日志会在下一次调用时先把工作区救回来（返回值如实报告 `restore` / `recovered`）
+- 状态锁：指数退避 + 抖动（固定 15ms 会让多进程同步撞锁），持有者 pid 已死即时回收，超时错误点明持有者 pid
+- 向导模式：占位卡未补齐时直接给出可复制的 `flow_submit_requirement` 补齐骨架（pro 模式行为不变）
+- 裁定闸门注释按 docs/TOOL_CONTRACTS.md 的 9 组对齐（2 无条件 + 7 仅 PASS），修掉「之四/之五各出现两次」的历史错乱
+- bridge：启动时清理 pid 已死的僵尸工牌（只删死进程的），`/health` 增补 `idle_ms` / `idle_for_ms` / `active_sockets`
+- 回归新增：test:sensitive / test:lock / test:falsify 三套真实验证，e2e 第 31 组覆盖占位卡补齐骨架
+
 ## [2.13.1] - 2026-11-17
 - 轻量化：bridge 空闲退出（默认 30 分钟，CARLOS_BRIDGE_IDLE_MS 可调，0 关闭）+ 子进程死则 bridge 跟退；实测进程 14→5、私有内存 430→95MB
 - 止住测试污染：测试端口改为向系统申请真空闲端口 + /health 校验 flow_home 身份；实测再跑 e2e+p0 向真实目录新增会话 0 个

@@ -8,7 +8,7 @@ import { createServer, connect } from "node:net";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { PROTOCOL } from "./protocol.js";
+import { PROTOCOL, loadProjectSensitiveConfig } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
 import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, auditHashMode, workspaceFingerprint } from "./state.js";
 import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, runNegativeControl, computeOutputHash, enforceScope, formatError, MAX_DISPATCH } from "./dispatch.js";
@@ -71,6 +71,38 @@ const fail = (message) => {
 // 在 guide 模式下把技术码翻译成「发生了什么 + 下一步该怎么做」的中文人话。
 // pro 模式或未知 mode → 原样返回 technicalMsg，行为绝对不变（向后兼容守护）。
 //
+// 激活占位卡的「补齐骨架」。
+//
+// 背景：智能触发只开一张占位卡（scope / acceptance / verify 全空），必须补齐才能开工。
+// 旧提示只说「还差三项」，新手 Agent 仍不知道每一项该怎么填，于是在同一个报错上来回空转。
+// 现在直接给出一份可复制的调用骨架：已填好的字段原样保留，缺的项用尖括号占位。
+// 只在 guide 模式 + 占位卡未补齐时输出，pro 模式零影响。
+function activationCardGuide(state) {
+  const pending = asStringArray(state && state.activation_pending);
+  const card = (state && state.card && typeof state.card === "object") ? state.card : {};
+  const kept = (v) => (Array.isArray(v) ? v.map((x) => String(x)).filter((s) => s.trim()) : []);
+  const goal = typeof card.goal === "string" && card.goal.trim() ? card.goal.trim() : "<一句话目标>";
+  const quote = typeof card.quote === "string" && card.quote.trim() ? card.quote.trim() : "<用户原话摘录>";
+  const scope = kept(card.scope);
+  const acceptance = kept(card.acceptance);
+  const verifyCmd = card.verify && typeof card.verify.cmd === "string" ? card.verify.cmd.trim() : "";
+  const skeleton = {
+    goal,
+    quote,
+    scope: scope.length ? scope : ["<要改的文件，仓库根相对路径，可写多个>"],
+    acceptance: acceptance.length ? acceptance : ["<怎么算做完：一条可判定的验收标准>"],
+    verify: { cmd: verifyCmd || "<能真正跑起来的验证命令，例如 npm test>" },
+    confirmed: false,
+  };
+  const missing = pending.length ? pending : ["scope", "acceptance", "verify"];
+  return [
+    "这张卡还差 " + missing.length + " 项才能开工：" + missing.join(" / ") + "。",
+    "把下面骨架里尖括号的内容换成真实的，再调用一次 flow_submit_requirement 就行（已经填好的字段原样保留）：",
+    "flow_submit_requirement(" + JSON.stringify(skeleton, null, 2) + ")",
+    "补齐之后才能 flow_claim / flow_dispatch；不需要重新开卡。",
+  ].join("\n");
+}
+
 // 接入原则：最小侵入——只在**典型门禁拦截点**调用，不做大规模重构。
 function guideError(state, technicalMsg) {
   if (!state || state.mode !== "guide") return technicalMsg;
@@ -93,6 +125,10 @@ function guideError(state, technicalMsg) {
     { match: /负对照|falsify/, human: "需要做一次「反向验证」来证明测试确实在起作用。请先调用 flow_falsify 做负对照，通过后再记录裁定。" },
     { match: /卡片未指定\s*verify/, human: "任务卡里没有写验证命令，没法确认改动对不对。请重新提交一张带 verify.cmd 的任务卡（flow_submit_requirement），这样才有办法验证。" },
   ];
+  // 占位卡未补齐：优先给「可复制的补齐骨架」，而不是只说「还差三项」。
+  if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0 && /占位卡/.test(msg)) {
+    return activationCardGuide(state) + "\n（原始提示：" + msg + "）";
+  }
   for (const t of translations) {
     if (t.match.test(msg)) {
       return t.human + "\n（原始提示：" + msg + "）";
@@ -115,8 +151,13 @@ const asStringArray = (v) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
 // 使用者根本猜不到真实原因是「基准目录不对」。
 //
 // 现在：一律先求 git 仓库根；非 git 项目才退回调用方给的目录（与旧行为一致）。
+const REPO_ROOT_CACHE = new Map();
 function resolveRepoRoot(cwd) {
   const base = cwd || process.cwd();
+  // 缓存：本函数会 spawn 一次 git，而裁定链路上会被调用多次（scope 自查 / 越界判定）。
+  // 只缓存**命中**结果；未命中不缓存 —— 目录可能稍后才变成 git 仓库（测试里就是如此）。
+  const cached = REPO_ROOT_CACHE.get(base);
+  if (cached !== undefined) return cached;
   try {
     const r = spawnSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: base,
@@ -126,7 +167,11 @@ function resolveRepoRoot(cwd) {
       shell: false,
     });
     const top = r.status === 0 ? String(r.stdout || "").trim() : "";
-    if (top) return top;
+    if (top) {
+      if (REPO_ROOT_CACHE.size > 64) REPO_ROOT_CACHE.clear();
+      REPO_ROOT_CACHE.set(base, top);
+      return top;
+    }
   } catch { /* git 不可用：退回原目录 */ }
   return base;
 }
@@ -207,9 +252,21 @@ const WARN_FINDINGS_LIMIT = 20;
 // 附带回答 DIRECTION/LOCAL 路径：返工意见恰恰最需要坏味道清单，
 // 所以三种裁定都带这份汇总。
 function collectAxisWarnings(state) {
-  const ax = state && state.audit_axes;
-  if (!ax || typeof ax !== "object") return [];
+  if (!state || typeof state !== "object") return [];
   const out = [];
+  // ① 负对照的还原核对失败：改动可能没被完整写回工作区。
+  // 这不是「审查意见」而是「环境事实」，优先级最高 —— 放在最前面，
+  // 因为它意味着「你以为的改动后状态」可能已经不成立。
+  const lf = state.last_falsify;
+  if (lf && typeof lf === "object" && lf.restore && lf.restore.ok === false) {
+    out.push({
+      axis: "falsify",
+      finding: "负对照后工作区还原未通过核对：" + (lf.restore.mismatched || []).join(", "),
+    });
+  }
+  // ② 两轴里的 WARN（坏味道等 judgement call）
+  const ax = state.audit_axes;
+  if (!ax || typeof ax !== "object") return out;
   for (const name of ["standards", "spec"]) {
     const a = ax[name];
     if (!a || !a.verdict) continue;
@@ -751,11 +808,17 @@ const TOOLS = [
         const sessionId = a.sessionId || "unknown";
         const state = loadState(sessionId);
 
+        // 裁定闸门的分组与顺序与 docs/TOOL_CONTRACTS.md 第 1.2 节严格一致：
+        //   【无条件 2 组】1 有卡 · 2 占位卡已补齐
+        //   【仅 PASS 7 组】3 派发过 · 4 验证有效 · 5 验证未过期 · 6 无越界
+        //                 · 7 role=auditor · 8 负对照 · 9 双轴齐且无 FAIL
+        // 顺序不可调换：先证实验证有效（4/5）→ 再证改动合规（6/7）→ 再证测试有判别力（8）
+        // → 再证审查到位（9）。错位会让「未验证」被「双轴未齐」掩盖，调用方拿到不可操作的下一步。
         if (!state.card) return fail(guideError(state, "没有留痕，无法记录裁定。"));
 
         const verdict = a.verdict;
 
-        // 激活占位卡尚未补齐时不允许裁定：
+        // ── 门禁 2/9（无条件）：激活占位卡必须已补齐 ──
         // 否则会出现「未派发、未验证、却直接 PASS」的假闭环。
         // （先于 dispatch_count 检查：占位卡的错误信息更具体，也更可操作）
         if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
@@ -768,7 +831,8 @@ const TOOLS = [
             "），不能记录裁定。请先补齐后重新调用 flow_submit_requirement。"));
         }
 
-        // 防假闭环之二：从未派发过任何执行，就不允许落 PASS 裁定。
+        // ── 门禁 3/9（仅 PASS）：确实派发过 ──
+        // 从未派发过任何执行，就不允许落 PASS 裁定。
         // 否则一张刚提交、什么都没跑的卡也能直接标 completed_ok=true。
         // 只施加于 PASS：DIRECTION / LOCAL 是「有问题」的裁定，不构成「完成」，
         // 允许在未派发时先记录返工意见。
@@ -782,7 +846,8 @@ const TOOLS = [
             "请先 flow_claim / flow_dispatch 派发并完成验证后再落 PASS。"));
         }
 
-        // 防假闭环之三：记 PASS 必须有**真实验证通过**的证据。
+        // ── 门禁 4/9（仅 PASS）：验证真实有效 ──
+        // 记 PASS 必须有**真实验证通过**的证据。
         // 「派发过」≠「验证过」——只查 dispatch_count 时，一张跑过但验证失败的卡
         // 照样能落 PASS（completed_ok=true），等于把验证环节架空。
         // 三个条件同时成立才放行：
@@ -833,7 +898,8 @@ const TOOLS = [
               "请对当前卡片重新执行 flow_run_verify，再记录裁定。"));
           }
 
-          // 防假闭环之五：验证结果必须绑定当时的**代码状态**（A1）。
+          // ── 门禁 5/9（仅 PASS）：验证结果未过期 ──
+          // 验证结果必须绑定当时的**代码状态**（A1）。
           //
           // 前面三道判断只看「验证跑过 / 跑通了 / 命令对得上」，**不看代码变没变**。
           // 于是存在这条绕过路径：
@@ -858,7 +924,8 @@ const TOOLS = [
               "请重新执行 flow_run_verify 再记录裁定。"));
           }
 
-          // 防假闭环之四：越界改动必须被拦住。
+          // ── 门禁 6/9（仅 PASS）：无越界改动 ──
+          // 越界改动必须被拦住。
           //
           // 「越界直接阻断」的**真实落点**在这里：判定「本次执行有没有改到
           // scope 之外的文件」，而不是「派发前工作区干不干净」。
@@ -889,13 +956,15 @@ const TOOLS = [
               "请把越界文件加入 scope（重新提交任务卡）后重试，或先撤销这些改动。"));
           }
 
-          // 防假闭环之四：role 门禁绑定到会话 ID（claimed_role），而非调用方自述字符串
+          // ── 门禁 7/9（仅 PASS）：裁定角色必须是 auditor ──
+          // role 门禁绑定到会话 ID（claimed_role），而非调用方自述字符串
           if (verdict === "PASS" && state.claimed_role !== "auditor") {
             audit("decision", sessionId, { kind: "verdict_denied", reason: "role 未绑定到 auditor 会话", claimed_role: state.claimed_role });
             return fail("PASS 裁定必须由已领取 auditor 角色的会话（flow_claim role=auditor）落下。当前会话 claimed_role=" + (state.claimed_role || "null"));
           }
 
-          // 防假闭环之五：负对照 —— 证明 verify.cmd 真的在测「本次改动」。
+          // ── 门禁 8/9（仅 PASS）：负对照证明测试有判别力 ──
+          // 证明 verify.cmd 真的在测「本次改动」。
           //
           // 「验证通过」本身不是证据：verify.cmd 可以是 `|| true` / `echo ok`，
           // 改动前后都退 0，门禁却以为测试过了。负对照要求：
@@ -921,10 +990,11 @@ const TOOLS = [
               "请重新调用 flow_falsify（它会把改动后的运行写为验证证据）。");
           }
 
-          // 防假闭环之六：双轴审查门禁。
+          // ── 门禁 9/9（仅 PASS）：双轴审查齐且无 FAIL ──
           //
           // 位置说明（重要）：必须放在负对照**之后**。语义顺序是
-          // 「先证实验证有效 → 再证审查到位」，六道门各自独立、互不掩盖。
+          // 「先证实验证有效 → 再证审查到位」，九道门（2 无条件 + 7 仅 PASS）
+          // 各自独立、互不掩盖。
           // 若前置，会让「未验证」「未派发」「未做负对照」这些更基础的问题被
           // 双轴错误信息掩盖，调用方拿到的是不可操作的下一步。
           //
@@ -1434,6 +1504,9 @@ const TOOLS = [
           reason: r.reason,
           before: { exitCode: r.before.exitCode, ok: r.before.ok, hash: r.before.hash },
           after: { exitCode: r.after.exitCode, ok: r.after.ok, hash: r.after.hash },
+          // 工作区还原是否被核对通过（ok=false 表示负对照过程中改动可能没被完整写回）。
+          // 不参与 PASS 判定，但会随裁定一起暴露 —— 免得「改动消失」只留在 stderr 里。
+          restore: r.restore ? { ok: r.restore.ok, checked: r.restore.checked, mismatched: r.restore.mismatched } : null,
         };
         // 把「改动后」的运行写为 last_verify —— 裁定的证据绑定到这一次运行。
         state2.last_verify = {
@@ -1457,6 +1530,9 @@ const TOOLS = [
           after_exit: r.after.exitCode,
           before_hash: r.before.hash,
           after_hash: r.after.hash,
+          restore_ok: r.restore ? r.restore.ok : null,
+          restore_mismatched: r.restore ? r.restore.mismatched : [],
+          recovered_files: r.recovered ? r.recovered.files : 0,
         });
 
         const trunc = (s) => (typeof s === "string" && s.length > 2000 ? s.slice(0, 2000) + "…" : s);
@@ -1466,9 +1542,17 @@ const TOOLS = [
           reason: r.reason,
           before: { exitCode: r.before.exitCode, ok: r.before.ok, hash: r.before.hash, stdout: trunc(r.before.stdout), stderr: trunc(r.before.stderr) },
           after: { exitCode: r.after.exitCode, ok: r.after.ok, hash: r.after.hash, stdout: trunc(r.after.stdout), stderr: trunc(r.after.stderr) },
-          note: r.verdict === "meaningful"
+          // 工作区还原的核对结果（失败时备份已保留，下次调用会先尝试恢复）
+          restore: r.restore || null,
+          // 本次调用开始时恢复掉的「上一次被中断的负对照」残留
+          recovered: r.recovered || null,
+          note: (r.verdict === "meaningful"
             ? "负对照通过：测试有判别力，可以记 PASS。"
-            : "负对照未通过：不能记 PASS。" + r.reason,
+            : "负对照未通过：不能记 PASS。" + r.reason) +
+            (r.restore && r.restore.ok === false
+              ? " ⚠️ 但工作区还原未通过核对，以下文件与进入负对照前不一致：" +
+                (r.restore.mismatched || []).join(", ") + "（备份已保留，请人工确认后修复）"
+              : ""),
         });
       } catch (e) {
         return fail(e && e.message ? e.message : String(e));
@@ -1833,6 +1917,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (!validation.ok) {
     return { content: [{ type: "text", text: "ERROR: " + validation.error }], isError: true };
   }
+
+  // 项目级敏感路径扩展：从 cwd 逐级向上找 `.carlos.json`（只追加，不能缩减）。
+  // 放在这里统一加载，保证同一请求里所有路径判定用同一份规则；
+  // 配置缺失 / 损坏时自动退回内置基线，不影响门禁。
+  try {
+    loadProjectSensitiveConfig(typeof args.cwd === "string" && args.cwd ? args.cwd : process.cwd());
+  } catch { /* 配置不可读：保持内置基线 */ }
 
   try {
     return await t.handler(args);

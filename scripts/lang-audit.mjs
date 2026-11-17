@@ -73,8 +73,14 @@ const TRAILER_RE = /^(Assisted-by|Co-authored-by|Signed-off-by):/i;
 // 之前的写法用「英文词数」直接判，会把
 //   「exitCode=127（command not found），记 PASS 的前置证据永远拿不到」
 // 这类「中文句子 + 引用的英文报错」误判 —— 那是合规的中文注释。
+// 「有中文」的判定必须包含**中文标点**（、。，「」（）；：…）+ 全角区。
+// 背景（2026-11-18 实测）：提交正文的中文长句会跨行折断，断开后的续行可能
+// 只剩列举项（如「check:anchors 17/17、check:params、check:full、」）——
+// 这类行里没有任何汉字，只有顿号，却被判成英文叙述，属于**假阳性**。
+// 加入标点区后仍然抓得到真正的英文段落（英文句子不会带顿号与全角括号）。
+const CJK_RE = /[一-鿿　-〿＀-￯‘-‟…]/;
 const isEnglishNarration = (text, minWords) => {
-  if (/[一-鿿]/.test(text)) return false;      // 有中文 → 合规
+  if (CJK_RE.test(text)) return false;      // 有中文（含中文标点）→ 合规
 
   // 剥离「引用的原文」：中文句子里的英文报错原文、代码块、标识符引用
   let s = text

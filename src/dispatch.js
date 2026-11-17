@@ -466,6 +466,100 @@ function writeAfterState(sid, records) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 负对照的安全边界：崩溃恢复日志 + 还原结果可核验
+// ---------------------------------------------------------------------------
+//
+// 背景（为什么需要这两个函数）：负对照的本质是**在真实工作区里临时把文件改回旧内容**，
+// 跑一次验证，再把文件写回来。旧实现只有 try/finally 的「意图保证」：
+//   · 进程被强杀 / 断电 → finally 不执行 → 工作区停在「改动前」状态，
+//     用户的改动看起来凭空消失（最坏情况：把已修好的验证脚本回滚成坏的）；
+//   · finally 里某次 copyFileSync 失败（文件被占用、权限不足）→ 只写一行 stderr，
+//     调用方拿到的仍是 ok:true，没人知道工作区已经不干净了。
+// 现在补两条机械保证：
+//   ① **进入前写日志**（negative_control/<ts>/journal.json）：记录每个文件的原位、
+//      进入时备份、是否需要删除。下次调用负对照时先把残留日志里的状态恢复回去，
+//      所以「上一次被中断」不会把脏状态带到下一次；
+//   ② **还原后核对摘要**：逐文件比对内容哈希与「进入时」是否一致，结果写回返回值
+//      （restore.ok / restore.mismatched），失败时明确告警而不是静默放过。
+
+function negativeControlRoot(sid) {
+  return path.join(RUNS_DIR, sanitizeId(sid), "negative_control");
+}
+
+// 扫描并恢复被中断的负对照。返回 { dirs, files, unresolved }。
+// 只处理「日志还标着 pending」的目录：正常结束的目录在 finishJournal 里已被删除。
+export function recoverInterruptedNegativeControl(sid) {
+  const root = negativeControlRoot(sid);
+  const out = { dirs: 0, files: 0, unresolved: [] };
+  let names = [];
+  try { names = fs.readdirSync(root); } catch { return out; }
+  for (const name of names) {
+    const dir = path.join(root, name);
+    const journalFile = path.join(dir, "journal.json");
+    let journal = null;
+    try {
+      journal = JSON.parse(fs.readFileSync(journalFile, "utf8"));
+    } catch { continue; } // 没有日志（或坏了）：不是本机制写的目录，不碰
+    if (!journal || journal.status === "restored") {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+      continue;
+    }
+    out.dirs++;
+    for (const e of Array.isArray(journal.saved) ? journal.saved : []) {
+      if (!e || typeof e.orig !== "string") continue;
+      try {
+        if (e.existed === true && e.savedPath) {
+          fs.mkdirSync(path.dirname(e.orig), { recursive: true });
+          fs.copyFileSync(e.savedPath, e.orig);
+          out.files++;
+        } else if (e.existed !== true) {
+          try { fs.unlinkSync(e.orig); } catch {}
+          out.files++;
+        } else {
+          // 进入时有文件但备份丢了：无法还原，如实记账
+          out.unresolved.push(e.orig);
+        }
+      } catch (err) {
+        out.unresolved.push(e.orig);
+        try {
+          process.stderr.write(`[flow-falsify] 恢复中断的负对照失败 ${e.orig}: ${err && err.message ? err.message : err}\n`);
+        } catch {}
+      }
+    }
+    try {
+      fs.writeFileSync(journalFile, JSON.stringify({ ...journal, status: "restored", recoveredAt: new Date().toISOString() }, null, 2), "utf8");
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+  return out;
+}
+
+// 还原后核对：逐文件比对内容摘要与「进入负对照时」是否一致。
+// UNKNOWN（读不到）不算失配 —— 无法证明 ≠ 证明坏了，如实归到 unreadable。
+function verifyRestoredState(saved, expectedDigests) {
+  let checked = 0;
+  const mismatched = [];
+  const unreadable = [];
+  for (const s of saved) {
+    if (!s || typeof s.orig !== "string") continue;
+    const want = Object.prototype.hasOwnProperty.call(expectedDigests, s.orig)
+      ? expectedDigests[s.orig]
+      : null;
+    if (want === null) continue;
+    checked++;
+    let got;
+    try {
+      got = fs.existsSync(s.orig) ? digestOf(s.orig) : "ABSENT";
+    } catch {
+      got = "UNKNOWN";
+    }
+    if (got === "UNKNOWN" || want === "UNKNOWN") { unreadable.push(s.orig); continue; }
+    if (got !== want) mismatched.push(s.orig);
+  }
+  return { ok: mismatched.length === 0, checked, mismatched, unreadable };
+}
+
 // 负对照：证明 verify.cmd 真的在测「本次改动」。
 //
 // 层次：这是「证据门禁」的执行侧 —— 不是让 LLM 声称「我试图证伪但没成功」，
@@ -495,7 +589,9 @@ export async function runNegativeControl(sid, cmd, cwd) {
   if (!entries.length) {
     return { ok: false, error: formatError("没有派发快照，无法做负对照（请先 flow_dispatch）") };
   }
-  const tmpDir = path.join(RUNS_DIR, sanitizeId(sid), "negative_control", String(Date.now()));
+  // 先把上一次「被中断的负对照」恢复掉，否则脏状态会带进本次的 before/after 判定。
+  const recovered = recoverInterruptedNegativeControl(sid);
+  const tmpDir = path.join(negativeControlRoot(sid), String(Date.now()));
   try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (e) {
     return { ok: false, error: formatError("无法创建负对照临时目录：" + (e && e.message ? e.message : e)) };
   }
@@ -593,6 +689,25 @@ export async function runNegativeControl(sid, cmd, cwd) {
     }
   };
 
+  // ---- 进入「会改动工作区」的临界区之前，先把还原所需信息落盘 ----
+  // 这一步是崩溃恢复的唯一依据：进程被强杀时，下次调用靠它把工作区还原回去。
+  const journalFile = path.join(tmpDir, "journal.json");
+  const writeJournal = (status, extra) => {
+    try {
+      fs.writeFileSync(journalFile, JSON.stringify({
+        sid,
+        ts: new Date().toISOString(),
+        cwd: cwd || null,
+        status,
+        saved: saved.map((x) => ({ orig: x.orig, savedPath: x.savedPath, existed: x.existed })),
+        ...(extra || {}),
+      }, null, 2), "utf8");
+    } catch (e) {
+      try { process.stderr.write(`[flow-falsify] 写还原日志失败: ${e && e.message ? e.message : e}\n`); } catch {}
+    }
+  };
+  writeJournal("pending");
+
   // ---- 把选定的「改动后态」显式落盘记录（让下次负对照能按记录还原，而不是靠隐含前提） ----
   try {
     const afterDir = path.join(RUNS_DIR, sanitizeId(sid), "backup", "after_state_" + Date.now());
@@ -620,6 +735,7 @@ export async function runNegativeControl(sid, cmd, cwd) {
 
   let before = null;
   let after = null;
+  let restoreReport = { ok: true, checked: 0, mismatched: [], unreadable: [] };
   try {
     // 1. 还原「改动前」（派发快照）—— 必须失败
     restoreFromManifest(entries);
@@ -629,8 +745,24 @@ export async function runNegativeControl(sid, cmd, cwd) {
     else restoreCurrent();
     after = await runVerifyCommand(cmd, cwd);
   } finally {
-    // 无论如何都把工作区还原成进入负对照时的样子
+    // 无论如何都把工作区还原成进入负对照时的样子。
+    // 还原后必须**核对摘要**：只靠 try/finally 是意图保证，
+    // 一次失败的文件写回会让用户改动静默消失，而调用方还以为一切正常。
     restoreCurrent();
+    restoreReport = verifyRestoredState(saved, currentDigests);
+    writeJournal(restoreReport.ok ? "restored" : "restore_failed", {
+      restore: restoreReport,
+      finishedAt: new Date().toISOString(),
+    });
+    if (!restoreReport.ok) {
+      try {
+        process.stderr.write(
+          "[flow-falsify] ⚠️ 工作区还原不完整，以下文件与进入负对照前不一致：" +
+            restoreReport.mismatched.join(", ") +
+            "（备份保留在 " + tmpDir + "，下次调用 flow_falsify 会先尝试恢复）\n",
+        );
+      } catch { /* ignore */ }
+    }
   }
 
   const beforeHash = computeOutputHash(before.exitCode, before.stdout, before.stderr);
@@ -666,8 +798,12 @@ export async function runNegativeControl(sid, cmd, cwd) {
       "不能证明该命令在测本次改动，按保守口径记为空测试" + stateNote;
   }
 
-  // 清理临时目录（还原已完成，不再需要备份）
-  try { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
+  // 清理临时目录：**只有还原被核对通过时才删**。
+  // 还原失败时保留备份与日志 —— 下一次 flow_falsify 会先用它把工作区救回来，
+  // 删掉就等于把用户改动的唯一副本扔了。
+  if (restoreReport.ok) {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
+  }
 
   return {
     ok: true,
@@ -675,6 +811,10 @@ export async function runNegativeControl(sid, cmd, cwd) {
     reason,
     before: { exitCode: before.exitCode, ok: before.ok, hash: beforeHash, stdout: before.stdout, stderr: before.stderr, state_hash: beforeStateHash },
     after: { exitCode: after.exitCode, ok: after.ok, hash: afterHash, stdout: after.stdout, stderr: after.stderr, state_hash: afterStateHash },
+    // 还原结果可核验：ok=false 表示工作区没能完整回到进入负对照前的状态
+    restore: restoreReport,
+    // 本次调用开始时顺手恢复掉的「上一次被中断的负对照」残留
+    recovered: { dirs: recovered.dirs, files: recovered.files, unresolved: recovered.unresolved },
   };
 }
 // 辅助建议映射表

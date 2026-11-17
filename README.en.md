@@ -224,6 +224,30 @@ One package, six platforms. The init command generates the right config file for
 
 ---
 
+## 🔧 Per-project configuration (optional)
+
+Drop a `.carlos.json` at your repo root to teach the gate about **your own** sensitive
+files (anything beyond the built-in list):
+
+```json
+{
+  "sensitive": {
+    "names": ["pay_api_key.txt"],
+    "segments": ["ledger"],
+    "extensions": [".vault"],
+    "prefixes": ["billing/ledger/"]
+  }
+}
+```
+
+- **Append-only, never relax**: entries starting with `!` or `-` are ignored; the built-in
+  list (`.env`, private keys, lock files, `migrations/`, …) always applies.
+- **A broken config cannot loosen the gate**: on parse failure the built-in list is used.
+- The engine walks up from the working directory (max 12 levels) to the nearest `.carlos.json`.
+- Matched paths are treated as sensitive when submitting a task card, so they require `confirmed: true`.
+
+---
+
 ## 📦 Version Consistency Convention (Dev Environment)
 
 When you configure Carlos Flow for your AI, there are three conventions worth knowing:

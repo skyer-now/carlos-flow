@@ -13,6 +13,9 @@
 | `src/index.js` 的参数校验 | `scripts/check-params.mjs` 的判定口径 | 工具的 `inputSchema` |
 | `src/state.js` 的状态字段 | `src/state.js` 的 `defaultState()` + `schemaVersion` | 迁移函数 `migrate()` |
 | `src/state.js` 的审计链 | `docs/AUDIT_REVIEW.md` 的威胁模型 | `test/audit-chain.mjs` |
+| `src/state.js` 的 `withStateLock` | `docs/TOOL_CONTRACTS.md` §4.5（排他/回收/退避口径） | `test/state-lock.mjs`、`test/concurrency-e2e.mjs` |
+| `src/protocol.js` 的敏感名单 | `docs/TOOL_CONTRACTS.md` §4.4（只能追加，不许放宽） | `test/sensitive-config.mjs` |
+| `src/dispatch.js` 的负对照还原 | `docs/TOOL_CONTRACTS.md` 的 `flow_falsify` 关键约束 | `test/falsify-restore.mjs` |
 | `src/dispatch.js` 的 scope 判定 | `test/scope-enforcement.mjs` 的用例 | `README.md` 的能力矩阵 |
 | 门禁逻辑（claim / dispatch / verdict） | `test/e2e-carlos.mjs` 的第 15~26 组用例 | 变异体 M1~M6 |
 | `src/trigger.js` 触发引擎 | `TRIGGER_GUIDE.md` + `test/trigger-e2e.mjs` | 触发器配置模板 |
@@ -41,6 +44,14 @@
 4. **激活占位卡未补齐时不得派发 / 不得裁定**
    - `activation_pending` 非空 → `flow_claim` / `flow_dispatch` / `flow_verdict` 全部拒绝。
 
+4.1 **敏感规则只许追加（v2.14.0）**
+   - `.carlos.json` 的 `sensitive` 只能**加**规则；`!x` / `-x` 否定式必须被忽略。
+   - 配置损坏时退回内置基线，不许因为「配置读不到」而放宽。
+
+4.2 **负对照不得让工作区停在改动前（v2.14.0）**
+   - 进入临界区前必须写 `journal.json`；`finally` 里还原后必须逐文件核对摘要。
+   - 还原失败时**保留备份目录**（下一次调用靠它恢复），不许删了当没事。
+
 5. **审计链的 legacy 记录不得重置链起点**
    - 旧格式记录（无 hash）只计入 `legacy` 计数，**保持 `prev` 不变**。
    - 重置会让 v2.5 升级上来的用户审计链长期报红 —— 误报比漏报更伤信任。
@@ -62,6 +73,9 @@ npm run test:all            # 主测试套件（smoke + e2e + p0 + trigger + con
 npm run test:scope          # 越界拦截真实验证（真实 git 仓库 + 真实改动）
 npm run test:audit          # 审计链篡改检测验证（HMAC / plain / legacy / date）
 npm run test:bridge         # Bridge 身份隔离（端口上是别人的 bridge 不得复用）
+npm run test:sensitive      # 项目级敏感规则：只能追加、否定式无效、坏配置退回基线
+npm run test:lock           # 状态锁：退避 / 死锁回收 / fail-closed
+npm run test:falsify        # 负对照：还原核对 + 崩溃恢复
 npm run test:lang           # 产物语言体检的自检
 npm run test:package        # 包级端到端（真实 tarball + 干净安装 + 真实 MCP 握手）
 npm run check:full          # 对外产物全面体检
@@ -75,7 +89,7 @@ npm run check:readme        # 双语 README 未漂移
 变异测试（耗时较长，发布前跑）：
 
 ```bash
-npm run test:mutation       # 17 类变异体必须 17/17 全部被抓住
+npm run test:mutation       # 20 类变异体必须 20/20 全部被抓住
 ```
 
 ---

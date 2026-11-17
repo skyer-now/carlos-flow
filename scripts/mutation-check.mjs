@@ -198,6 +198,28 @@ const MUTANTS = [
   }`,
   },
   {
+    id: "M18-项目级敏感规则不生效",
+    desc: "isSensitive 在判定完内置基线后直接 return false（.carlos.json 追加的规则全部失效）",
+    file: "src/protocol.js",
+    from: `  // 项目级扩展（只能追加；为空时零开销）
+  if (EXTRA_SENSITIVE.names.size && EXTRA_SENSITIVE.names.has(base)) return true;`,
+    to: `  return false; // MUTANT: 项目级敏感规则不生效`,
+  },
+  {
+    id: "M19-负对照还原不核对",
+    desc: "把还原后的逐文件摘要核对换成恒真（工作区可能停在改动前却报 ok）",
+    file: "src/dispatch.js",
+    from: `    restoreReport = verifyRestoredState(saved, currentDigests);`,
+    to: `    restoreReport = { ok: true, checked: 0, mismatched: [], unreadable: [] }; // MUTANT: 不核对`,
+  },
+  {
+    id: "M20-死锁号不回收",
+    desc: "锁持有者 pid 已死（ESRCH）时不回收 → 崩溃后同一会话永久卡死",
+    file: "src/state.js",
+    from: `              if (err && err.code === "ESRCH") holderDead = true;`,
+    to: `              if (false) holderDead = true; // MUTANT: 不回收死锁号`,
+  },
+  {
     id: "M8-未派发可记PASS",
     desc: "移除 flow_verdict 的 dispatch_count 检查（未派发也能记 PASS）",
     file: "src/index.js",
@@ -227,7 +249,7 @@ function sh(cmd, cwd, env = {}) {
 const lines = [];
 lines.push("# 变异测试报告");
 lines.push("");
-lines.push(`- 源仓库：\`carlos-flow-cindy\` / \`carlos-flow-opencode\`（工作副本路径已改写为占位符）`);
+lines.push("- 源仓库：`carlos-flow`（单包，工作副本路径已改写为占位符）");
 lines.push(`- 变异副本：临时目录（用完自动删除，不入库）`);
 lines.push(`- 目的：确认测试套件能抓住「激活只打印日志」「闸门失效」「会话撞名」等退化`);
 lines.push("");
@@ -303,12 +325,28 @@ const SRC_BRIDGES = new Set(bridgePidFiles(SRC));
 // 导致套件启动失败/结果失真（表现为 concurrency 套件输出异常）。
 const PORT_BASE = Number(process.env.MUTATION_PORT_BASE || 20100);
 
-const base = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?; npm run test:scope 2>&1; echo SCOPE_EXIT=$?; npm run test:audit 2>&1; echo AUDIT_EXIT=$?", SRC, {
+// 门禁加固三件套（敏感规则 / 状态锁 / 负对照还原）也纳入变异守护：
+// 它们各自有独立回归套件，不跑就等于「新守卫没被证明有效」。
+const SUITES =
+  "npm run test:e2e 2>&1; echo E2E_EXIT=$?; " +
+  "npm run test:trigger 2>&1; echo TR_EXIT=$?; " +
+  "npm run test:concurrency 2>&1; echo CONC_EXIT=$?; " +
+  "npm run test:scope 2>&1; echo SCOPE_EXIT=$?; " +
+  "npm run test:audit 2>&1; echo AUDIT_EXIT=$?; " +
+  "npm run test:sensitive 2>&1; echo SENS_EXIT=$?; " +
+  "npm run test:lock 2>&1; echo LOCK_EXIT=$?; " +
+  "npm run test:falsify 2>&1; echo FALSIFY_EXIT=$?";
+
+const base = sh(SUITES, SRC, {
   CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", "base"),
 });
 const baseE2e = /════ 结果: (\d+) 通过 \/ (\d+) 失败/.exec(base);
 const baseTr = /总测试数: (\d+)[\s\S]*?✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(base);
 const baseConc = /✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(base.slice(base.lastIndexOf("跨进程并发")));
+// 三条加固套件用各自的 OK 标记判定「真的跑通了」（不是崩在半路）
+const baseSens = /SENSITIVE_CONFIG_OK/.test(base);
+const baseLock = /STATE_LOCK_OK/.test(base);
+const baseFalsify = /FALSIFY_RESTORE_OK/.test(base);
 
 // 基线必须全绿：否则每个变异体「注入后仍然失败」会被误判成「被抓住」，
 // 脚本就会在基线本身是红的情况下报「全部被抓住」并 exit 0（假绿）。
@@ -319,6 +357,9 @@ if (!baseTr) baseProblems.push("trigger 未取到结果");
 else if (Number(baseTr[3]) > 0) baseProblems.push(`trigger ${baseTr[3]} 条失败`);
 if (!baseConc) baseProblems.push("concurrency 未取到结果");
 else if (Number(baseConc[2]) > 0) baseProblems.push(`concurrency ${baseConc[2]} 条失败`);
+if (!baseSens) baseProblems.push("sensitive 未跑通");
+if (!baseLock) baseProblems.push("lock 未跑通");
+if (!baseFalsify) baseProblems.push("falsify 未跑通");
 const baseGreen = baseProblems.length === 0;
 
 lines.push(`## 基线（未变异）`);
@@ -398,7 +439,7 @@ for (const [mi, m] of MUTANTS.entries()) {
   }
   writeFileSync(target, mutated, "utf8");
 
-  const out = sh("npm run test:e2e 2>&1; echo E2E_EXIT=$?; npm run test:trigger 2>&1; echo TR_EXIT=$?; npm run test:concurrency 2>&1; echo CONC_EXIT=$?; npm run test:scope 2>&1; echo SCOPE_EXIT=$?; npm run test:audit 2>&1; echo AUDIT_EXIT=$?", workDir, {
+  const out = sh(SUITES, workDir, {
     CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", m.id.replace(/[^A-Za-z0-9]/g, "_")),
     // 每个变异体用**独立端口**：否则会复用上一轮副本拉起的旧 bridge，
     // 旧 bridge 内存里跑的是旧代码 → 测试结果失真（可能假绿 / 假红）。
@@ -434,12 +475,36 @@ for (const [mi, m] of MUTANTS.entries()) {
     process.exit(1);
   }
 
+  // 三条加固套件：先确认它「真的跑了」（打印了结果块），再看是否通过
+  const sensRan = /SENSITIVE_CONFIG_OK/.test(out) || /SENS_EXIT=[1-9]/.test(out);
+  const lockRan = /STATE_LOCK_OK/.test(out) || /LOCK_EXIT=[1-9]/.test(out);
+  const falsifyRan = /FALSIFY_RESTORE_OK/.test(out) || /FALSIFY_EXIT=[1-9]/.test(out);
+  if (!sensRan || !lockRan || !falsifyRan) {
+    const missing = [];
+    if (!sensRan) missing.push("sensitive");
+    if (!lockRan) missing.push("lock");
+    if (!falsifyRan) missing.push("falsify");
+    lines.push(`## ${m.id}`);
+    lines.push("");
+    lines.push(`- 注入：${m.desc}`);
+    lines.push(`- 文件：\`${m.file}\``);
+    lines.push("- 结果：**加固套件未成功运行（结果不可信）**");
+    lines.push(`- 详情：未跑通的套件：${missing.join("、")}`);
+    lines.push("");
+    writeFileSync(REPORT, lines.join("\n") + "\n", "utf8");
+    console.error(`✗ 变异体 ${m.id}：加固套件未跑通（${missing.join("、")}）—— 结果不可信。`);
+    console.error("  报告已写入: " + REPORT);
+    process.exit(1);
+  }
   const caught =
     (e2eFail && Number(e2eFail[2]) > 0) ||
     (trFail && Number(trFail[3]) > 0) ||
     (concFail && Number(concFail[2]) > 0) ||
     /SCOPE_EXIT=[1-9]/.test(out) ||
-    /AUDIT_EXIT=[1-9]/.test(out);
+    /AUDIT_EXIT=[1-9]/.test(out) ||
+    /SENS_EXIT=[1-9]/.test(out) ||
+    /LOCK_EXIT=[1-9]/.test(out) ||
+    /FALSIFY_EXIT=[1-9]/.test(out);
   const verdict = caught ? "CAUGHT ✅" : "NOT CAUGHT ❌";
   results.push({
     ...m,

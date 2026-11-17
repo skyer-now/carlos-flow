@@ -1038,6 +1038,75 @@ async function main() {
     );
   }
 
+  // ── 第 31 组：占位卡「补齐骨架」----------------------------------------
+  //
+  // 目的：guide 模式遇到 activation_pending 非空时，不能只说「还差三项」，
+  //       必须给出**可复制的补齐骨架**（每一项该怎么填），否则新手 Agent
+  //       会在同一条报错上来回空转。pro 模式仍保持原样（向后兼容守护）。
+  {
+    const ACT_SID = "guide-act-" + Date.now();
+    await call("flow_mode", { sessionId: ACT_SID, mode: "guide", reason: "e2e-guide-activation" });
+    await call("flow_add_user_msg", { sessionId: ACT_SID, text: QUOTE });
+    // 只填 goal/quote 的占位卡：scope / acceptance / verify 全空
+    const sub = await call("flow_submit_requirement", {
+      sessionId: ACT_SID, goal: "占位卡补齐骨架", quote: QUOTE,
+      activation: true, confirmed: true,
+    });
+    const st = await call("flow_status", { sessionId: ACT_SID });
+    const pending = st.ok && Array.isArray(st.data?.activation_pending) ? st.data.activation_pending : [];
+    check(
+      "31a. 占位卡待补项由服务端派生（scope/acceptance/verify.cmd）",
+      sub.ok && sub.data?.ok === true && pending.length === 3,
+      sub.ok ? `pending=${pending.join(",")}` : sub.error,
+    );
+
+    // 骨架可能被 call() 的 300 字截断所掩盖，这里取**完整 stderr**（runClient）
+    const claim = await runClient("flow_claim", { sessionId: ACT_SID, role: "executor" });
+    const errStr = String(claim.stderr || "") + String(claim.stdout || "");
+    check(
+      "31b. guide 模式给出「还差几项」的具体项名",
+      claim.ok === false && errStr.includes("这张卡还差 3 项") &&
+        errStr.indexOf("scope") > 0 && errStr.indexOf("verify.cmd") > 0,
+      claim.ok ? "意外放行（占位卡未补齐不该能 claim）" : "已给出待补项",
+    );
+    check(
+      "31c. guide 模式给出可复制的 flow_submit_requirement 骨架",
+      errStr.includes("flow_submit_requirement(") &&
+        errStr.includes("<要改的文件") &&
+        errStr.includes("<怎么算做完") &&
+        errStr.includes("<能真正跑起来的验证命令"),
+      claim.ok ? "" : (errStr.includes("flow_submit_requirement(") ? "骨架已给出" : "缺少骨架"),
+    );
+
+    // 补齐后必须能开工（证明骨架里提示的路径确实可行）
+    const fixed = await call("flow_submit_requirement", {
+      sessionId: ACT_SID, goal: "占位卡补齐骨架", quote: QUOTE,
+      scope: [ROOT + "/README.md"], acceptance: ["补齐后可以 claim"],
+      verify: { cmd: "echo OK" }, confirmed: true,
+    });
+    const claim2 = await call("flow_claim", { sessionId: ACT_SID, role: "executor" });
+    check(
+      "31d. 按骨架补齐后闸门解除（可以 claim）",
+      fixed.ok && fixed.data?.ok === true && claim2.ok === true,
+      claim2.ok ? "已解锁" : String(claim2.error || "").slice(0, 80),
+    );
+
+    // pro 模式：同样的占位卡场景保持原始技术码，不注入骨架
+    const ACT_PRO_SID = "pro-act-" + Date.now();
+    await call("flow_add_user_msg", { sessionId: ACT_PRO_SID, text: QUOTE });
+    await call("flow_submit_requirement", {
+      sessionId: ACT_PRO_SID, goal: "占位卡骨架（pro）", quote: QUOTE,
+      activation: true, confirmed: true,
+    });
+    const proClaim = await runClient("flow_claim", { sessionId: ACT_PRO_SID, role: "executor" });
+    const proErr = String(proClaim.stderr || "") + String(proClaim.stdout || "");
+    check(
+      "31e. pro 模式不注入骨架（行为保持不变）",
+      proClaim.ok === false && proErr.includes("激活占位卡尚未补齐") && !proErr.includes("这张卡还差"),
+      proClaim.ok ? "意外放行" : "保持原始技术码",
+    );
+  }
+
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
   console.log(`sessionId=${SID}`);

@@ -63,6 +63,15 @@ jobs:
           # 并发套件在高负载下偶发「假泄漏」，偶发红会阻塞合并 → 允许重跑一次。
           # 两次都红才判失败，真缺陷不会被重试掩盖。
           CONCURRENCY_RETRY: 1
+      # 门禁加固三件套：项目级敏感规则（只增不减）/ 状态锁退避与陈旧回收 / 负对照还原核对
+      - name: 门禁加固回归（敏感规则 / 状态锁 / 负对照还原）
+        run: |
+          npm run test:sensitive
+          npm run test:lock
+          npm run test:falsify
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home
       - name: Security audit
         run: npm audit --audit-level=high || true
       - name: Build check (no build step for ESM)
@@ -160,7 +169,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: node --version && npm --version
       - run: npm ci
-      - name: Mutation check (13 类退化必须全部被抓住)
+      - name: Mutation check (20 类退化必须全部被抓住)
         run: npm run test:mutation
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}

@@ -59,7 +59,9 @@ const walk = (dir, depth = 0) => {
   let entries = [];
   try { entries = readdirSync(dir); } catch { return; }
   for (const e of entries) {
-    if (e === "node_modules" || e === ".git" || e === "docs") continue;
+    // .mutation-report.md 是 mutation-check 跑完写的**生成产物**（已 gitignore），
+    // 它的表头本来就会讲「旧包名」这件事 —— 扫进来只会产生假红。
+    if (e === "node_modules" || e === ".git" || e === "docs" || e === ".mutation-report.md") continue;
     const full = join(dir, e);
     let st;
     try { st = statSync(full); } catch { continue; }

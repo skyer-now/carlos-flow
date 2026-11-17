@@ -15,7 +15,7 @@ const PURE_DOC_TOOLS = new Set(["flow_protocol"]);
 
 // 真实副作用词表（含本项目实际使用的封装函数与 fs 操作）
 const REAL_WORK =
-  /\b(await|async|loadState|saveState|readManifest|saveAgentResult|buildRevertPlan|revertPlan|audit|spawn|spawnSync|execFileSync|execSync|readFileSync|writeFileSync|appendFileSync|mkdirSync|unlinkSync|rmSync|renameSync|copyFileSync|withStateLock|gitHead|verifyAuditChain|computeFingerprint|checkScope|enforceScope|parseCard|validateCard|sanitizeSid)\b/;
+  /\b(await|async|loadState|saveState|writeUserMessage|getUserMessages|readManifest|saveAgentResult|buildRevertPlan|revertPlan|audit|spawn|spawnSync|execFileSync|execSync|readFileSync|writeFileSync|appendFileSync|mkdirSync|unlinkSync|rmSync|renameSync|copyFileSync|withStateLock|gitHead|verifyAuditChain|computeFingerprint|checkScope|enforceScope|parseCard|validateCard|sanitizeSid)\b/;
 
 // 常量返回特征：整段函数体只有一个 return ok({...}) / return {...}，无任何其它语句
 function isConstantReturn(body) {

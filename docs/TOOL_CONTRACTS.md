@@ -107,10 +107,11 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
 > **门禁顺序是有意的**：先证实验证有效（4/5）→ 再证改动合规（6/7）→ 再证测试有判别力（8）→ 再证审查到位（9）。
 > 若调换顺序，「未验证」这类更基础的问题会被「双轴未齐」的错误信息掩盖，调用方拿到不可操作的下一步。
 >
-> **代码注释编号有瑕疵（如实记录）**：`src/index.js` 里这些判断的注释编号是
-> 「之二 / 之三 / 之五 / 之四 / 之四 / 之五 / 之六」——其中**「之四」「之五」各出现两次**，
-> 且缺「之一」。这是注释本身的历史遗留错乱，**不影响执行顺序**（执行顺序由代码行序决定）。
-> 维护时以本表的 9 组分组为准，不要沿用注释编号。
+> **注释编号已对齐（2026-11-17 修）**：`src/index.js` 里的注释统一写成
+> `门禁 N/9（无条件|仅 PASS）：...`，与本表的 9 组一一对应。
+> 历史遗留的「之二 / 之三 / 之五 / 之四 / 之四 / 之五 / 之六」（「之四」「之五」各出现两次、
+> 且缺「之一」）会造成「读注释理解出的顺序 ≠ 代码真实顺序」，已全部替换。
+> 改动这 9 组时，**注释编号与本节表格必须同时改**。
 
 ---
 
@@ -137,7 +138,7 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
 | `activation_pending` | array | submit_requirement, trigger_check | claim, dispatch, verdict | 占位卡待补字段，非空则拒绝派发 |
 | `activation_activated` | boolean | submit_requirement, trigger_check | submit_requirement | 是否曾被激活过（单调，只增不减） |
 | `dispatch_baseline` | array | dispatch | verdict | 派发时的工作区改动基线，**越界判定的参照点** |
-| `last_falsify` | object\|null | falsify | verdict | 负对照结果{verdict, before, after} |
+| `last_falsify` | object\|null | falsify | verdict, status | 负对照结果{verdict, before, after, restore{ok, checked, mismatched}} |
 | `audit_axes` | object | audit_submit | verdict, status, audit_guard | 两轴结论{standards, spec} |
 | `audit_axes_ts` | number | audit_submit | status | 两轴最后提交时间（审计留痕） |
 | `verdict_role` | string\|null | verdict | status | 实际落裁定者角色 |
@@ -268,8 +269,8 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
 |---|---|
 | **状态门** | 负对照门。PASS 前必须做，且必须 `meaningful` |
 | **问题层** | **证明 verify.cmd 真的在测本次改动**。`verify.cmd` 可以是 `echo ok` / `cmd \|\| true` 这类空测试 —— 改动前后都退 0，门禁却以为验证通过。负对照要求：改动前跑必须**失败**，改动后跑必须**通过** |
-| **读写字段** | 读：`card`、`card.env.project`。写：`last_falsify{ts, cmd, cwd, verdict, reason, before{exitCode,ok,hash}, after{...}}` + `last_verify`（= 改动后那次运行，让裁定证据绑定到这次运行） |
-| **测试覆盖** | 4 个文件：`e2e-carlos.mjs`、`package-e2e.mjs`、`scope-enforcement.mjs`、`verify-stale.test.mjs`（7 处调用） |
+| **读写字段** | 读：`card`、`card.env.project`。写：`last_falsify{ts, cmd, cwd, verdict, reason, before{exitCode,ok,hash}, after{...}, restore{ok,checked,mismatched}}` + `last_verify`（= 改动后那次运行，让裁定证据绑定到这次运行） |
+| **测试覆盖** | 5 个文件：`e2e-carlos.mjs`、`package-e2e.mjs`、`scope-enforcement.mjs`、`verify-stale.test.mjs`、`falsify-restore.mjs`（8 处调用） |
 
 **审计事件**：`run/falsify_denied`、`run/falsify`
 
@@ -285,6 +286,8 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
 **关键约束**
 - 需要派发快照（`manifest.jsonl`），没派发过直接拒绝
 - 先把"改动后"状态备份到临时目录，`finally` 里一定还原 —— 即使 verify 命令本身改文件，也不会把工作区留在改动前状态
+- **还原是可核验的**（v2.14.0）：进入临界区前写 `negative_control/<ts>/journal.json`；`finally` 里还原后逐文件比对内容摘要，结果写回 `restore{ok, checked, mismatched}`，失败时**保留备份目录**并写 stderr 告警
+- **崩溃可恢复**（v2.14.0）：上一次被强杀（日志停在 `pending`）时，本次调用先按日志把工作区救回来，并在返回值 `recovered{dirs, files, unresolved}` 里如实报告
 - **局限**：快照只覆盖 scope 内文件，scope 外依赖被改时结论仅供参考
 
 ---
@@ -535,7 +538,7 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
 | **读写字段** | 读：`audit_axes`、`card_ts`。不写 state |
 | **测试覆盖** | 1 个文件：`e2e-carlos.mjs`（3 处调用，**浅**） |
 
-> **冗余说明**：其 `axisOk` 逻辑与 `flow_verdict` 内部"防假闭环之六"完全一致（仅 28 行）。
+> **冗余说明**：其 `axisOk` 逻辑与 `flow_verdict` 内部的「门禁 9/9（双轴审查）」完全一致（仅 28 行）。
 > 保留它作为"提前自查"的便利入口，删除收益约等于零。
 
 ---
@@ -577,6 +580,48 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
 
 ---
 
+### 4.4 项目级敏感规则（`.carlos.json`，v2.14.0）
+
+内置敏感名单（`.env` / 私钥 / 锁文件 / `migrations` 目录…）是**不可缩减的安全基线**。
+项目可以在仓库根放一个 `.carlos.json` **追加**自己的敏感面：
+
+```json
+{
+  "sensitive": {
+    "names": ["pay_api_key.txt"],
+    "segments": ["ledger"],
+    "extensions": [".vault"],
+    "prefixes": ["billing/ledger/"]
+  }
+}
+```
+
+| 维度 | 行为 |
+|---|---|
+| 生效范围 | 从工具调用的 `cwd`（缺省为 `process.cwd()`）逐级向上最多 12 层查找 |
+| 匹配方式 | `names` 命中文件名；`segments` 命中目录段；`extensions` 命中文件名后缀（不带点也认）；`prefixes` 命中路径前缀 |
+| 只增不减 | **没有**删减 / 豁免语法；以 `!` 或 `-` 开头的条目一律忽略并写 stderr |
+| 配置损坏 | JSON 解析失败 → 退回内置基线并写 stderr（不抛错、不放宽） |
+| 缓存 | 按「文件路径 + mtime + size」缓存，避免每次工具调用重读 |
+| 换项目 | 找不到配置时清空扩展，避免上一个项目的规则污染 |
+| 测试 | `test/sensitive-config.mjs`（25 条断言：基线 / 追加 / 否定式 / 坏配置 / 切项目 / riskTier） |
+
+> 为什么只许追加：AGENTS.md 第 1 条红线是「门禁只许收紧，不许放宽」。
+> 一旦允许 `"!package.json"` 这类否定式，任何一次误配置都会静默把基线放出去。
+
+### 4.5 状态锁（`withStateLock`，v2.14.0 加固）
+
+| 维度 | 行为 |
+|---|---|
+| 排他性 | `openSync(lockFile, "wx")`（O_CREAT\|O_EXCL）—— 原子排他，M12 变异体守着这条 |
+| 持有者标识 | 拿到锁后把 pid 写入锁文件（只用于诊断与死锁回收，不参与排他判定） |
+| 陈旧回收 | ① 锁内 pid 已死（`ESRCH`）→ 立即回收；② 老式空锁按 `mtime > staleMs`（默认 30s）回收；`EPERM` 视为活着，绝不误删 |
+| 重试 | 指数退避（5ms 起、×1.6、上限 120ms）+ 0~30% 抖动 —— 固定 15ms 会让多进程「同步醒来」反复撞锁 |
+| 超时 | fail-closed：`timeoutMs`（默认 5s）内拿不到锁就报错，**绝不无锁写状态**，错误里点明持有者 pid |
+| 测试 | `test/state-lock.mjs`（11 条断言）、`test/concurrency-e2e.mjs`（跨进程回归） |
+
+---
+
 ## 5. 维护检查清单
 
 ### 5.1 新增一个工具
@@ -611,7 +656,8 @@ npm run check:lang          # 产物语言体检（提交信息/注释必须中�
 npm run check:claims        # 行为兑现门禁
 npm run check:params        # 参数真实被读 + 无死变量
 npm run check:no-dead-handler  # 重复 handler / 分发与校验未丢
-npm run test:all            # 全量测试
+npm run check:anchors       # 变异锚点未失效（20/20）
+npm run test:all            # 全量测试（含 sensitive / lock / falsify）
 ```
 
 ---

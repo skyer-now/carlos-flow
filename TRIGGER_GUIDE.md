@@ -1,6 +1,6 @@
 # Carlos Flow 智能触发引擎使用指南
 
-> **版本**: v2.13.1
+> **版本**: v2.14.0
 > **适用**：`carlos-flow` 单包架构（2.6.0+）
 > **代码位置**：`src/trigger.js`（零外部依赖的纯 JavaScript 实现）
 
@@ -766,7 +766,7 @@ node client/carlos.js flow_status '{"sessionId":"my-task"}'
 ## 📚 相关资源
 
 - [测试脚本](test/trigger-e2e.mjs) - E2E 测试套件（29 项，含 10 项回归用例）
-- [变异测试](scripts/mutation-check.mjs) - 注入退化验证测试套件真的能抓住（13 类变异）
+- [变异测试](scripts/mutation-check.mjs) - 注入退化验证测试套件真的能抓住（20 类变异）
 - [核心代码](src/trigger.js) - 触发引擎实现
 - [集成示例](client/carlos.js) - 客户端集成代码
 - [完整 README](./README.md) - 项目总览与能力矩阵
@@ -779,5 +779,5 @@ MIT License
 
 ---
 
-**版本**: v2.13.1  
+**版本**: v2.14.0  
 **更新日期**: 2026-11-12

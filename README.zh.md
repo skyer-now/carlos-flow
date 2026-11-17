@@ -1,7 +1,7 @@
 # Carlos 工作流 (Carlos-Flow)
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/skyer-now/carlos-flow)
-[![Version](https://img.shields.io/badge/version-2.12.2-blue)](https://www.npmjs.com/package/carlos-flow)
+[![Version](https://img.shields.io/badge/version-2.14.0-blue)](https://www.npmjs.com/package/carlos-flow)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [中文](README.zh.md) | [English Version](README.en.md)
@@ -36,6 +36,28 @@ Carlos 工作流的核心逻辑是“闭环质检”：
 2. **角色调度**：自动派发执行与审计角色，规范操作流程。
 3. **自动化质检**：AI 的产出必须通过系统预设的自动化回归测试。
 4. **结论裁定**：只有通过测试与双轴门禁，任务才被判定为“已完成”。
+
+---
+
+## 🔧 项目级配置（可选）
+
+在仓库根放一个 `.carlos.json`，就能让门禁认识**你项目自己**的敏感文件（内置名单之外的）：
+
+```json
+{
+  "sensitive": {
+    "names": ["pay_api_key.txt"],
+    "segments": ["ledger"],
+    "extensions": [".vault"],
+    "prefixes": ["billing/ledger/"]
+  }
+}
+```
+
+- **只能追加，不能放宽**：以 `!` 或 `-` 开头的条目一律被忽略；内置名单（`.env`、私钥、锁文件、`migrations` 目录等）永远生效。
+- **写坏了也不会放宽**：配置解析失败时自动退回内置名单，不会静默放行。
+- 引擎从调用的工作目录向上找最近的 `.carlos.json`（最多 12 层），所以在大仓的子目录里调用也能命中。
+- 命中的路径在提交任务卡时会被判为敏感路径，需要 `confirmed: true` 才能继续。
 
 ---
 

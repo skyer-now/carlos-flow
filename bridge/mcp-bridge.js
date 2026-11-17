@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { createHash } from "node:crypto";
-import { readFileSync, unlinkSync } from "node:fs";
+import { readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -51,6 +51,35 @@ const IDLE_MS = (() => {
 let lastActivity = Date.now();
 let activeSockets = 0;
 const touch = () => { lastActivity = Date.now(); };
+
+// ---- 启动时清理僵尸工牌 ----
+//
+// 背景（2026-11-17 实测）：仓库根堆了 40 个 bridge-*.pid，其中 36 个指向已不存在的进程。
+// 这些文件没有任何用处，却会让人「以为 bridge 还在跑」，也让排查端口占用时判断失真。
+// 只删 **pid 已死** 的工牌：活着的一律不动（pid 可能被别的进程复用，误删会掩盖真实占用）。
+function sweepStalePidFiles() {
+  let names = [];
+  try { names = readdirSync(MCP_ROOT); } catch { return { removed: 0, kept: 0 }; }
+  let removed = 0;
+  let kept = 0;
+  for (const name of names) {
+    if (!/^bridge-\d+\.pid$/.test(name)) continue;
+    const file = path.join(MCP_ROOT, name);
+    let pid = 0;
+    try { pid = parseInt(readFileSync(file, "utf8").trim(), 10); } catch { continue; }
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) { kept++; continue; }
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch (e) {
+      // ESRCH = 进程不存在；EPERM = 存在但无权发信号 → 按活着处理
+      if (e && e.code === "ESRCH") alive = false;
+    }
+    if (alive) { kept++; continue; }
+    try { unlinkSync(file); removed++; } catch { /* 被别的进程删了 */ }
+  }
+  return { removed, kept };
+}
 
 if (!TOKEN) {
   process.stderr.write("[bridge] ❌ CARLOS_BRIDGE_TOKEN 未设置（fail-closed）\n");
@@ -177,6 +206,11 @@ const server = createServer((socket) => {
           flow_home: process.env.CARLOS_FLOW_HOME || "",
           pid: process.pid,
           port: PORT,
+          // 空闲策略可观测：排查「为什么它退了 / 为什么它不退」时不用猜配置。
+          // 恒为附加字段，客户端只比对 root / flow_home，不受影响。
+          idle_ms: IDLE_MS,
+          idle_for_ms: Date.now() - lastActivity,
+          active_sockets: activeSockets,
         };
         socket.write(JSON.stringify(health) + "\n");
         continue;
@@ -226,6 +260,10 @@ server.on("error", (e) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   process.stderr.write(`[bridge] Carlos MCP Bridge listening on 127.0.0.1:${PORT}\n`);
+  const swept = sweepStalePidFiles();
+  if (swept.removed > 0) {
+    process.stderr.write(`[bridge] 已清理 ${swept.removed} 个僵尸 pid 工牌（保留 ${swept.kept} 个活进程的）\n`);
+  }
 });
 
 let shuttingDown = false;
