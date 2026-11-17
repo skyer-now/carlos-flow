@@ -11,7 +11,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { PROTOCOL } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
 import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, auditHashMode, workspaceFingerprint } from "./state.js";
-import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, runNegativeControl, computeOutputHash, enforceScope, MAX_DISPATCH } from "./dispatch.js";
+import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, runNegativeControl, computeOutputHash, enforceScope, formatError, MAX_DISPATCH } from "./dispatch.js";
 
 const log = (msg) => {
   try {
@@ -49,7 +49,21 @@ const ok = (obj) => {
   const withOk = "ok" in payload ? payload : { ok: true, ...payload };
   return { content: [{ type: "text", text: JSON.stringify(withOk, null, 2) }] };
 };
-const fail = (message) => ({ content: [{ type: "text", text: "ERROR: " + String(message) }], isError: true });
+// 报错解释层的「模式闸门」。
+//
+// 背景：guide 模式已经由 guideError() 把技术报错翻译成中文人话，
+// 如果 fail() 再追加一层「为什么被拦」的机制说明，用户会看到两段解释（重复且啰嗝）。
+// 因此这里用一次性闼门：guideError 真的翻译了 → fail 原样输出；
+// 否则（pro 模式 / 未翻译的错误）→ 追加机制说明。
+let GUIDE_TRANSLATED = false;
+
+const fail = (message) => {
+  // 一次性消费：读完之后立即复位，避免影响下一条错误。
+  const alreadyHuman = GUIDE_TRANSLATED;
+  GUIDE_TRANSLATED = false;
+  const explained = alreadyHuman ? String(message) : formatError(String(message));
+  return { content: [{ type: "text", text: "ERROR: " + explained }], isError: true };
+};
 
 // ---- 向导模式（mode==='guide'）报错人话翻译 --------------------------------
 //
@@ -60,6 +74,8 @@ const fail = (message) => ({ content: [{ type: "text", text: "ERROR: " + String(
 // 接入原则：最小侵入——只在**典型门禁拦截点**调用，不做大规模重构。
 function guideError(state, technicalMsg) {
   if (!state || state.mode !== "guide") return technicalMsg;
+  // 打了这个标记，fail() 就知道「已经是人话」，不再叠机制说明。
+  GUIDE_TRANSLATED = true;
   const msg = String(technicalMsg);
   // 按关键词映射到通俗解释 + 操作指引
   const translations = [
@@ -772,8 +788,8 @@ const TOOLS = [
               exitCode: lv.exitCode,
               verify_cmd: lv.cmd,
             });
-            return fail("验证未通过（exitCode=" + lv.exitCode + "），不能记录 PASS 裁定。" +
-              "请先修复问题、让 verify.cmd 真实跑通（flow_run_verify），再记录裁定。");
+            return fail(formatError("验证未通过（exitCode=" + lv.exitCode + "），不能记录 PASS 裁定。" +
+              "请先修复问题、让 verify.cmd 真实跑通（flow_run_verify），再记录裁定。"));
           }
           if (!want || typeof lv.cmd !== "string" || lv.cmd.trim() !== want) {
             audit("decision", sessionId, {
@@ -782,8 +798,8 @@ const TOOLS = [
               verify_cmd: lv.cmd,
               card_cmd: want,
             });
-            return fail("已有的验证结果对应的命令与当前卡片的 verify.cmd 不一致，不能记录 PASS 裁定。" +
-              "请对当前卡片重新执行 flow_run_verify，再记录裁定。");
+            return fail(formatError("已有的验证结果对应的命令与当前卡片的 verify.cmd 不一致，不能记录 PASS 裁定。" +
+              "请对当前卡片重新执行 flow_run_verify，再记录裁定。"));
           }
 
           // 防假闭环之五：验证结果必须绑定当时的**代码状态**（A1）。
@@ -807,8 +823,8 @@ const TOOLS = [
               fp_was: fpWas.diff_sha256,
               fp_now: fpNow.diff_sha256,
             });
-            return fail("验证结果已过期（STALE）：验证通过后代码又被修改，当前 diff 指纹已变化。" +
-              "请重新执行 flow_run_verify 再记录裁定。");
+            return fail(formatError("验证结果已过期（STALE）：验证通过后代码又被修改，当前 diff 指纹已变化。" +
+              "请重新执行 flow_run_verify 再记录裁定。"));
           }
 
           // 防假闭环之四：越界改动必须被拦住。
@@ -835,10 +851,10 @@ const TOOLS = [
               violations: scopeCheck.violations,
               introduced: introduced.length,
             });
-            return fail("检测到越界改动，不能记录 PASS 裁定：" +
+            return fail(formatError("检测到越界改动，不能记录 PASS 裁定：" +
               (scopeCheck.violations || []).join(", ") +
               "。这些文件不在卡片 scope 白名单内。" +
-              "请把越界文件加入 scope（重新提交任务卡）后重试，或先撤销这些改动。");
+              "请把越界文件加入 scope（重新提交任务卡）后重试，或先撤销这些改动。"));
           }
 
           // 防假闭环之四：role 门禁绑定到会话 ID（claimed_role），而非调用方自述字符串
@@ -862,8 +878,8 @@ const TOOLS = [
           }
           if (lf.verdict !== "meaningful") {
             audit("decision", sessionId, { kind: "verdict_denied", reason: "负对照未通过", falsify_verdict: lf.verdict });
-            return fail("负对照未通过（" + lf.verdict + "）：" + (lf.reason || "") +
-              " 不能记录 PASS 裁定。请修正 verify.cmd 或改动后重试。");
+            return fail(formatError("负对照未通过（" + lf.verdict + "）：" + (lf.reason || "") +
+              " 不能记录 PASS 裁定。请修正 verify.cmd 或改动后重试。"));
           }
           // 绑定：裁定的证据必须就是负对照里「改动后」的那次运行。
           if (typeof lf.after === "object" && lf.after && typeof lf.after.hash === "string" &&
@@ -1787,8 +1803,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     return await t.handler(args);
   } catch (e) {
+    const err = e && e.message ? e.message : String(e);
     return {
-      content: [{ type: "text", text: "ERROR: " + (e && e.message ? e.message : String(e)) }],
+      content: [{ type: "text", text: "ERROR: " + formatError(err) }],
       isError: true,
     };
   }

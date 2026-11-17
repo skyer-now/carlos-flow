@@ -969,6 +969,33 @@ async function main() {
     );
   }
 
+  // 30d. guide 模式不得叠加第二层机制说明（回归守护）
+  //
+  // 背景：fail() 会给错误追加「💡 为什么被拦：…」的机制说明。
+  // guide 模式已经由 guideError() 翻译成人话，若再叠一层，用户会看到两段解释。
+  // 断言：guide 输出必须不含机制说明标题；pro 输出必须含（两层各司其职）。
+  {
+    const MECH_TITLE = "为什么被拦";
+    const GUIDE_SID3 = "guide-e2e3-" + Date.now();
+    await call("flow_mode", { sessionId: GUIDE_SID3, mode: "guide", reason: "e2e-guide-test-3" });
+    const gClaim3 = await call("flow_claim", { sessionId: GUIDE_SID3, role: "executor" });
+    const g3Err = String(gClaim3.error || "");
+    check(
+      "30d. guide 模式只留人话，不叠加机制说明",
+      gClaim3.ok === false && g3Err.includes(GUIDE_HUMAN_NO_CARD) && !g3Err.includes(MECH_TITLE),
+      gClaim3.ok ? "意外成功（不应放行）" : (g3Err.includes(MECH_TITLE) ? "叠加了机制说明（重复解释！）" : "仅人话（正确）")
+    );
+
+    const PRO_SID3 = "pro-e2e3-" + Date.now();
+    const pClaim3 = await call("flow_claim", { sessionId: PRO_SID3, role: "executor" });
+    const p3Err = String(pClaim3.error || "");
+    check(
+      "30e. pro 模式保留机制说明（解释层未被误删）",
+      pClaim3.ok === false && p3Err.includes(TECH_NO_RECORD) && p3Err.includes(MECH_TITLE),
+      pClaim3.ok ? "意外成功（不应放行）" : (p3Err.includes(MECH_TITLE) ? "机制说明已附上（正确）" : "机制说明丢失（回归！）")
+    );
+  }
+
   console.log(results.join("\n"));
   console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
   console.log(`sessionId=${SID}`);

@@ -282,7 +282,7 @@ export function saveAgentResult(sid, role, stdout, stderr, code) {
 //   · POSIX：/bin/sh -c + shell:false（明确指定解释器，不依赖 PATH 里的 sh）。
 export async function runVerifyCommand(cmd, cwd) {
   if (!cmd || !cmd.trim()) {
-    return { ok: false, exitCode: -1, stdout: "", stderr: "验证命令为空" };
+    return { ok: false, exitCode: -1, stdout: "", stderr: formatError("验证命令为空") };
   }
   // 可选：拦截高危命令模式。
   //
@@ -303,17 +303,18 @@ export async function runVerifyCommand(cmd, cwd) {
         ok: false,
         exitCode: -1,
         stdout: "",
-        stderr: `验证命令包含高危模式，已拒绝执行：${cmd}\n` +
-          "（CARLOS_FLOW_BLOCK_DANGEROUS=1 已开启；确认该命令安全后可关闭此开关）",
+        stderr: formatError(`验证命令包含高危模式，已拒绝执行：${cmd}`),
       };
     }
   }
   const isWindows = process.platform === "win32";
   const shell = isWindows ? process.env.COMSPEC || "cmd.exe" : "/bin/sh";
   const shellArgs = isWindows ? ["/c", cmd] : ["-c", cmd];
+  // 安全修复：禁止 cwd = '.' 或空（这会在 Windows 上触发 %SystemDrive% 目录扩展，污染仓库）
+  const safeCwd = typeof cwd === "string" && cwd.length > 0 && cwd !== "." ? cwd : process.cwd();
   return new Promise((resolve) => {
     const child = spawn(shell, shellArgs, {
-      cwd: cwd || process.cwd(),
+      cwd: safeCwd,
       stdio: ["ignore", "pipe", "pipe"],
       shell: isWindows,
       windowsHide: true,
@@ -328,11 +329,16 @@ export async function runVerifyCommand(cmd, cwd) {
     }, 120000);
     child.on("close", (code) => {
       clearTimeout(timeout);
-      resolve({ ok: code === 0, exitCode: code ?? -1, stdout, stderr });
+      if (code === 0) {
+        resolve({ ok: true, exitCode: code, stdout, stderr });
+      } else {
+        // 所有 child 错误输出都必须带上建议层
+        resolve({ ok: false, exitCode: code, stdout, stderr: formatError(String(stderr)) });
+      }
     });
     child.on("error", (err) => {
       clearTimeout(timeout);
-      resolve({ ok: false, exitCode: -1, stdout, stderr: String(err) });
+      resolve({ ok: false, exitCode: -1, stdout, stderr: formatError(String(err)) });
     });
   });
 }
@@ -487,11 +493,11 @@ function writeAfterState(sid, records) {
 export async function runNegativeControl(sid, cmd, cwd) {
   const entries = readManifest(sid);
   if (!entries.length) {
-    return { ok: false, error: "没有派发快照，无法做负对照（请先 flow_dispatch）" };
+    return { ok: false, error: formatError("没有派发快照，无法做负对照（请先 flow_dispatch）") };
   }
   const tmpDir = path.join(RUNS_DIR, sanitizeId(sid), "negative_control", String(Date.now()));
   try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (e) {
-    return { ok: false, error: "无法创建负对照临时目录：" + (e && e.message ? e.message : e) };
+    return { ok: false, error: formatError("无法创建负对照临时目录：" + (e && e.message ? e.message : e)) };
   }
 
   // ---- 状态 A：改动前态（派发时的快照，来自 manifest 备份） ----
@@ -671,9 +677,49 @@ export async function runNegativeControl(sid, cmd, cwd) {
     after: { exitCode: after.exitCode, ok: after.ok, hash: afterHash, stdout: after.stdout, stderr: after.stderr, state_hash: afterStateHash },
   };
 }
-// Phase 1-1: scope 机器校验 - 对比 diff 与 card.scope
-//
-// 用法：enforceScope(scope, cwd, diffFiles?)
+// 辅助建议映射表
+// 每条都回答三个问题：为什么被拦 / 依据什么规则 / 下一步怎么走
+// 键是错误信息里的特征子串（按声明顺序匹配，先命中先用）
+const ERROR_SUGGESTIONS = {
+  "验证命令为空": " Carlos 需要一个可执行的验证命令（如 `npm test` / `pytest -q`）来判断改动是否真的做对了。它写在任务卡的 verify.cmd 里。",
+  "包含高危模式": " 该命令里有删除系统路径、管道执行脚本、写块设备这类不可逆操作。默认不拦（因为清理命令本身合法），但开启 CARLOS_FLOW_BLOCK_DANGEROUS=1 后会拦。",
+  "没有派发快照": " 负对照要拿「派发时的文件备份」当对照物，没派发就没有备份。先把任务派出去（flow_dispatch）再回来做负对照。",
+  "越界改动": " 你改到了任务卡 scope 白名单之外的文件。这是机械门禁里最硬的一条 —— 防止 executor 顺手改了不该改的地方。",
+  "卡片 scope 为空": " 空 scope 按 fail-closed 处理：既然没声明允许改什么，就视为什么都不许改。",
+  "验证未通过": " verify.cmd 跑出了非 0 退出码，说明改动还没让验证通过。PASS 不能落，DIRTECTION/LOCAL 可以。",
+  "验证结果已过期": " 验证通过后代码又被改动了（diff 指纹变了），所以那次验证已经不能证明当前代码。重新跑一次 flow_run_verify 即可。",
+  "验证命令与当前卡片不一致": " 现有的验证结果对应的是另一个 verify.cmd（可能是旧卡的）。对当前卡重新跑一次验证。",
+  "尚未执行验证": " 还没有跑过 verify.cmd，没有可核验的凭据。",
+  "尚未派发任何执行": " 门禁要求改动必须经过派发窗口（有快照、有基线），跳过派发直接落 PASS 是不允许的。",
+  "尚未做负对照": " 负对照用来证明 verify.cmd 真的有判别力（改动前失败、改动后通过），防止 `|| true` 这种空测试混过去。",
+  "负对照未通过": " 验证命令没有判别力（例如改动前后都退出 0），不能拿它当「改动正确」的证据。",
+  "缺少必填字段": " 当前风险档要求的字段没填齐。低风险档只要求 goal/quote/scope，cross_module 还要 acceptance 和 files。",
+  "类型错误": " 参数类型与工具 schema 声明不符。常见于把数组写成字符串、或数组元素嵌套了一层。",
+  "值非法": " 该参数只接受枚举里的值。",
+  "未 claim": " 派发前要先 claim 领一个名额（executor 或 auditor），这是为了让审计知道是谁在做。",
+  "quote 锚点": " quote 必须能在你的原话里定位到，防止 Agent 替你编需求。",
+  "路径在磁盘上不存在": " scope 里的路径找不到。常见原因是没传 cwd，导致相对路径按 server 进程目录（而不是仓库根）解析。",
+  "敏感路径": " scope 里包含敏感路径，需要你显式确认（confirmed=true）才能提交。",
+  "获取状态锁超时": " 同一会话有另一个进程正在写状态，等它释放即可，不要绕过锁直接写。",
+  "没有留痕": " 门禁要求先有任务卡（留痕），否则 executor/auditor 不知道边界在哪、也无法事后追溯。",
+  "留痕已过期": " 卡片有 TTL（默认 4 小时），过期后再派发就不算同一张卡了，需重新提交。",
+  "派发次数已达上限": " 同一张卡可派发次数有上限，防止无限重试把同一张卡磨到绿灯。",
+  "占位卡尚未补齐": " 智能触发只开了一张占位卡，scope / acceptance / verify.cmd 还没填，填完才能派发。",
+  "卡片未指定 verify": " 没有 verify.cmd 就没有可核验的证据，PASS 无法成立。",
+  "两轴": " PASS 要求两轴（规范轴 + 验收轴）各自取证，单轴意见不足以放行。",
+  "至少一轴": " 至少一轴判了 FAIL，说明问题确实存在，修完重跑再提。",
+  "auditor": " PASS 只能由已领取 auditor 角色的会话落下，防止执行方自批。",
+};
+
+
+export function formatError(err) {
+  const msg = typeof err === 'string' ? err : String((err && err.message) || err);
+  let suggestion = "";
+  for (const [key, val] of Object.entries(ERROR_SUGGESTIONS)) {
+    if (msg.includes(key)) { suggestion = `\n💡 **为什么被拦**：${val}`; break; }
+  }
+  return `${msg}${suggestion}`;
+}
 //   - scope: 卡片中的 scope 白名单
 //   - cwd:   仓库根目录（用于跑 git diff）
 //   - diffFiles?: 可选，外部传入的改动文件列表；不传则自动跑 `git diff --name-only`
@@ -719,7 +765,7 @@ export function enforceScope(scope, cwd, diffFiles) {
       ok: false,
       violations: diffFiles.slice(),
       checked: diffFiles.slice(),
-      message: `越界改动（卡片 scope 为空，不允许修改任何文件）：${diffFiles.join(", ")}`,
+      message: formatError(`越界改动（卡片 scope 为空，不允许修改任何文件）：${diffFiles.join(", ")}`),
     };
   }
 
@@ -743,7 +789,8 @@ export function enforceScope(scope, cwd, diffFiles) {
   }
   
   if (violations.length > 0) {
-    return { ok: false, violations, checked: diffFiles.slice(), message: `越界改动（超出 scope）：${violations.join(", ")}` };
+    const msg = `越界改动（超出 scope）：${violations.join(", ")}`;
+    return { ok: false, violations, checked: diffFiles.slice(), message: formatError(msg) };
   }
   return { ok: true, violations: [], checked: diffFiles.slice() };
 }

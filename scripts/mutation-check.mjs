@@ -164,10 +164,12 @@ const MUTANTS = [
     desc: "enforceScope 遇到任何越界都返回 ok:true → 越界改动直接放行",
     file: "src/dispatch.js",
     from: `  if (violations.length > 0) {
-    return { ok: false, violations, checked: diffFiles.slice(), message: \`越界改动（超出 scope）：\${violations.join(", ")}\` };
+    const msg = \`越界改动（超出 scope）：\${violations.join(", ")}\`;
+    return { ok: false, violations, checked: diffFiles.slice(), message: formatError(msg) };
   }`,
     to: `  if (violations.length > 0) {
-    return { ok: true, violations, checked: diffFiles.slice(), message: \`越界改动（超出 scope）：\${violations.join(", ")}\` }; // MUTANT: fail-open
+    const msg = \`越界改动（超出 scope）：\${violations.join(", ")}\`;
+    return { ok: true, violations, checked: diffFiles.slice(), message: formatError(msg) }; // MUTANT: fail-open
   }`,
   },
   {
@@ -188,7 +190,7 @@ const MUTANTS = [
       ok: false,
       violations: diffFiles.slice(),
       checked: diffFiles.slice(),
-      message: \`越界改动（卡片 scope 为空，不允许修改任何文件）：\${diffFiles.join(", ")}\`,
+      message: formatError(\`越界改动（卡片 scope 为空，不允许修改任何文件）：\${diffFiles.join(", ")}\`),
     };
   }`,
     to: `  if (!Array.isArray(scope) || scope.length === 0) {
