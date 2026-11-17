@@ -6,7 +6,7 @@
 
 import { createConnection, createServer } from "node:net";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync, statSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -85,6 +85,95 @@ try {
 const toolName = process.argv[2];
 const argsJson = process.argv[3] || "{}";
 
+// 测试会自动生成大量会话。这些前缀是「机器造的」，与真实使用可可靠区分，
+// clean 命令默认只动它们。
+const TEST_SESSION_PREFIXES = ["e2e-", "p0-", "probe-", "guide-", "test-", "smoke-", "unknown"];
+
+function dirSize(p) {
+  let total = 0;
+  const walk = (d) => {
+    let ents = [];
+    try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const full = join(d, e.name);
+      if (e.isDirectory()) walk(full);
+      else { try { total += statSync(full).size; } catch {} }
+    }
+  };
+  walk(p);
+  return total;
+}
+
+/**
+ * 清理测试残留会话（gate-state/runs/<sid>）。
+ *
+ * 绝不删除 gate-audit：审计是逐日哈希链，删一天就断链，
+ * 「谁在什么时候批了什么」就永久查不回来了 —— 这不是磁盘占用问题，是可信度问题。
+ */
+function runClean(opts) {
+  const runsDir = join(process.env.CARLOS_FLOW_HOME || DEFAULT_FLOW_HOME, "gate-state", "runs");
+  if (!existsSync(runsDir)) {
+    console.log("没有需要清理的会话目录（" + runsDir + " 不存在）");
+    return { ok: true };
+  }
+  const now = Date.now();
+  const cutoff = opts.olderThanDays > 0 ? now - opts.olderThanDays * 86400_000 : 0;
+  const isTest = (name) => (opts.prefixes ? opts.prefixes.some((p) => name === p || name.startsWith(p)) : true);
+
+  let names = [];
+  try {
+    names = readdirSync(runsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch (e) {
+    console.error("读取会话目录失败：" + e.message);
+    return { ok: false };
+  }
+
+  const targets = [];
+  const kept = [];
+  for (const n of names) {
+    const full = join(runsDir, n);
+    let mtimeMs = 0;
+    try { mtimeMs = statSync(full).mtimeMs; } catch {}
+    const oldEnough = !cutoff || mtimeMs < cutoff;
+    if (isTest(n) && oldEnough) targets.push({ name: n, full, size: dirSize(full) });
+    else kept.push(n);
+  }
+
+  const totalBytes = targets.reduce((s, t) => s + t.size, 0);
+  const mb = (n) => (n / 1048576).toFixed(1) + " MB";
+
+  console.log("════ 会话清理" + (opts.apply ? "（执行模式）" : "（预览模式，不会删任何东西）") + " ════");
+  console.log("  会话目录: " + runsDir);
+  console.log("  总会话数: " + names.length);
+  console.log("  待清理  : " + targets.length + " 个测试残留，共 " + mb(totalBytes));
+  console.log("  保留    : " + kept.length + " 个（真实会话 + 不匹配前缀的）");
+  if (targets.length > 0) {
+    const sample = targets.slice(0, 5).map((t) => t.name).join(", ");
+    console.log("  样例    : " + sample + (targets.length > 5 ? " …" : ""));
+  }
+  console.log("  注意    : 审计流水（gate-audit）永远不会被删 —— 它是哈希链，断一天就查不回去了");
+
+  if (!opts.apply) {
+    console.log("\n确认无误后加 --apply 真正执行：");
+    console.log("  node carlos.js clean --apply");
+    console.log("只清更早的：  node carlos.js clean --apply --older-than 7");
+    return { ok: true };
+  }
+
+  let removed = 0, reclaimed = 0, failed = 0;
+  for (const t of targets) {
+    try {
+      rmSync(t.full, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      removed++; reclaimed += t.size;
+    } catch {
+      failed++;
+    }
+  }
+  console.log("\n✅ 已删除 " + removed + " 个会话，释放 " + mb(reclaimed) + (failed ? "；失败 " + failed + " 个（可能被占用）" : ""));
+  if (failed) console.log("   补充：关闭占用这些目录的进程后重跑即可。");
+  return { ok: failed === 0 };
+}
+
 // ===== init 命令：一键生成宿主配置 =====
 if (toolName === "init") {
   const target = process.argv.includes("--target")
@@ -100,10 +189,38 @@ if (toolName === "init") {
   process.exit(0);
 }
 
+if (toolName === "clean") {
+  // 清理命令（不需要 bridge / MCP）：轻量化的运维入口。
+  //
+  // 背景（2026-11-17 实测）：840 个会话目录里 587 个是测试残留，18MB。
+  // 以前没有任何清理手段，只能人工进目录删。
+  //
+  // 安全口径：
+  //   · 默认**只列不删**（dry-run），必须显式 --apply 才真的删
+  //   · 默认只动**测试前缀**的会话（e2e-/p0-/probe-/guide-/test-/smoke-），
+  //     真实会话（root-/maint-/audit-/用户自起名）一律不碰
+  //   · **绝不删除 gate-audit**：审计是哈希链，删一天就断链，追溯能力就没了
+  const opts = { apply: false, prefixes: TEST_SESSION_PREFIXES, olderThanDays: 0 };
+  for (let i = 3; i < process.argv.length; i++) {
+    const a = process.argv[i];
+    if (a === "--apply") opts.apply = true;
+    else if (a === "--all") opts.prefixes = null; // 危险：连真实会话一起列（仍默认不删）
+    else if (a === "--older-than") opts.olderThanDays = Number(process.argv[++i]) || 0;
+    else if (a === "--prefix") opts.prefixes = [String(process.argv[++i] || "").trim()].filter(Boolean);
+  }
+  const r = runClean(opts);
+  process.exit(r.ok ? 0 : 1);
+}
+
 if (!toolName) {
-  console.error("用法: node carlos.js <tool_name> [json_args]");
+  console.error("用法: node carlos.js <工具名> [json参数]");
+  console.error("      node carlos.js clean [--apply] [--older-than 7]   清理测试残留会话（默认只列不删）");
   console.error("      node carlos.js init --target cindy|opencode|cursor|cline|vscode|claude");
-  console.error("工具: flow_protocol flow_submit_requirement flow_claim flow_dispatch flow_run_verify flow_check_scope flow_verdict flow_status flow_audit flow_diff_hunks flow_bypass flow_add_user_msg flow_save_result flow_revert_plan");
+  console.error("");
+  console.error("最常用的三个工具（其余见 flow_protocol）：");
+  console.error("  flow_status     看当前进度：有没有任务卡、走到哪一步、下一步该做什么");
+  console.error("  flow_trigger_check  判断这句话该不该启动工作流（智能激活）");
+  console.error("  flow_bypass     临时跳过审查（需 confirmed:true）");
   process.exit(1);
 }
 
