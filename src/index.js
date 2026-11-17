@@ -1933,10 +1933,21 @@ async function callTool(toolName, args) {
 // 启动日志必须在 await 之前写：serveStdio 会一直阻塞到 stdin 关闭（宿主退出），
 // 写在后面等于「只在退出时打印」，排查时看不到任何启动痕迹。
 process.stderr.write("carlos-flow MCP server ready (stdio)\n");
-await serveStdio({
+// ⚠️ 这里**不能**用顶层 await。
+// 实测（2026-11-17）：Cindy 的随包 Node 进程用 require() 加载入口，
+// ESM 图里只要有顶层 await，require 就抛 ERR_REQUIRE_ASYNC_MODULE，
+// 插件表现为「一调就 Node 工作进程已退出」。
+// serveStdio 返回的 Promise 不 await 也没关系：readline 订阅着 stdin，
+// 进程不会被事件循环判定为空闲而退出；失败走 catch 落 stderr + 非零退出码。
+serveStdio({
   name: "carlos-flow",
   version: pkgVersion,
   tools: TOOL_SCHEMAS,
   callTool,
   log,
+}).catch((e) => {
+  try {
+    process.stderr.write("[carlos-flow] stdio 服务端异常退出：" + (e && e.message ? e.message : e) + "\n");
+  } catch { /* stderr 不可写时静默 */ }
+  process.exitCode = 1;
 });

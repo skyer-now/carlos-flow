@@ -1,3 +1,8 @@
+## [2.14.2] - 2026-11-17
+- 装机致命修复：Cindy 的随包 Node 用 `require()` 加载入口，而 `src/index.js` 的**顶层 await** 让它抛 `ERR_REQUIRE_ASYNC_MODULE` —— 2.14.1 装进去后一调就「Node 工作进程已退出」。改为 `serveStdio(...).catch(...)`（不 await 也安全：readline 订阅着 stdin，进程不会空闲退出）
+- 新守卫（防复发）：`check:full` 第 9 步「插件运行时契约」——静态查入口不得含顶层 await，并**真跑一次 `require()`**；`test:mcp` 增加同类断言（20 条）
+- 复测：require 加载成功、20 个工具可列、`list_tools` / `call_tool` 端到端跑通
+
 ## [2.14.1] - 2026-11-17
 - 装机修复：Cindy 已移除 `kind:"mcp"` 声明，且 chip 的 tools 上限为 16 项 —— 2.14.0 的清单（20 个工具 + mcp）在当前宿主**直接拒装**。本版改为宿主手册 §3.5 的两段式目录：只声明 `list_tools` / `call_tool`，分发表放进新增的 `main.js`（20 个操作全部可达）
 - 零依赖 stdio 服务端：新增 `src/mcp-stdio.mjs` 取代 `@modelcontextprotocol/sdk`（Forge 打包跳过 node_modules、运行期禁止联网装依赖），`node.protocol` 改为 `mcp-stdio`；package.json 运行时依赖清空

@@ -21,6 +21,7 @@
 // 退出码：0 = 全部通过；1 = 发现问题
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -289,6 +290,33 @@ if (TWO_LEVEL) {
   for (const t of uniqueServer) if (!ghostTools.includes(t)) P("工具清单", `ghost.json 缺工具 ${t}`);
   for (const t of ghostTools) if (!uniqueServer.includes(t)) P("工具清单", `ghost.json 声明了服务端不存在的工具 ${t}`);
   if (ghostTools.length > 16) P("工具清单", `直接声明的工具 ${ghostTools.length} 个，超过宿主上限 16 —— 必须改两段式目录`);
+}
+
+// ========== 9. 插件运行时契约（宿主怎么加载随包 Node） ==========
+console.log("▶ 9. 插件运行时契约");
+{
+  const entrySrc = read("src/index.js") || "";
+  // 顶层 await 会让宿主用 require() 加载入口时抛 ERR_REQUIRE_ASYNC_MODULE；
+  // 2026-11-17 实测正是它让「插件一调就 Node 工作进程已退出」。
+  if (/^await\s/m.test(entrySrc)) {
+    P("运行时契约", "src/index.js 含顶层 await —— 宿主用 require() 加载会失败（改用 Promise.catch）");
+  } else {
+    N("运行时契约", "入口无顶层 await（require() 可加载 ESM 图）");
+  }
+  if (!/const TOOL_SCHEMAS\s*=/.test(entrySrc)) {
+    P("运行时契约", "src/index.js 没有导出用的 TOOL_SCHEMAS 装配（tools/list 载荷可能把 handler 带出去）");
+  }
+  // 真跑一次 require：静态判断漏掉的（间接依赖里的 TLA）只有真加载才暴露
+  const probe = execFileSync(process.execPath, ["-e", "require('./src/index.js');console.log('REQUIRE_OK')"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    timeout: 20000,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, CARLOS_FLOW_HOME: join(ROOT, ".audit-require-home") },
+  });
+  if (/REQUIRE_OK/.test(probe)) N("运行时契约", "require() 真能加载随包入口");
+  else P("运行时契约", "require() 加载随包入口失败（宿主就是这么加载的）");
+  try { rmSync(join(ROOT, ".audit-require-home"), { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
 // ---- 输出 ----

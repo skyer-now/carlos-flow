@@ -98,6 +98,29 @@ try {
   check("8a. resources/list 回空列表", Array.isArray(res.result && res.result.resources));
   check("8b. prompts/list 回空列表", Array.isArray(prompts.result && prompts.result.prompts));
 
+  // 8b. 宿主用 require() 加载随包入口 —— 有顶层 await 就会 ERR_REQUIRE_ASYNC_MODULE
+  //     （2026-11-17 实测：插件一调就「Node 工作进程已退出」，排查成本很高）
+  {
+    const { execFileSync } = await import("node:child_process");
+    let requireOut = "";
+    let requireOk = true;
+    try {
+      requireOut = execFileSync(process.execPath, ["-e", "require('./src/index.js');console.log('REQUIRE_OK')"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 20000,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, CARLOS_FLOW_HOME: HOME },
+      });
+    } catch (e) {
+      requireOk = false;
+      requireOut = String((e && e.stdout) || "") + String((e && e.stderr) || "");
+    }
+    check("8b. 入口可被 require() 加载（无顶层 await）",
+      requireOk && /REQUIRE_OK/.test(requireOut),
+      requireOk ? "" : requireOut.slice(0, 120));
+  }
+
   // 9. stdout 只能有协议消息（日志必须走 stderr）
   check("9a. stdout 没有混入非 JSON 内容", client.noise.length === 0,
     client.noise.length ? client.noise.slice(0, 2).join(" | ") : "");
