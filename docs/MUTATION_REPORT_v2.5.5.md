@@ -1,5 +1,8 @@
 # 变异测试报告（v2.5.5 · P0 修复后重新生成）
 
+> ⚠️ **历史快照**：本报告对应 **v2.5.5**（13 个变异体）。当前版本已扩展到 **17 个变异体**，
+> 最新结论以 CI 的 `check:anchors`（17/17）与 [RELEASE_v2.13.0.md](./RELEASE_v2.13.0.md) 为准。
+
 - 生成时间：2026-11-06T02:23:18.505Z
 - 生成方式：`node scripts/mutation-check.mjs`（P0-2 基线红即 exit 1；P0-3 每轮独立 BRIDGE_PORT + 目录删除容错 + 收尾清理残留 bridge；套件输出无法解析时 fail-closed 退出）
 - 被测代码：carlos-flow-cindy 工作树（HEAD 5b0bb4b + 本轮 P0-1..P0-7 及追加 A/B 的改动，未提交）

@@ -486,8 +486,9 @@ npm pack
 | [TRIGGER_GUIDE.md](./TRIGGER_GUIDE.md) | Deep guide to the Smart Trigger Engine (config, scoring, activation, feedback learning) |
 | [CHANGELOG.md](./CHANGELOG.md) | Version history (Keep a Changelog + SemVer) |
 | [MIGRATION.md](./MIGRATION.md) | Migrating from `carlos-flow-cindy` / `carlos-flow-opencode` |
-| [QA Report](./docs/QA_REPORT_v2.5.5.md) | Third-party read-only audit (13/13 mutants caught) |
-| [Mutation Report](./docs/MUTATION_REPORT_v2.5.5.md) | Mutation injection details and results |
+| [Release Notes v2.13.0](./docs/RELEASE_v2.13.0.md) | Latest release status, CI results and regression numbers |
+| [QA Report (historical snapshot)](./docs/QA_REPORT_v2.5.5.md) | Third-party read-only audit, valid for v2.5.5 only |
+| [Mutation Report (historical snapshot)](./docs/MUTATION_REPORT_v2.5.5.md) | Mutation injection details, valid for v2.5.5 only |
 
 ---
 
