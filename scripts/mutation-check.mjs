@@ -36,8 +36,8 @@ const MUTANTS = [
     file: "src/index.js",
     from: `        // 激活占位卡闸门：占位卡未补齐字段时不允许领取派发名额
         if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
-          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
-            "）。请先补齐后重新调用 flow_submit_requirement，再来领取派发名额。");
+          return fail(guideError(state, "激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "）。请先补齐后重新调用 flow_submit_requirement，再来领取派发名额。"));
         }`,
     to: `        // MUTANT: claim 闸门被移除`,
   },
@@ -51,8 +51,8 @@ const MUTANTS = [
             reason: "激活占位卡未补齐",
             pending: state.activation_pending,
           });
-          return fail("激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
-            "），不能记录裁定。请先补齐后重新调用 flow_submit_requirement。");
+          return fail(guideError(state, "激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
+            "），不能记录裁定。请先补齐后重新调用 flow_submit_requirement。"));
         }`,
     to: `        // MUTANT: verdict 闸门被移除`,
   },  {
@@ -156,7 +156,7 @@ const MUTANTS = [
     id: "M15-审计链校验恒真",
     desc: "verifyAuditChain 永远返回 ok:true → 任何篡改都发现不了",
     file: "src/state.js",
-    from: `  return { ok: broken === 0, total, broken, legacy, brokenAt, file, mode: auditHashMode() };`,
+    from: `  return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: broken === 0, total, broken, legacy, brokenAt, file, mode: auditHashMode() };`,
     to: `  return { ok: true, total, broken, legacy, brokenAt, file, mode: auditHashMode() }; // MUTANT: 恒真`,
   },
   {
