@@ -29,6 +29,19 @@
 
 ---
 
+## 🧩 在 Cindy 里怎么调用
+
+插件的工具面是**两段式目录**（Cindy 对单个插件的工具声明有 16 项上限，本插件有 20 个操作）：
+
+- `list_tools` —— 先看目录：不传 `category` 给 5 个类目概览（gate / verify / audit / infra / trigger），
+  传了给该类目的操作明细 + **调用前必读的 RULES**。
+- `call_tool` —— 再执行：`name` 用 `list_tools` 返回的操作名，`args` 照它的参数说明填。
+  传错名字会附全部可用操作名；少填参数会附参数 schema 与规则，照着改就能过。
+
+其它平台（OpenCode / Cursor / Cline / VS Code / Claude Desktop）仍然直接暴露 20 个工具，不需要这一步。
+
+---
+
 ## ⚙️ 工作原理
 
 Carlos 工作流的核心逻辑是“闭环质检”：

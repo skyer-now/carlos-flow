@@ -92,9 +92,28 @@ try {
   const idxSrc = readFileSync(join(pkgRoot, "src", "index.js"), "utf8");
   const serverTools = [...new Set([...idxSrc.matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1]))];
   const ghostTools = (ghost.tools || []).map((t) => t.name);
-  check(`ghost.json 声明 ${serverTools.length} 个工具，与服务端一致`, ghostTools.length === serverTools.length,
-    `ghost=${ghostTools.length} server=${serverTools.length}`);
-  for (const t of serverTools) if (!ghostTools.includes(t)) check(`ghost.json 含 ${t}`, false);
+  // 两种合法形态（详见 docs/TOOL_CONTRACTS.md §1.3）：
+  //   A. 直接声明：ghost.json 逐条列出全部 flow_*（宿主上限 16 项）
+  //   B. 两段式目录：只声明 list_tools / call_tool，目录在 main.js，必须**恰好覆盖**全部操作
+  const twoLevel = ghostTools.length === 2 && ghostTools.includes("list_tools") && ghostTools.includes("call_tool");
+  if (twoLevel) {
+    const mainSrc = readFileSync(join(pkgRoot, "main.js"), "utf8");
+    const members = [...mainSrc.matchAll(/members:\s*\[([^\]]*)\]/gs)]
+      .flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
+    const uniq = [...new Set(members)];
+    check(`两段式目录：main.js 类目表覆盖 ${serverTools.length} 个操作`, uniq.length === serverTools.length,
+      `main=${uniq.length} server=${serverTools.length}`);
+    for (const t of serverTools) if (!uniq.includes(t)) check(`main.js 类目表含 ${t}`, false);
+    check("两段式清单 kind=chip 且 entry=main.js", ghost.kind === "chip" && ghost.entry === "main.js");
+    check("两段式清单 node.protocol=mcp-stdio", ghost.node && ghost.node.protocol === "mcp-stdio");
+    check("包内确实带上 main.js 与 src/mcp-stdio.mjs",
+      existsSync(join(pkgRoot, "main.js")) && existsSync(join(pkgRoot, "src", "mcp-stdio.mjs")));
+  } else {
+    check(`ghost.json 声明 ${serverTools.length} 个工具，与服务端一致`, ghostTools.length === serverTools.length,
+      `ghost=${ghostTools.length} server=${serverTools.length}`);
+    for (const t of serverTools) if (!ghostTools.includes(t)) check(`ghost.json 含 ${t}`, false);
+    check("直接声明的工具数不超过宿主上限 16", ghostTools.length <= 16, `ghost=${ghostTools.length}`);
+  }
 
   // ---- 6. 插件能定位到**单包**的 MCP server ----
   console.log("▶ ⑥ OpenCode 插件的包名兼容");
@@ -114,8 +133,19 @@ try {
       try { const m = JSON.parse(line); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } } catch {}
     }
   });
+  // 服务端 stderr 必须转发出来：子进程崩了却只看到「卡住」，是这类测试最容易骗人的地方。
+  child.stderr.on("data", (d) => process.stderr.write("[server] " + d.toString()));
+  // 子进程退出 → 把在途请求判失败，绝不静默挂死（旧版没这道，崩了会挂到超时）
+  child.on("exit", (code) => {
+    for (const [, r] of pending) r({ error: "MCP server 退出（code=" + code + "）" });
+    pending.clear();
+  });
   const req = (method, params) => new Promise((r) => {
-    const rid = id++; pending.set(rid, r);
+    const rid = id++;
+    const timer = setTimeout(() => {
+      if (pending.has(rid)) { pending.delete(rid); r({ error: "TIMEOUT " + method }); }
+    }, 30000);
+    pending.set(rid, (msg) => { clearTimeout(timer); r(msg); });
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: rid, method, params }) + "\n");
   });
   const tool = async (name, args) => {

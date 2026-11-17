@@ -53,8 +53,18 @@ child.stdout.on("data", (d) => {
     try { const m = JSON.parse(line); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } } catch {}
   }
 });
+// 子进程崩了 / 不回包时必须**快速失败**，而不是让整个门禁挂在超时上：
+// 旧写法没有超时也没有 exit 处理，协议层一出问题就是「测试卡住」而不是「测试变红」。
+child.on("exit", (code) => {
+  for (const [, r] of pending) r({ error: "MCP server 退出（code=" + code + "）" });
+  pending.clear();
+});
 const req = (method, params) => new Promise((r) => {
-  const rid = id++; pending.set(rid, r);
+  const rid = id++;
+  const timer = setTimeout(() => {
+    if (pending.has(rid)) { pending.delete(rid); r({ error: "TIMEOUT " + method }); }
+  }, 30000);
+  pending.set(rid, (msg) => { clearTimeout(timer); r(msg); });
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: rid, method, params }) + "\n");
 });
 const tool = async (name, args) => {

@@ -40,6 +40,8 @@ coverage/
 # 打包产物
 *.tgz
 *.tar.gz
+# Cindy 插件包（ghost_forge_pack 产物，跑一次就脏工作区 → 会卡住 release 的「工作区干净」校验）
+*.cindy
 # npm 本地凭据（绝不入库）
 .npmrc.local
 .npmrc.*.local

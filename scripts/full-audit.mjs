@@ -188,9 +188,33 @@ for (const tpl of ["ghost.json", "opencode.json", "templates/cursor/mcp.json", "
 const mcprc = read(".mcprc.template") || "";
 if (!mcprc.includes("carlos-flow")) P("模板", ".mcprc.template 未声明 carlos-flow");
 if (!mcprc.includes("__ROOT__")) P("模板", ".mcprc.template 缺少 __ROOT__ 占位符");
-for (const tpl of ["ghost.json", "opencode.json"]) {
+for (const tpl of ["opencode.json"]) {
   const t = read(tpl) || "";
   if (!t.includes("__ROOT__")) P("模板", `${tpl} 缺少 __ROOT__ 占位符（init 渲染不到实际路径）`);
+}
+// ghost.json 是**插件包清单**：chip 形态下 entry / node.entry 都是包内相对路径，
+// 由 client/carlos.js 的 renderRelativeEntries 在 `init --target cindy` 时渲染成绝对路径。
+// 因此它两种形态都合法，但必须自洽：
+//   · 有 __ROOT__ → 渲染后必须是合法 JSON（老式绝对路径清单）
+//   · 没有 __ROOT__ → 所有引用文件必须真实存在于仓库里（相对路径清单）
+{
+  const ghostRaw = read("ghost.json") || "";
+  if (ghostRaw.includes("__ROOT__")) {
+    const rendered = ghostRaw.replace(/__ROOT__/g, JSON.stringify(process.cwd()).slice(1, -1));
+    if (!readJsonText(rendered)) P("模板", "ghost.json 含 __ROOT__，但渲染后不是合法 JSON");
+  } else {
+    const refs = [];
+    const m = ghostRaw.match(/"entry"\s*:\s*"([^"]+)"/g) || [];
+    for (const line of m) refs.push(line.replace(/^"entry"\s*:\s*"/, "").replace(/"$/, ""));
+    if (ghostRaw.includes('"entry"') && refs.length === 0) P("模板", "ghost.json 的 entry 解析不出来");
+    for (const ref of refs) {
+      if (/^https?:/.test(ref)) continue;
+      if (!read(ref)) P("模板", `ghost.json 引用的文件不存在：${ref}`);
+    }
+    if (/\.node\.entry|"node"/.test(ghostRaw) && !/"protocol"\s*:\s*"mcp-stdio"/.test(ghostRaw)) {
+      N("模板", "ghost.json 的 node.protocol 不是 mcp-stdio（仅在随包 stdio MCP 场景下需要）");
+    }
+  }
 }
 
 // ========== 7. package.json 字段 ==========
@@ -223,15 +247,49 @@ if (/carlos-flow-cindy|carlos-flow-opencode/.test(relWf)) P("CI", "release.yml �
 
 // ========== 9. ghost.json 工具清单 ==========
 console.log("▶ 8. ghost.json 工具清单");
+const readJsonText = (text) => {
+  try { return JSON.parse(text); } catch { return null; }
+};
 const ghostJson = readJson("ghost.json");
 const idx = read("src/index.js") || "";
 const uniqueServer = [...new Set([...idx.matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1]))];
 const ghostTools = (ghostJson?.tools || []).map((t) => t.name);
-if (ghostTools.length !== uniqueServer.length) {
-  P("工具清单", `ghost.json 声明 ${ghostTools.length} 个，服务端实际 ${uniqueServer.length} 个`);
+
+// 两种合法形态：
+//   A. 直接声明：ghost.json 逐条列出全部 flow_*（宿主上限 16，超过直接拒装）
+//   B. 两段式目录：只声明 list_tools / call_tool，目录与分发表在 main.js（宿主 §3.5）
+//      —— 这种形态下「工具清单」的守卫对象变成 **main.js 的类目表**：
+//      它必须恰好覆盖服务端全部工具，否则某个操作在 Cindy 里根本点不到（静默丢失）。
+const TWO_LEVEL = ghostTools.length === 2 && ghostTools.includes("list_tools") && ghostTools.includes("call_tool");
+
+if (TWO_LEVEL) {
+  const mainJs = read("main.js") || "";
+  const members = [...mainJs.matchAll(/members:\s*\[([^\]]*)\]/gs)]
+    .flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
+  const uniqMembers = [...new Set(members)];
+  if (!mainJs) P("工具清单", "ghost.json 走两段式，但仓库里没有 main.js");
+  if (uniqMembers.length !== uniqueServer.length) {
+    P("工具清单", `main.js 类目表覆盖 ${uniqMembers.length} 个操作，服务端实际 ${uniqueServer.length} 个`);
+  }
+  for (const t of uniqueServer) if (!uniqMembers.includes(t)) P("工具清单", `main.js 类目表缺操作 ${t}（Cindy 里将无法调用）`);
+  for (const t of uniqMembers) if (!uniqueServer.includes(t)) P("工具清单", `main.js 类目表声明了服务端不存在的操作 ${t}`);
+  // 被声明的每个成员都必须落在工具名前缀上，防止把类目名当工具名写进去
+  for (const t of uniqMembers) if (!/^flow_/.test(t)) P("工具清单", `main.js 类目表里的 ${t} 不是 flow_* 操作`);
+  if (ghostJson?.kind !== "chip") P("工具清单", `两段式插件必须 kind=chip（当前 ${ghostJson?.kind}）`);
+  if (ghostJson?.entry !== "main.js") P("工具清单", `两段式插件的 entry 必须是 main.js（当前 ${ghostJson?.entry}）`);
+  const nodeEntry = ghostJson?.node?.entry;
+  if (!nodeEntry || !read(nodeEntry)) P("工具清单", `ghost.json 的 node.entry 指向不存在的文件：${nodeEntry}`);
+  if (ghostJson?.node?.protocol !== "mcp-stdio") P("工具清单", `两段式 + 随包 MCP 需要 node.protocol=mcp-stdio（当前 ${ghostJson?.node?.protocol}）`);
+  if (/__ROOT__/.test(String(nodeEntry))) P("工具清单", "chip 的 node.entry 不能是 __ROOT__ 占位符（安装后不会渲染）");
+  N("工具清单", `两段式目录：list_tools / call_tool + main.js 类目表覆盖全部 ${uniqueServer.length} 个操作`);
+} else {
+  if (ghostTools.length !== uniqueServer.length) {
+    P("工具清单", `ghost.json 声明 ${ghostTools.length} 个，服务端实际 ${uniqueServer.length} 个`);
+  }
+  for (const t of uniqueServer) if (!ghostTools.includes(t)) P("工具清单", `ghost.json 缺工具 ${t}`);
+  for (const t of ghostTools) if (!uniqueServer.includes(t)) P("工具清单", `ghost.json 声明了服务端不存在的工具 ${t}`);
+  if (ghostTools.length > 16) P("工具清单", `直接声明的工具 ${ghostTools.length} 个，超过宿主上限 16 —— 必须改两段式目录`);
 }
-for (const t of uniqueServer) if (!ghostTools.includes(t)) P("工具清单", `ghost.json 缺工具 ${t}`);
-for (const t of ghostTools) if (!uniqueServer.includes(t)) P("工具清单", `ghost.json 声明了服务端不存在的工具 ${t}`);
 
 // ---- 输出 ----
 console.log("\n" + "=".repeat(72));

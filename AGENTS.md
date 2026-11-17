@@ -21,6 +21,8 @@
 | `src/trigger.js` 触发引擎 | `TRIGGER_GUIDE.md` + `test/trigger-e2e.mjs` | 触发器配置模板 |
 | 对外工具描述 / README | `scripts/check-claims.mjs`（承诺兑现度门禁） | `npm run check:claims` |
 | `bridge/` 或 `client/` | `test/bridge-identity.mjs`（身份隔离） | `npm run test:bridge` |
+| `ghost.json` 的工具清单 / `main.js` | `docs/TOOL_CONTRACTS.md` §1.3（两段式目录） | `test/cindy-dispatch.mjs`、`npm run check:full` |
+| `src/mcp-stdio.mjs`（协议层） | `docs/TOOL_CONTRACTS.md` §1.3 + MCP stdio 规范 | `npm run test:mcp` |
 | CI / 发布流程 | `.github/workflows/` | `npm run check:full` |
 
 ---
@@ -56,7 +58,14 @@
    - 旧格式记录（无 hash）只计入 `legacy` 计数，**保持 `prev` 不变**。
    - 重置会让 v2.5 升级上来的用户审计链长期报红 —— 误报比漏报更伤信任。
 
-6. **不得引入硬编码密钥 / Token / 路径**
+6.1 **插件清单只能是 chip，且工具面 ≤16 项（v2.14.1）**
+   - Cindy 已移除 `kind:"mcp"`；`tools` 超过 16 项直接拒装。
+   - 20 个操作走两段式：`ghost.json` 只声明 `list_tools` / `call_tool`，
+     `main.js` 的类目表必须**恰好覆盖**服务端全部操作（`check:full` 守着）。
+   - 随包 Node 程序不能依赖 node_modules（Forge 打包会跳过），
+     所以协议层是自研的 `src/mcp-stdio.mjs`，不是 SDK。
+
+7. **不得引入硬编码密钥 / Token / 路径**
    - 密钥走环境变量；状态目录走 `CARLOS_FLOW_HOME`；路径用 `__ROOT__` 占位符 + `init` 渲染。
 
 7. **工具描述与实现必须一致**
@@ -76,6 +85,8 @@ npm run test:bridge         # Bridge 身份隔离（端口上是别人的 bridge
 npm run test:sensitive      # 项目级敏感规则：只能追加、否定式无效、坏配置退回基线
 npm run test:lock           # 状态锁：退避 / 死锁回收 / fail-closed
 npm run test:falsify        # 负对照：还原核对 + 崩溃恢复
+npm run test:mcp            # 零依赖 MCP stdio 服务端（握手 / stdout 纯净 / 未知方法）
+npm run test:dispatch       # chip 两段式目录（真实服务端 + main.js 端到端）
 npm run test:lang           # 产物语言体检的自检
 npm run test:package        # 包级端到端（真实 tarball + 干净安装 + 真实 MCP 握手）
 npm run check:full          # 对外产物全面体检

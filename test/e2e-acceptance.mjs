@@ -59,7 +59,7 @@ const call = async (name, args) => {
 };
 
 await req("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "1" } });
-check("MCP server 启动", stderr.includes("connected"), stderr.slice(-60).trim());
+check("MCP server 启动", /ready \(stdio\)|connected/.test(stderr), stderr.slice(-60).trim());
 
 // ---- 1. 工具数 ----
 const list = await req("tools/list", {});

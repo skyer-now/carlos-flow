@@ -545,6 +545,35 @@ async function runInit(target) {
   // 两种目标格式要分别处理：
   // - JSON（ghost.json / mcp.json / opencode.json）：必须 JSON 转义（反斜杠 → \\）
   // - YAML（.mcprc）：Windows 路径一律用正斜杠（反斜杠在 YAML 双引号标量里同样非法）
+  // 把包内相对入口（entry / node.entry / node.entries[] / settingsHtml / icon）渲染成绝对路径。
+  //
+  // 为什么需要：ghost.json 现在是**包清单**（chip 形态，包里全是相对路径），而
+  // `init --target cindy` 只复制清单文件、不复制目录结构 —— 相对路径在
+  // ~/.cindy/ghosts/ 下没有包根可参照，插件会起不来。这里渲染成绝对路径，
+  // 保证「开发直连仓库」这条路继续可用。
+  function renderRelativeEntries(text, rootAbs) {
+    let obj;
+    try {
+      obj = JSON.parse(text);
+    } catch {
+      return text; // 已经是非法 JSON 就别再动它，交给门禁去报
+    }
+    const toAbs = (rel) => {
+      if (typeof rel !== "string" || rel === "") return rel;
+      const normalized = rel.replace(/\\/g, "/");
+      if (/^([A-Za-z]:[\\/]|[\\/]|https?:)/.test(normalized)) return normalized;
+      return join(rootAbs, normalized);
+    };
+    obj.entry = toAbs(obj.entry);
+    if (obj.settingsHtml) obj.settingsHtml = toAbs(obj.settingsHtml);
+    if (obj.icon) obj.icon = toAbs(obj.icon);
+    if (obj.node && typeof obj.node === "object") {
+      obj.node.entry = toAbs(obj.node.entry);
+      if (Array.isArray(obj.node.entries)) obj.node.entries = obj.node.entries.map(toAbs);
+    }
+    return JSON.stringify(obj, null, 2) + "\n";
+  }
+
   const rootJson = JSON.stringify(ROOT_ABS).slice(1, -1);
   const rootYaml = ROOT_ABS.replace(/\\/g, "/");
 
@@ -555,7 +584,7 @@ async function runInit(target) {
     const ghostPath = join(ghostsDir, "carlos-flow.json");
 
     const ghostTemplate = readFileSync(resolve(ROOT_ABS, "ghost.json"), "utf8");
-    const ghostContent = ghostTemplate.replace(/__ROOT__/g, rootJson);
+    const ghostContent = renderRelativeEntries(ghostTemplate.replace(/__ROOT__/g, rootJson), ROOT_ABS);
     writeFileSync(ghostPath, ghostContent, "utf8");
     console.log(`✅ Cindy ghost 已写入: ${ghostPath}`);
     console.log(`   重启 Cindy 后即可在侧栏看到 "Carlos 工作流" 插件`);

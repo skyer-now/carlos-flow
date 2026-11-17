@@ -1,3 +1,12 @@
+## [2.14.1] - 2026-11-17
+- 装机修复：Cindy 已移除 `kind:"mcp"` 声明，且 chip 的 tools 上限为 16 项 —— 2.14.0 的清单（20 个工具 + mcp）在当前宿主**直接拒装**。本版改为宿主手册 §3.5 的两段式目录：只声明 `list_tools` / `call_tool`，分发表放进新增的 `main.js`（20 个操作全部可达）
+- 零依赖 stdio 服务端：新增 `src/mcp-stdio.mjs` 取代 `@modelcontextprotocol/sdk`（Forge 打包跳过 node_modules、运行期禁止联网装依赖），`node.protocol` 改为 `mcp-stdio`；package.json 运行时依赖清空
+- 目录即自纠：`list_tools` 概览/下钻（5 个类目 gate/verify/audit/infra/trigger），下钻时**同一份结果**下发该类目 RULES；`call_tool` 对未知操作附全部可用操作名、对缺参/非法参数附参数 schema 与 RULES
+- 长任务续命：verify / falsify / dispatch 走 call_tool 时按 45s 发心跳，避免 330s 工具窗口把慢验证判超时
+- 开发路径同步：`carlos init --target cindy` 把包内相对入口（entry / node.entry）渲染成绝对路径，仓库直连安装继续可用
+- 门禁同步：`check-full` / `check-templates` 认识两段式清单（校验 main.js 类目表恰好覆盖服务端全部操作、node.entry 真实存在、不得用 __ROOT__），并新增「直接声明超过 16 项即红」
+- 回归新增：`test:mcp`（18 条，协议握手 / stdout 纯净 / 通知不回包 / 未知方法 -32601）、`test:dispatch`（23 条，真实起服务端 + vm 跑 main.js 的端到端分发）
+
 ## [2.14.0] - 2026-11-17
 - 项目级敏感路径扩展：仓库根 `.carlos.json` 可追加 `sensitive.names/segments/extensions/prefixes`（只能追加，否定式 `!` `-` 一律忽略；配置损坏自动退回内置基线）
 - 负对照安全性：`flow_falsify` 进入前写还原日志、还原后逐文件核对摘要；被强杀留下的 pending 日志会在下一次调用时先把工作区救回来（返回值如实报告 `restore` / `recovered`）

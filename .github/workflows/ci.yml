@@ -63,12 +63,14 @@ jobs:
           # 并发套件在高负载下偶发「假泄漏」，偶发红会阻塞合并 → 允许重跑一次。
           # 两次都红才判失败，真缺陷不会被重试掩盖。
           CONCURRENCY_RETRY: 1
-      # 门禁加固三件套：项目级敏感规则（只增不减）/ 状态锁退避与陈旧回收 / 负对照还原核对
-      - name: 门禁加固回归（敏感规则 / 状态锁 / 负对照还原）
+      # 门禁加固五件套：项目级敏感规则（只增不减）/ 状态锁退避与陈旧回收 / 负对照还原核对 / 零依赖 MCP 协议 / chip 两段式分发
+      - name: 门禁加固回归（敏感规则 / 状态锁 / 负对照还原 / MCP 协议 / 两段式分发）
         run: |
           npm run test:sensitive
           npm run test:lock
           npm run test:falsify
+          npm run test:mcp
+          npm run test:dispatch
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home

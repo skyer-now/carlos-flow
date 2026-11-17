@@ -5,9 +5,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createServer, connect } from "node:net";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+// MCP stdio 服务端：自己实现的零依赖版本（见 src/mcp-stdio.mjs 开头的理由）。
+// 不再依赖 @modelcontextprotocol/sdk —— 插件要以 .cindy 形态随包运行，
+// 打包会跳过 node_modules，运行期也不许联网装依赖。
+import { serveStdio } from "./mcp-stdio.mjs";
 import { PROTOCOL, loadProjectSensitiveConfig } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
 import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, auditHashMode, workspaceFingerprint } from "./state.js";
@@ -1820,23 +1821,18 @@ const pkgVersion = (() => {
   }
 })();
 
-const server = new Server(
-  { name: "carlos-flow", version: pkgVersion },
-  { capabilities: { tools: {} } },
-);
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+// 对外工具清单（tools/list 的载荷）：**绝不能**把 handler 带出去 ——
+// 它是函数，序列化后会变成 undefined 或被宿主拒收。
+const TOOL_SCHEMAS = TOOLS.map((t) => ({
+  name: t.name,
+  description: t.description,
+  inputSchema: t.inputSchema,
 }));
 
-// ⚠️ 这里曾经**重复注册**过一次 CallToolRequestSchema（另一个不带参数校验的版本）。
-// MCP SDK 的 setRequestHandler 用 Map.set → 后注册的覆盖先注册的，
-// 于是先注册的那个（含约 17 行）**永远不会执行** —— 当前行为是对的，
-// 但它靠的是「注册顺序」这种隐式约定：任何一次重排或插入都会静默
-// 丢掉参数校验（required 字段 / 类型 / enum 全部失效）。
-// 现在只保留下面那一个带 validateToolArgs 的注册。
-//
-// check:no-dead-handler 门禁会统计同一 schema 的注册次数，>1 即红。
+// ⚠️ 历史坑（必须守住）：这里曾经**重复装配**过一个不带参数校验的 handler，
+// 后装配的覆盖先装配的 → 参数校验（required / 类型 / enum）静默失效。
+// 现在只有 `callTool` 一条通路，且它**必须先过 validateToolArgs**。
+// check:no-dead-handler 门禁守着「按 name 分发 + 真的调用了参数校验」这两点。
 
 // ---- Phase 1-1: 工具参数校验器（required 字段 / 类型 / enum）----
 function validateToolArgs(toolName, args) {
@@ -1904,10 +1900,7 @@ function validateToolArgs(toolName, args) {
 }
 
 // ---- CallTool：先校验参数，再分发到工具 handler ----
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const toolName = request.params.name;
-  const args = request.params.arguments || {};
-
+async function callTool(toolName, args) {
   const t = TOOLS.find((x) => x.name === toolName);
   if (!t) {
     return { content: [{ type: "text", text: "Unknown tool: " + toolName }], isError: true };
@@ -1934,9 +1927,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-});
+}
 
-// ---- 传输模式：stdio（单次调用，兼容旧用法） ----
-const transport = new StdioServerTransport();
-await server.connect(transport);
-process.stderr.write("carlos-flow MCP server connected via stdio\n");
+// ---- 传输模式：stdio（逐行 JSON-RPC 2.0） ----
+// 启动日志必须在 await 之前写：serveStdio 会一直阻塞到 stdin 关闭（宿主退出），
+// 写在后面等于「只在退出时打印」，排查时看不到任何启动痕迹。
+process.stderr.write("carlos-flow MCP server ready (stdio)\n");
+await serveStdio({
+  name: "carlos-flow",
+  version: pkgVersion,
+  tools: TOOL_SCHEMAS,
+  callTool,
+  log,
+});

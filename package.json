@@ -1,6 +1,6 @@
 {
   "name": "carlos-flow",
-  "version": "2.14.0",
+  "version": "2.14.1",
   "description": "Carlos 工作流 — AI 编码 Agent 的机械门禁。留痕/派发/验证/裁定/审计/还原，约束写在代码里而非提示词里。单一包支持 Cindy/OpenCode/Cursor/Cline/VS Code/Claude Desktop。",
   "type": "module",
   "main": "src/index.js",
@@ -24,7 +24,7 @@
     "test:concurrency": "node test/concurrency-e2e.mjs",
     "test:ui": "node test/verify-ui.mjs",
     "test:acceptance": "node test/e2e-acceptance.mjs",
-    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean && npm run test:ui && npm run test:sensitive && npm run test:lock && npm run test:falsify",
+    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean && npm run test:ui && npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch",
     "test:mutation": "node scripts/mutation-check.mjs",
     "sync:readme": "node scripts/sync-readme.mjs",
     "check:readme": "node scripts/sync-readme.mjs --check",
@@ -60,6 +60,8 @@
     "test:sensitive": "node test/sensitive-config.mjs",
     "test:lock": "node test/state-lock.mjs",
     "test:falsify": "node test/falsify-restore.mjs",
+    "test:mcp": "node test/mcp-stdio.mjs",
+    "test:dispatch": "node test/cindy-dispatch.mjs",
     "check:templates": "node scripts/check-templates.mjs",
     "test:clean": "node test/clean-command.mjs"
   },
@@ -86,10 +88,9 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
-  },
+  "dependencies": {},
   "files": [
+    "main.js",
     "client/",
     "src/",
     "bridge/",

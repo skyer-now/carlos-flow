@@ -115,6 +115,45 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
 
 ---
 
+### 1.3 Cindy 侧的两段式目录（chip，v2.14.1 起）
+
+Cindy 对插件 `tools` 声明有**硬上限 16 项**，本插件有 20 个操作 —— 直接声明必然被拒装
+（v2.14.0 的 `kind:"mcp"` 声明更是已被宿主移除）。因此插件清单改成宿主手册 §3.5 的
+「两段式目录」：
+
+| 层 | 位置 | 职责 |
+|---|---|---|
+| 清单 | `ghost.json` | `kind: chip`，只声明 `list_tools` / `call_tool` 两个元工具；`node.protocol = mcp-stdio`，`node.entry = src/index.js` |
+| 分发 | `main.js` | 类目表（5 类）+ 每类 RULES；向随包 MCP 服务端取 `tools/list`（说明与参数 schema 的**唯一真源**），再按 name 转发 `tools/call` |
+| 能力 | `src/index.js` | 20 个 `flow_*` 操作的实现，不变 |
+
+**为什么要这么接**：`tools/list` 由服务端提供，所以操作说明与参数 schema 不会在
+main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 → 类目」映射与规则文本。
+
+**约定（宿主手册的硬要求，本仓库按它守）**
+
+- 元工具名固定 `list_tools` / `call_tool`，不自创同义词；
+- `list_tools` 支持类目下钻：不传 category 给概览，传了给明细；
+- 下钻结果**同一份里**下发该类目 RULES（不能留到调用失败才说）；
+- `call_tool` 对未知 name 附全部可用操作名 + 回查提示；对缺参/非法参数附参数 schema 与 RULES；
+- 长任务（`flow_run_verify` / `flow_falsify` / `flow_dispatch`）按 45s 发 `tool-progress` 续命，
+  避免 330s 工具窗口把慢验证判超时。
+
+**类目划分（20 个操作，`scripts/full-audit.mjs` 校验「恰好覆盖、不多不少」）**
+
+| 类目 | 操作 |
+|---|---|
+| `gate` | submit_requirement / claim / dispatch / verdict |
+| `verify` | run_verify / falsify |
+| `audit` | audit_axes / audit_submit / audit_guard / audit |
+| `infra` | status / protocol / mode / bypass / add_user_msg / save_result / revert_plan / check_scope / diff_hunks |
+| `trigger` | trigger_check |
+
+**测试**：`test/cindy-dispatch.mjs`（23 条，真实起服务端 + vm 里跑 main.js）、
+`test/mcp-stdio.mjs`（18 条，协议握手 / stdout 纯净 / 通知不回包 / 未知方法 -32601）。
+
+---
+
 ## 2. 状态字段字典
 
 `state.json` 共 26 个字段，`schemaVersion` 当前为 **4**。

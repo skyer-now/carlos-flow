@@ -16,7 +16,7 @@
 //
 // 运行：node scripts/check-templates.mjs
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,7 +44,6 @@ const rootYaml = WIN_ROOT.replace(/\\/g, "/");
 console.log("▶ JSON 模板：Windows 路径渲染后必须可解析且路径无损");
 
 const jsonTemplates = [
-  ["ghost.json", (t) => t.replace(/__ROOT__/g, rootJson)],
   ["opencode.json.template", (t) => t.replace(/__ROOT__/g, rootJson)],
   ["templates/cursor/mcp.json", (t) => t.replace(/__ROOT__/g, rootJson)],
   ["templates/cline/mcp.json", (t) => t.replace(/__ROOT__/g, rootJson)],
@@ -92,10 +91,50 @@ try {
   bad(".mcprc.template 读不到：" + e.message);
 }
 
+// ---- ghost.json：插件包清单（chip 相对路径 / 老式绝对路径，两形态都要自洽）----
+//
+// chip 形态下 entry / node.entry 是**包内相对路径**（Forge 打包与市场安装要用），
+// 所以不再要求出现 __ROOT__；`init --target cindy` 会把它们渲染成绝对路径
+// （渲染函数在 client/carlos.js 的 renderRelativeEntries）。
+{
+  const rel = "ghost.json";
+  let raw = "";
+  try {
+    raw = readFileSync(join(ROOT, rel), "utf8");
+  } catch (e) {
+    bad(`${rel} 读不到：${e.message}`);
+  }
+  if (raw) {
+    if (raw.includes("__ROOT__")) {
+      try {
+        JSON.parse(raw.replace(/__ROOT__/g, rootJson));
+        ok(`${rel}（含 __ROOT__）渲染后可解析`);
+      } catch (e) {
+        bad(`${rel} 含 __ROOT__，但渲染后无法解析：${e.message}`);
+      }
+    } else {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(raw);
+        ok(`${rel} 是合法 JSON`);
+      } catch (e) {
+        bad(`${rel} 不是合法 JSON：${e.message}`);
+      }
+      if (parsed) {
+        const refs = [parsed.entry, parsed.settingsHtml, parsed.icon, parsed.node && parsed.node.entry]
+          .filter((x) => typeof x === "string" && x !== "");
+        const missing = refs.filter((r) => !/^https?:/.test(r) && !existsSync(join(ROOT, r)));
+        if (missing.length) bad(`${rel} 引用的包内文件不存在：${missing.join(", ")}`);
+        else ok(`${rel} 引用的包内文件都存在（相对路径包清单）`);
+      }
+    }
+  }
+}
+
 console.log("▶ 反例确认：旧的裸替换写法必须确实产出非法 JSON");
 
 {
-  const raw = readFileSync(join(ROOT, "ghost.json"), "utf8");
+  const raw = readFileSync(join(ROOT, "templates", "cursor", "mcp.json"), "utf8");
   const oldOut = raw.replace(/__ROOT__/g, WIN_ROOT);
   try {
     JSON.parse(oldOut);
