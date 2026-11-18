@@ -26,6 +26,7 @@ const dispatch = await import("../src/dispatch.js");
 const storage = await import("../src/storage.js");
 
 const RUNS = path.join(HOME, "gate-state", "runs");
+const RUNS_DIR = RUNS;
 const AUDIT = path.join(HOME, "gate-audit");
 const day = (n) => new Date(Date.now() - n * 86400000);
 
@@ -79,6 +80,17 @@ try {
   check("1a. 计划里只含陈旧终态会话", names.includes("stale-terminal") && !names.includes("stale-open") && !names.includes("fresh-terminal"),
     names.join(","));
   check("1b. 没有结论的会话被明确保护", !names.includes("stale-open"));
+  // 回归：manifest.jsonl / after_state.jsonl 不是备份指针，不能被算成「待迁移」
+  {
+    const bad = plan.backupConversion.filter((x) => {
+      const dir = path.join(RUNS_DIR, x.session, "backup");
+      try {
+        return !fs.readdirSync(dir).some((n) => n.startsWith("sha-") || !n.endsWith(".jsonl") && n !== "manifest.jsonl");
+      } catch { return true; }
+    });
+    check("1c0. 计划不把 manifest/after_state 误算成待迁移备份",
+      bad.length === 0, bad.map((x) => x.session).join(",") || "无假阳性");
+  }
   check("1c. 计划识别出可迁移的历史备份", plan.backupConversion.length >= 3,
     `${plan.backupConversion.reduce((n, x) => n + x.legacy_files, 0)} 个历史文件`);
   const before = fs.readdirSync(RUNS).sort().join(",");

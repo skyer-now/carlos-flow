@@ -1,3 +1,7 @@
+## [2.16.1] - 2026-11-18
+- 修 `carlos prune` 计划的假阳性：`备份待迁移` 曾把 `manifest.jsonl` / `after_state.jsonl` 也算成历史备份（真实数据上显示「30 个文件待迁移」却一个都迁不了）。现在只统计 **manifest 里被当作 backup 指针引用**、且尚未内容寻址命名的文件，实测归零
+- 回归：`test:prune` 新增 1c0 断言（manifest/after_state 不得被算作待迁移备份）
+
 ## [2.16.0] - 2026-11-18
 - 存储清理落地（P1）：新增 `carlos prune` / `scripts/prune.mjs` —— **归档**陈旧终态会话（移出 FLOW_HOME，可搬回）+ 历史备份迁移去重（时间戳命名 → 内容寻址并修剪到每文件 3 版）。三条红线：默认 dry-run、只动终态会话、**审计目录一字节不碰**（脚本前后自校验审计文件数与字节）
 - 口径统一：度量与清理共用 `src/storage.js`（`flow_stats` 与 prune 不再各写一份，避免「统计说 4MB、清理删 6MB」）

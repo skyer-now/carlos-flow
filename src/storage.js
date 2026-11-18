@@ -281,19 +281,28 @@ export function planPrune({ inactiveDays = 30, limit = 500 } = {}) {
     .sort((x, y) => y.bytes - x.bytes);
   const archivable = stale.filter((x) => x.verdict !== null);
 
+  // 待迁移的备份 = **manifest 里被当作 backup 指针引用**、且还不是内容寻址命名的文件。
+  //
+  // 不能简单「目录里所有带扩展名的文件」：manifest.jsonl、after_state.jsonl 也都带扩展名，
+  // 会被算成「30 个历史文件待迁移」，实际一个都迁不了（它们不是备份指针）——
+  // 这种假数字会让使用者以为清理器没干活。
   const backupConversion = [];
   for (const s of summaries) {
     const dir = path.join(RUNS_DIR, s.session, "backup");
     let legacy = 0;
     let bytes = 0;
     try {
-      for (const name of fs.readdirSync(dir)) {
-        if (name.startsWith("sha-") || !/\.[a-z0-9]+$/i.test(name)) continue;
-        const st = fs.statSync(path.join(dir, name));
+      const lines = fs.readFileSync(path.join(dir, "manifest.jsonl"), "utf8").split("\n");
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let e;
+        try { e = JSON.parse(line); } catch { continue; }
+        if (!e || typeof e.backup !== "string" || e.backup === "") continue;
+        if (path.basename(e.backup).startsWith("sha-")) continue;
         legacy++;
-        bytes += st.size;
+        try { bytes += fs.statSync(e.backup).size; } catch { /* 指针悬空：不计字节 */ }
       }
-    } catch { /* 无 backup 目录 */ }
+    } catch { /* 无 manifest：没有可迁移的备份指针 */ }
     if (legacy > 0) backupConversion.push({ session: s.session, legacy_files: legacy, legacy_bytes: bytes });
   }
 
