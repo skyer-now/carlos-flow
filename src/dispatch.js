@@ -444,6 +444,9 @@ export async function runVerifyCommand(cmd, cwd) {
       stdio: ["ignore", "pipe", "pipe"],
       shell: isWindows,
       windowsHide: true,
+      // POSIX：让 shell 自成进程组组长，超时时才能 kill(-pid) 把命令派生的
+      // 孙子进程一起结束（只杀 shell 会留下孤儿，实测在 CI 上就是这条挂了）。
+      detached: !isWindows,
     });
     // 输出上限：命令可能刷出几十 MB 日志。全量拼字符串会把本进程内存打爆，
     // 门禁最后给出的会是「插件崩了」而不是「验证没通过」。这里做**环形截断**：

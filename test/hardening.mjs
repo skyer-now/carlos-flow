@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "carlos-hardening-home-"));
 process.env.CARLOS_FLOW_HOME = HOME;
@@ -104,7 +105,9 @@ try {
     const before = fs.statSync(path.join(state.RUNS_DIR)).mtimeMs;
     const { startMcpClient } = await import("./_mcp-client.mjs");
     const c = startMcpClient({
-      entry: path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, "")), "..", "src", "index.js"),
+      // 必须用 fileURLToPath：POSIX 上 pathname 是 /home/...，去掉前导斜杠就变成
+      // 相对路径 "home/..." —— 表现为「spawn 成功但永远连不上」，在 CI 上才暴露。
+      entry: path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "index.js"),
       cwd: process.cwd(),
       env: { CARLOS_FLOW_HOME: HOME },
     });

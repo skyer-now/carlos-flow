@@ -1,3 +1,8 @@
+## [2.15.1] - 2026-11-18
+- CI 修复（Linux）：验证命令在 POSIX 上用 `detached: true` 让 shell 自成进程组，超时时 `kill(-pid)` 才能连命令派生的孙子进程一起结束（只杀 shell 会留孤儿，CI 实测捕获）
+- CI 修复（Linux）：测试里取路径改用 `fileURLToPath`（`URL.pathname` 在 POSIX 去掉前导斜杠会变成相对路径 → spawn 成功却永远连不上，仅 CI 暴露）
+- 说明：v2.15.0 因此未能发布（Release 在 `test:all` 阶段失败，未触发 npm publish）；本版为同一批改动的修复版
+
 ## [2.15.0] - 2026-11-18
 - 并发正确性（P0）：`flow_run_verify` / `flow_falsify` 改为「命令在锁外跑 → 短锁内重新读最新状态 → 只合并自己的结果」。旧实现用命令执行**前**的快照裸写 saveState，长达 120s 的窗口里别人写的卡片/字段会被静默回滚
 - 裁定 CAS（P0）：`flow_verdict` 的判定在锁外完成，写入时核对 `card_ts`；卡片已被替换则拒写并提示重走流程。同时新增「验证证据必须属于当前卡」的门禁（`last_verify.card_ts`），旧卡的绿灯不能给新卡复用
