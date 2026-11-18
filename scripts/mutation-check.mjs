@@ -200,6 +200,58 @@ const MUTANTS = [
   }`,
   },
   {
+    id: "M21-快照不去重",
+    desc: "快照写盘时无视已存在的同内容 blob（每次都重新写一份）",
+    file: "src/dispatch.js",
+    from: `      if (fs.existsSync(backup)) {
+        deduped = true; // 同内容已存在：不重复写盘
+      } else {
+        fs.writeFileSync(backup, buf);
+      }`,
+    to: `      fs.writeFileSync(backup, buf); // MUTANT: 每次都重写（去重失效）`,
+  },
+  {
+    id: "M22-快照不裁剪",
+    desc: "快照写完不裁剪（每个文件的历史版本无限堆积）",
+    file: "src/dispatch.js",
+    from: `  try { pruneSnapshots(sid); } catch { /* 裁剪失败不影响快照本身 */ }`,
+    to: `  // MUTANT: 不裁剪，历史版本无限堆积`,
+  },
+  {
+    id: "M23-审计不滚动",
+    desc: "审计写入忽略大小上限（永不滚动，单文件无限增长）",
+    file: "src/state.js",
+    from: `  if (size < AUDIT_MAX_BYTES) return last;`,
+    to: `  if (true) return last; // MUTANT: 永不滚动`,
+  },
+  {
+    id: "M24-校验只读首个分片",
+    desc: "审计校验只读每天的第一个分片（滚动出来的分片被跳过 → 篡改可藏）",
+    file: "src/state.js",
+    from: `  hits.sort((a, b) => a.seq - b.seq);
+  return hits.map((x) => x.name);`,
+    to: `  hits.sort((a, b) => a.seq - b.seq);
+  if (hits.length > 1) hits.length = 1; // MUTANT: 只读首个分片
+  return hits.map((x) => x.name);`,
+  },
+  {
+    id: "M25-输出不截断",
+    desc: "命令输出不再截断（几十 MB 日志直接把内存打爆）",
+    file: "src/dispatch.js",
+    from: `  if (bytes <= keepBytes * 2) return { text: s, bytes, truncated: false };`,
+    to: `  return { text: s, bytes, truncated: false }; // MUTANT: 永不截断`,
+  },
+  {
+    id: "M26-超时只杀外壳",
+    desc: "超时回收退回 child.kill（Windows 只杀 cmd.exe，命令派生的 node 变孤儿）",
+    file: "src/dispatch.js",
+    from: `    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {`,
+    to: `    if (process.platform === "win32") {
+      child.kill("SIGKILL"); return; // MUTANT: 只杀外壳
+      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {`,
+  },
+  {
     id: "M18-项目级敏感规则不生效",
     desc: "isSensitive 在判定完内置基线后直接 return false（.carlos.json 追加的规则全部失效）",
     file: "src/protocol.js",
@@ -337,7 +389,10 @@ const SUITES =
   "npm run test:audit 2>&1; echo AUDIT_EXIT=$?; " +
   "npm run test:sensitive 2>&1; echo SENS_EXIT=$?; " +
   "npm run test:lock 2>&1; echo LOCK_EXIT=$?; " +
-  "npm run test:falsify 2>&1; echo FALSIFY_EXIT=$?";
+  "npm run test:falsify 2>&1; echo FALSIFY_EXIT=$?; " +
+  "npm run test:hardening 2>&1; echo HARDENING_EXIT=$?; " +
+  "npm run test:cas 2>&1; echo CAS_EXIT=$?; " +
+  "npm run test:roll 2>&1; echo ROLL_EXIT=$?";
 
 const base = sh(SUITES, SRC, {
   CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", "base"),
@@ -349,6 +404,9 @@ const baseConc = /✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(base.slice(ba
 const baseSens = /SENSITIVE_CONFIG_OK/.test(base);
 const baseLock = /STATE_LOCK_OK/.test(base);
 const baseFalsify = /FALSIFY_RESTORE_OK/.test(base);
+const baseHardening = /HARDENING_OK/.test(base);
+const baseCas = /VERIFY_CAS_OK/.test(base);
+const baseRoll = /AUDIT_ROLL_OK/.test(base);
 
 // 基线必须全绿：否则每个变异体「注入后仍然失败」会被误判成「被抓住」，
 // 脚本就会在基线本身是红的情况下报「全部被抓住」并 exit 0（假绿）。
@@ -362,6 +420,9 @@ else if (Number(baseConc[2]) > 0) baseProblems.push(`concurrency ${baseConc[2]} 
 if (!baseSens) baseProblems.push("sensitive 未跑通");
 if (!baseLock) baseProblems.push("lock 未跑通");
 if (!baseFalsify) baseProblems.push("falsify 未跑通");
+if (!baseHardening) baseProblems.push("hardening 未跑通");
+if (!baseCas) baseProblems.push("cas 未跑通");
+if (!baseRoll) baseProblems.push("roll 未跑通");
 const baseGreen = baseProblems.length === 0;
 
 lines.push(`## 基线（未变异）`);
@@ -478,6 +539,25 @@ for (const [mi, m] of MUTANTS.entries()) {
   }
 
   // 三条加固套件：先确认它「真的跑了」（打印了结果块），再看是否通过
+  const hardRan = /HARDENING_OK/.test(out) || /HARDENING_EXIT=[1-9]/.test(out);
+  const casRan = /VERIFY_CAS_OK/.test(out) || /CAS_EXIT=[1-9]/.test(out);
+  const rollRan = /AUDIT_ROLL_OK/.test(out) || /ROLL_EXIT=[1-9]/.test(out);
+  if (!hardRan || !casRan || !rollRan) {
+    const missing = [];
+    if (!hardRan) missing.push("hardening");
+    if (!casRan) missing.push("cas");
+    if (!rollRan) missing.push("roll");
+    lines.push(`## ${m.id}`);
+    lines.push("");
+    lines.push(`- 注入：${m.desc}`);
+    lines.push(`- 文件：\`${m.file}\``);
+    lines.push("- 结果：**加固套件未成功运行（结果不可信）**");
+    lines.push(`- 详情：未跑通的套件：${missing.join("、")}`);
+    lines.push("");
+    writeFileSync(REPORT, lines.join("\n") + "\n", "utf8");
+    console.error(`✗ 变异体 ${m.id}：加固套件未跑通（${missing.join("、")}）—— 结果不可信。`);
+    process.exit(1);
+  }
   const sensRan = /SENSITIVE_CONFIG_OK/.test(out) || /SENS_EXIT=[1-9]/.test(out);
   const lockRan = /STATE_LOCK_OK/.test(out) || /LOCK_EXIT=[1-9]/.test(out);
   const falsifyRan = /FALSIFY_RESTORE_OK/.test(out) || /FALSIFY_EXIT=[1-9]/.test(out);
@@ -506,7 +586,10 @@ for (const [mi, m] of MUTANTS.entries()) {
     /AUDIT_EXIT=[1-9]/.test(out) ||
     /SENS_EXIT=[1-9]/.test(out) ||
     /LOCK_EXIT=[1-9]/.test(out) ||
-    /FALSIFY_EXIT=[1-9]/.test(out);
+    /FALSIFY_EXIT=[1-9]/.test(out) ||
+    /HARDENING_EXIT=[1-9]/.test(out) ||
+    /CAS_EXIT=[1-9]/.test(out) ||
+    /ROLL_EXIT=[1-9]/.test(out);
   const verdict = caught ? "CAUGHT ✅" : "NOT CAUGHT ❌";
   results.push({
     ...m,

@@ -158,11 +158,14 @@ export function buildContractPrompt(role, card, extra, options = {}) {
 // （实测单会话 94% 的目录占用都在 backup/）。改成 3 版后占用变成常数级上界。
 export const SNAPSHOT_KEEP_VERSIONS = 3;
 
-// 内容寻址备份文件名：sha-<sha256 前 32 位>_<原文件名>。
-// 同内容只存一份 —— 多轮返工时最常见的形态是「来来回回改同一批文件」，
-// 内容哈希天然去重，比按时间戳存 N 份省得多。
+// 内容寻址备份文件名：sha-<sha256 前 32 位><扩展名>。
+//
+// 为什么只带扩展名、不带原文件名：去重的关键是**内容**。实测里同内容的文件
+// 常以不同文件名出现（a.txt / a.bak.txt / 改名后的同一份），带 basename 会让它们
+// 各自占一份 blob，等于没去重。扩展名只用于肉眼分辨类型，不参与身份。
 function backupFileNameFor(sha, orig) {
-  return `sha-${sha.slice(0, 32)}_${path.basename(orig)}`;
+  const ext = path.extname(orig || "").toLowerCase();
+  return `sha-${sha.slice(0, 32)}${ext}`;
 }
 
 // 清理：每个 orig 只保留最近 maxVersions 条 manifest 记录，并删除不再被引用的 blob。

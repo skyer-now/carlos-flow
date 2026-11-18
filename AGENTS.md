@@ -25,6 +25,7 @@
 | `src/mcp-stdio.mjs`（协议层） | `docs/TOOL_CONTRACTS.md` §1.3 + MCP stdio 规范 | `npm run test:mcp` |
 | 写状态的锁窗口 / 合并策略 | `docs/TOOL_CONTRACTS.md` §2.3 | `test/verify-cas.mjs`、`test/concurrency-e2e.mjs` |
 | 快照 / 审计存储形态 | `docs/TOOL_CONTRACTS.md` §2.3 | `test/hardening.mjs`、`test/audit-roll.mjs` |
+| 存储清理 / 归档 | `docs/TOOL_CONTRACTS.md` §2.3 + `src/storage.js` 顶部红线 | `test/prune.mjs` |
 | CI / 发布流程 | `.github/workflows/` | `npm run check:full` |
 
 ---
@@ -78,6 +79,13 @@
    - 随包 Node 程序不能依赖 node_modules（Forge 打包会跳过），
      所以协议层是自研的 `src/mcp-stdio.mjs`，不是 SDK。
 
+6.2 **只用跨平台写法（v2.16.0 起有门禁）**
+   - 取模块所在目录必须 `fileURLToPath(import.meta.url)`，**禁止** `URL.pathname`
+     （POSIX 上会变成相对路径，spawn 成功却永远连不上）。
+   - 结束外部命令必须整棵树：Windows `taskkill /T /F`、POSIX `detached:true` + `kill(-pid)`；
+     裸 `child.kill()` 只杀外壳，命令派生的进程会变孤儿。
+   - 由 `npm run check:portability` 强制。
+
 7. **不得引入硬编码密钥 / Token / 路径**
    - 密钥走环境变量；状态目录走 `CARLOS_FLOW_HOME`；路径用 `__ROOT__` 占位符 + `init` 渲染。
 
@@ -103,6 +111,8 @@ npm run test:dispatch       # chip 两段式目录（真实服务端 + main.js �
 npm run test:hardening      # 超时整树回收 / 输出截断 / 快照去重 / 存储可观测
 npm run test:cas            # 长验证并发合并 + 旧卡证据不得复用
 npm run test:roll           # 审计按大小滚动 + 流式校验 + 篡改可检出
+npm run test:prune          # 存储清理：只归档终态、可搬回、审计零变动
+npm run check:portability   # 跨平台：禁止 URL.pathname、进程树回收、路径归一
 npm run test:lang           # 产物语言体检的自检
 npm run test:package        # 包级端到端（真实 tarball + 干净安装 + 真实 MCP 握手）
 npm run check:full          # 对外产物全面体检

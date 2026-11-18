@@ -74,6 +74,7 @@ jobs:
           npm run test:hardening
           npm run test:cas
           npm run test:roll
+          npm run test:prune
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home
@@ -110,6 +111,10 @@ jobs:
       # 行为兑现类门禁：承诺 ↔ 代码路径 / 参数不得静默失效 / 不得重复注册 handler。
       # 现有门禁擅长查「静态一致性」，不擅长查「行为兑现」——
       # 2026-11-07 第三方审查发现的 P0/P1 问题一个都没被现有门禁抓到。
+      # 跨平台可移植性：v2.15.0 在 ubuntu 上挂的两处（URL.pathname、孤儿进程）
+      # 本地全绿、CI 才红 —— 这类错误必须靠门禁在写下去时就拦住。
+      - name: 跨平台可移植性（路径 / 进程树 / 归一）
+        run: npm run check:portability
       - name: 行为兑现门禁（承诺 / 参数 / 重复注册）
         run: |
           npm run check:claims

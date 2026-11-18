@@ -11,6 +11,7 @@ import { createServer, connect } from "node:net";
 import { serveStdio } from "./mcp-stdio.mjs";
 import { PROTOCOL, loadProjectSensitiveConfig } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
+import { storageOverview } from "./storage.js";
 import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, commitState, auditHashMode, workspaceFingerprint, FLOW_HOME, AUDIT_DIR, RUNS_DIR, sanitizeId } from "./state.js";
 import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, runNegativeControl, computeOutputHash, enforceScope, formatError, MAX_DISPATCH } from "./dispatch.js";
 
@@ -280,128 +281,6 @@ function collectAxisWarnings(state) {
     }
   }
   return out;
-}
-
-// ---- 存储可观测性（flow_stats 用）------------------------------------------
-//
-// 痛点不是「没有 GC」，而是**没法回答「现在占了多少、谁占的、删了会不会影响回溯」**。
-// 先有度量，再谈清理阈值 —— 否则清理只能靠猜，误删活跃会话的代价远大于省下的空间。
-function dirUsage(dir, budget = { files: 20000 }) {
-  const out = { bytes: 0, files: 0, truncated: false };
-  const walk = (d, depth) => {
-    if (depth > 6 || out.truncated) return;
-    let names = [];
-    try { names = readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const ent of names) {
-      if (out.files >= budget.files) { out.truncated = true; return; }
-      const full = path.join(d, ent.name);
-      if (ent.isDirectory()) { walk(full, depth + 1); continue; }
-      try {
-        const st = statSync(full);
-        out.bytes += st.size;
-        out.files++;
-      } catch { /* 并发删除：忽略 */ }
-    }
-  };
-  walk(dir, 0);
-  return out;
-}
-
-function listSessions(limit = 300) {
-  let names = [];
-  try { names = readdirSync(RUNS_DIR, { withFileTypes: true }); } catch { return []; }
-  const out = [];
-  for (const ent of names) {
-    if (!ent.isDirectory()) continue;
-    if (out.length >= limit) break;
-    out.push(ent.name);
-  }
-  return out;
-}
-
-function sessionSummary(dirName) {
-  const dir = path.join(RUNS_DIR, dirName);
-  const usage = dirUsage(dir);
-  const stateFile = path.join(dir, "state.json");
-  let state = null;
-  let mtime = 0;
-  try {
-    mtime = statSync(stateFile).mtimeMs;
-    state = JSON.parse(readFileSync(stateFile, "utf8"));
-  } catch { /* 没有状态或有坏文件：按未知处理 */ }
-  const backup = dirUsage(path.join(dir, "backup"));
-  return {
-    session: dirName,
-    bytes: usage.bytes,
-    files: usage.files,
-    backup_bytes: backup.bytes,
-    last_active: mtime ? new Date(mtime).toISOString() : null,
-    inactive_days: mtime ? Math.floor((Date.now() - mtime) / 86400000) : null,
-    tier: state && state.tier ? state.tier : null,
-    verdict: state && state.verdict ? state.verdict : null,
-    completed_ok: !!(state && state.completed_ok),
-    has_card: !!(state && state.card),
-  };
-}
-
-// 备份去重率：manifest 记录的总字节 vs 实际占用（内容寻址后同内容只存一份）
-function backupDedup(sessions) {
-  let referencedBytes = 0;
-  let referencedEntries = 0;
-  let uniqueBytes = 0;
-  let uniqueBlobs = 0;
-  for (const sid of sessions) {
-    const dir = path.join(RUNS_DIR, sid, "backup");
-    const blobs = new Map();
-    try {
-      for (const name of readdirSync(dir)) {
-        if (!name.startsWith("sha-")) continue;
-        const st = statSync(path.join(dir, name));
-        blobs.set(name, st.size);
-        uniqueBytes += st.size;
-        uniqueBlobs++;
-      }
-    } catch { /* 无 backup 目录 */ }
-    let lines = [];
-    try {
-      lines = readFileSync(path.join(dir, "manifest.jsonl"), "utf8").split("\n").filter((x) => x.trim());
-    } catch { lines = []; }
-    for (const line of lines) {
-      try {
-        const e = JSON.parse(line);
-        if (e && e.backup) {
-          referencedEntries++;
-          referencedBytes += Number(e.bytes) || blobs.get(path.basename(e.backup)) || 0;
-        }
-      } catch { /* 坏行跳过 */ }
-    }
-  }
-  const saved = Math.max(0, referencedBytes - uniqueBytes);
-  return {
-    references: referencedEntries,
-    referenced_bytes: referencedBytes,
-    unique_blobs: uniqueBlobs,
-    unique_bytes: uniqueBytes,
-    saved_bytes: saved,
-    dedup_ratio: referencedBytes > 0 ? Number((saved / referencedBytes).toFixed(4)) : 0,
-  };
-}
-
-function auditDayStats() {
-  let names = [];
-  try { names = readdirSync(AUDIT_DIR); } catch { return []; }
-  const byDay = new Map();
-  for (const name of names) {
-    const m = /^(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.jsonl$/.exec(name);
-    if (!m) continue;
-    let size = 0;
-    try { size = statSync(path.join(AUDIT_DIR, name)).size; } catch { continue; }
-    const cur = byDay.get(m[1]) || { date: m[1], bytes: 0, shards: 0 };
-    cur.bytes += size;
-    cur.shards++;
-    byDay.set(m[1], cur);
-  }
-  return Array.from(byDay.values()).sort((a, b) => (a.date < b.date ? 1 : -1));
 }
 
 const TOOLS = [
@@ -1302,52 +1181,40 @@ const TOOLS = [
         const limit = Math.min(50, Math.max(1, Number(a.limit) || 10));
         const inactiveDays = Math.max(1, Number(a.inactiveDays) || 7);
 
-        const sessions = listSessions(300);
-        const summaries = sessions.map(sessionSummary);
-        const totalBytes = summaries.reduce((n, x) => n + x.bytes, 0);
-        const backupBytes = summaries.reduce((n, x) => n + x.backup_bytes, 0);
-        const top = summaries.slice().sort((x, y) => y.bytes - x.bytes).slice(0, limit);
-
-        // 陈旧会话：久未活动 + 已有结论（终态）—— 这类才是可以放心归档的；
-        // 没有结论的会话可能是被别人接手、或还没走完，删掉会丢门禁状态。
-        const staleCandidates = summaries
-          .filter((x) => x.inactive_days !== null && x.inactive_days >= inactiveDays)
-          .sort((x, y) => y.inactive_days - x.inactive_days);
-        const terminal = staleCandidates.filter((x) => x.verdict !== null);
-
-        const auditDays = auditDayStats();
-        const auditBytes = auditDays.reduce((n, x) => n + x.bytes, 0);
-        const triggerDir = path.join(FLOW_HOME, "trigger-state");
-        const triggerUsage = dirUsage(triggerDir);
+        // 口径统一在 src/storage.js（度量和清理必须用同一份，否则「统计说 4MB、
+        // 清理删了 6MB」这类对不上账的情况迟早发生）。
+        const o = storageOverview({ limit, inactiveDays });
 
         return ok({
           ok: true,
           home: FLOW_HOME,
           generated_at: new Date().toISOString(),
           total: {
-            bytes: totalBytes,
-            sessions: summaries.length,
-            backup_bytes: backupBytes,
-            backup_share: totalBytes > 0 ? Number((backupBytes / totalBytes).toFixed(3)) : 0,
+            bytes: o.totalBytes,
+            sessions: o.summaries.length,
+            backup_bytes: o.backupBytes,
+            backup_share: o.totalBytes > 0 ? Number((o.backupBytes / o.totalBytes).toFixed(3)) : 0,
           },
-          sessions_top: top,
-          backup: backupDedup(sessions),
+          sessions_top: o.top,
+          backup: o.dedup,
           audit: {
-            total_bytes: auditBytes,
-            days: auditDays.length,
-            recent_days: auditDays.slice(0, limit),
+            total_bytes: o.auditBytes,
+            days: o.auditDays.length,
+            recent_days: o.auditDays.slice(0, limit),
             note: "单文件上限由 CARLOS_FLOW_AUDIT_MAX_BYTES 控制（默认 8MB），超出后滚动为 <date>.N.jsonl。",
           },
-          trigger_state: triggerUsage,
+          trigger_state: o.triggerUsage,
           stale: {
             threshold_days: inactiveDays,
-            count: staleCandidates.length,
-            terminal_count: terminal.length,
-            samples: staleCandidates.slice(0, limit),
+            count: o.staleCandidates.length,
+            terminal_count: o.terminal.length,
+            samples: o.staleCandidates.slice(0, limit),
             note: "verdict 非 null 的会话属终态，可安全归档；没有结论的会话请先确认没有在跑的派发。",
           },
-          advice: staleCandidates.length > 0
-            ? "存在陈旧会话：" + terminal.length + " 个已是终态（可归档），其余 " + (staleCandidates.length - terminal.length) + " 个仍有未完成状态，建议先看 flow_status 再决定。"
+          advice: o.staleCandidates.length > 0
+            ? "存在陈旧会话：" + o.terminal.length + " 个已是终态（可归档），其余 " +
+              (o.staleCandidates.length - o.terminal.length) + " 个仍有未完成状态，建议先看 flow_status 再决定。" +
+              "归档用 `carlos prune --apply`（移动，不删除；审计目录永不参与）。"
             : "没有超过阈值的陈旧会话。",
         });
       } catch (e) {

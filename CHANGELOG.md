@@ -1,3 +1,11 @@
+## [2.16.0] - 2026-11-18
+- 存储清理落地（P1）：新增 `carlos prune` / `scripts/prune.mjs` —— **归档**陈旧终态会话（移出 FLOW_HOME，可搬回）+ 历史备份迁移去重（时间戳命名 → 内容寻址并修剪到每文件 3 版）。三条红线：默认 dry-run、只动终态会话、**审计目录一字节不碰**（脚本前后自校验审计文件数与字节）
+- 口径统一：度量与清理共用 `src/storage.js`（`flow_stats` 与 prune 不再各写一份，避免「统计说 4MB、清理删 6MB」）
+- 备份去重再进一步：blob 命名只带扩展名不带原文件名 —— 同名不同名的同内容文件也能合并
+- 跨平台门禁（P0 教训固化）：新增 `check:portability` —— 禁止 `URL.pathname` 取文件路径（POSIX 会变相对路径）、要求 spawn 设 `detached` 且只能经 `killProcessTree` 终止、校验路径归一。它当场抓出并修掉了 `plugins/carlos-flow-trigger.js` 里同类的真实缺陷
+- 变异体 20 → 26：新增 M21（快照不去重）、M22（快照不裁剪）、M23（审计不滚动）、M24（校验只读首个分片）、M25（输出不截断）、M26（超时只杀外壳）；变异套件同步纳入 hardening / cas / roll
+- 新增 `test:prune`（17 条：计划只读、dry-run 不落地、只归档终态、归档可搬回、备份迁移后仍可还原、审计零变动）
+
 ## [2.15.1] - 2026-11-18
 - CI 修复（Linux）：验证命令在 POSIX 上用 `detached: true` 让 shell 自成进程组，超时时 `kill(-pid)` 才能连命令派生的孙子进程一起结束（只杀 shell 会留孤儿，CI 实测捕获）
 - CI 修复（Linux）：测试里取路径改用 `fileURLToPath`（`URL.pathname` 在 POSIX 去掉前导斜杠会变成相对路径 → spawn 成功却永远连不上，仅 CI 暴露）

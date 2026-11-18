@@ -35,7 +35,8 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEBUG = process.env.CARLOS_FLOW_TRIGGER_DEBUG === "1";
 const ENABLED = process.env.CARLOS_FLOW_TRIGGER !== "off";
@@ -53,7 +54,9 @@ const ENABLED = process.env.CARLOS_FLOW_TRIGGER !== "off";
 // 现在同时接受新包名与两个已弃用的旧包名（兼容老用户尚未迁移的 node_modules）。
 const PKG_NAMES = ["carlos-flow", "carlos-flow-opencode", "carlos-flow-cindy"];
 function findMcpServer() {
-  const here = new URL(".", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+  // 用 fileURLToPath 而不是 URL.pathname：POSIX 上 pathname 是 /home/... 形态，
+  // 硬掰前缀会得到相对路径，resolve 出来指向错误目录 → 自动触发静默失效。
+  const here = dirname(fileURLToPath(import.meta.url));
   const dir = resolve(here);
   const candidates = [
     join(dir, "..", "src", "index.js"),                                    // <pkg>/plugins/ → <pkg>/src/
