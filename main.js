@@ -1,8 +1,8 @@
 // main.js —— Carlos 工作流（chip 沙箱入口）
 //
 // 为什么是「两段式目录」（Cindy 插件手册 §3.5）：
-// 本插件有 20 个 flow_* 操作，而宿主对 tools 声明有**硬上限 16 项**；
-// 20 个端点级操作塞进去必然被拒装。手册给的解法是只声明两个元工具
+// 本插件有 21 个 flow_* 操作，而宿主对 tools 声明有**硬上限 16 项**；
+// 21 个端点级操作塞进去必然被拒装。手册给的解法是只声明两个元工具
 // `list_tools` / `call_tool`，把目录与分发表放在 main.js 里自己维护。
 //
 // 分工（重要，别把职责搞混）：
@@ -60,12 +60,13 @@ var CATEGORIES = [
     summary: '看进度、读协议、免检、还原计划、越界自查',
     rules: [
       'flow_status 是唯一的进度真源；汇报「做到哪一步」前先读它，别凭记忆答。',
+      '清理/归档磁盘前先看 flow_stats（只读）：它会给出各会话占用、备份去重率、审计按日增长与陈旧会话清单；没有它就只能凭感觉删目录。',
       'flow_bypass 只能在用户明确说「直接干 / 免检 / 别管流程」时开启，且每次开关都进审计流水。',
       'flow_revert_plan 只出还原计划，绝不自动执行；真正回滚要人工确认。',
       'flow_check_scope 不传 paths 时会自己跑 git diff 取当前改动，用来在裁定前自查越界。',
     ],
     members: [
-      'flow_status', 'flow_protocol', 'flow_mode', 'flow_bypass', 'flow_add_user_msg',
+      'flow_status', 'flow_stats', 'flow_protocol', 'flow_mode', 'flow_bypass', 'flow_add_user_msg',
       'flow_save_result', 'flow_revert_plan', 'flow_check_scope', 'flow_diff_hunks',
     ],
   },

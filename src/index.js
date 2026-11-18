@@ -2,7 +2,7 @@
 // Carlos 工作流的机械门禁工具集（留痕 / 派发 / 裁定 / 审计 / 快照还原计划）。
 // 重要：stdout 是 MCP 传输通道，所有日志一律走 stderr。
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { createServer, connect } from "node:net";
 // MCP stdio 服务端：自己实现的零依赖版本（见 src/mcp-stdio.mjs 开头的理由）。
@@ -11,7 +11,7 @@ import { createServer, connect } from "node:net";
 import { serveStdio } from "./mcp-stdio.mjs";
 import { PROTOCOL, loadProjectSensitiveConfig } from "./protocol.js";
 import { parseCard, validateCard, riskTier, isSensitive } from "./card.js";
-import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, auditHashMode, workspaceFingerprint } from "./state.js";
+import { loadState, saveState, defaultState, audit, readAudit, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, commitState, auditHashMode, workspaceFingerprint, FLOW_HOME, AUDIT_DIR, RUNS_DIR, sanitizeId } from "./state.js";
 import { buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, runNegativeControl, computeOutputHash, enforceScope, formatError, MAX_DISPATCH } from "./dispatch.js";
 
 const log = (msg) => {
@@ -282,6 +282,128 @@ function collectAxisWarnings(state) {
   return out;
 }
 
+// ---- 存储可观测性（flow_stats 用）------------------------------------------
+//
+// 痛点不是「没有 GC」，而是**没法回答「现在占了多少、谁占的、删了会不会影响回溯」**。
+// 先有度量，再谈清理阈值 —— 否则清理只能靠猜，误删活跃会话的代价远大于省下的空间。
+function dirUsage(dir, budget = { files: 20000 }) {
+  const out = { bytes: 0, files: 0, truncated: false };
+  const walk = (d, depth) => {
+    if (depth > 6 || out.truncated) return;
+    let names = [];
+    try { names = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const ent of names) {
+      if (out.files >= budget.files) { out.truncated = true; return; }
+      const full = path.join(d, ent.name);
+      if (ent.isDirectory()) { walk(full, depth + 1); continue; }
+      try {
+        const st = statSync(full);
+        out.bytes += st.size;
+        out.files++;
+      } catch { /* 并发删除：忽略 */ }
+    }
+  };
+  walk(dir, 0);
+  return out;
+}
+
+function listSessions(limit = 300) {
+  let names = [];
+  try { names = readdirSync(RUNS_DIR, { withFileTypes: true }); } catch { return []; }
+  const out = [];
+  for (const ent of names) {
+    if (!ent.isDirectory()) continue;
+    if (out.length >= limit) break;
+    out.push(ent.name);
+  }
+  return out;
+}
+
+function sessionSummary(dirName) {
+  const dir = path.join(RUNS_DIR, dirName);
+  const usage = dirUsage(dir);
+  const stateFile = path.join(dir, "state.json");
+  let state = null;
+  let mtime = 0;
+  try {
+    mtime = statSync(stateFile).mtimeMs;
+    state = JSON.parse(readFileSync(stateFile, "utf8"));
+  } catch { /* 没有状态或有坏文件：按未知处理 */ }
+  const backup = dirUsage(path.join(dir, "backup"));
+  return {
+    session: dirName,
+    bytes: usage.bytes,
+    files: usage.files,
+    backup_bytes: backup.bytes,
+    last_active: mtime ? new Date(mtime).toISOString() : null,
+    inactive_days: mtime ? Math.floor((Date.now() - mtime) / 86400000) : null,
+    tier: state && state.tier ? state.tier : null,
+    verdict: state && state.verdict ? state.verdict : null,
+    completed_ok: !!(state && state.completed_ok),
+    has_card: !!(state && state.card),
+  };
+}
+
+// 备份去重率：manifest 记录的总字节 vs 实际占用（内容寻址后同内容只存一份）
+function backupDedup(sessions) {
+  let referencedBytes = 0;
+  let referencedEntries = 0;
+  let uniqueBytes = 0;
+  let uniqueBlobs = 0;
+  for (const sid of sessions) {
+    const dir = path.join(RUNS_DIR, sid, "backup");
+    const blobs = new Map();
+    try {
+      for (const name of readdirSync(dir)) {
+        if (!name.startsWith("sha-")) continue;
+        const st = statSync(path.join(dir, name));
+        blobs.set(name, st.size);
+        uniqueBytes += st.size;
+        uniqueBlobs++;
+      }
+    } catch { /* 无 backup 目录 */ }
+    let lines = [];
+    try {
+      lines = readFileSync(path.join(dir, "manifest.jsonl"), "utf8").split("\n").filter((x) => x.trim());
+    } catch { lines = []; }
+    for (const line of lines) {
+      try {
+        const e = JSON.parse(line);
+        if (e && e.backup) {
+          referencedEntries++;
+          referencedBytes += Number(e.bytes) || blobs.get(path.basename(e.backup)) || 0;
+        }
+      } catch { /* 坏行跳过 */ }
+    }
+  }
+  const saved = Math.max(0, referencedBytes - uniqueBytes);
+  return {
+    references: referencedEntries,
+    referenced_bytes: referencedBytes,
+    unique_blobs: uniqueBlobs,
+    unique_bytes: uniqueBytes,
+    saved_bytes: saved,
+    dedup_ratio: referencedBytes > 0 ? Number((saved / referencedBytes).toFixed(4)) : 0,
+  };
+}
+
+function auditDayStats() {
+  let names = [];
+  try { names = readdirSync(AUDIT_DIR); } catch { return []; }
+  const byDay = new Map();
+  for (const name of names) {
+    const m = /^(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.jsonl$/.exec(name);
+    if (!m) continue;
+    let size = 0;
+    try { size = statSync(path.join(AUDIT_DIR, name)).size; } catch { continue; }
+    const cur = byDay.get(m[1]) || { date: m[1], bytes: 0, shards: 0 };
+    cur.bytes += size;
+    cur.shards++;
+    byDay.set(m[1], cur);
+  }
+  return Array.from(byDay.values()).sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
 const TOOLS = [
   // 1 -----------------------------------------------------------------------
   {
@@ -420,7 +542,7 @@ const TOOLS = [
         // ---- 读-改-写放进跨进程排他锁 ----
         // 多个 MCP server 进程共享同一 CARLOS_FLOW_HOME 时，未加锁会丢更新：
         // 后写入者用过期 prevState 算出 pending=[]，而它写的卡片字段仍为空 ⇒ 闸门被绕过。
-        const gated = withStateLock(sessionId, () => {
+        const gated = await withStateLock(sessionId, () => {
           const prev = loadState(sessionId);
           const wasActivatedBefore = prev.activation_activated === true;
           const prevPendingBefore = Array.isArray(prev.activation_pending) ? prev.activation_pending : [];
@@ -561,11 +683,16 @@ const TOOLS = [
         }
 
         // Phase 1-1: 不在 claim 时增加 dispatch_count，改在 dispatch 时增加
-        // claim 只标记已领取（state.claimed），不消耗派发额度
-        state.claimed = true;
-        state.claimed_role = role;
-        state.last_user_ts = Date.now();
-        saveState(sessionId, state);
+        // claim 只标记已领取（state.claimed），不消耗派发额度。
+        // 读-改-写放进短锁：上面刚做完整卡校验，这里用最新状态合并，
+        // 避免把「校验时的快照」整体写回、回滚掉别人在间隙里写的字段。
+        await commitState(sessionId, (latest) => {
+          latest.claimed = true;
+          latest.claimed_role = role;
+          latest.last_user_ts = Date.now();
+          state.claimed = latest.claimed;
+          state.claimed_role = latest.claimed_role;
+        });
 
         audit("decision", sessionId, { kind: "claimed", role, dispatch_count: state.dispatch_count });
 
@@ -630,17 +757,25 @@ const TOOLS = [
         // 派发基准同样必须对齐 git 仓库根：scope 是仓库根相对路径，
         // snapshot / baseline / 裁定三处要用同一个基准，否则越界判定会自相矛盾。
         const cwd = resolveRepoRoot(a.cwd || process.cwd());
-        state.dispatch_count = (Number(state.dispatch_count) || 0) + 1;
-        // 额度已消耗，需要重新 claim 才能再次派发
-        state.claimed = false;
-        state.write_files = 0;
-        // Phase 1-1: 派发后自动清零免检，避免“忘记关免检”长期生效
-        if (state.bypass === true) {
-          state.bypass = false;
-          state.bypass_ts = 0;
+        // 计数与清零在短锁内合并（不整体回写校验时的快照）
+        let bypassReset = false;
+        await commitState(sessionId, (latest) => {
+          latest.dispatch_count = (Number(latest.dispatch_count) || 0) + 1;
+          // 额度已消耗，需要重新 claim 才能再次派发
+          latest.claimed = false;
+          latest.write_files = 0;
+          // Phase 1-1: 派发后自动清零免检，避免“忘记关免检”长期生效
+          if (latest.bypass === true) {
+            latest.bypass = false;
+            latest.bypass_ts = 0;
+            bypassReset = true;
+          }
+          state.dispatch_count = latest.dispatch_count;
+          state.bypass = latest.bypass;
+        });
+        if (bypassReset) {
           audit("decision", sessionId, { kind: "bypass_auto_reset", reason: "派发后自动清零" });
         }
-        saveState(sessionId, state);
 
         const prompt = buildContractPrompt(role, state.card, a.message);
 
@@ -651,8 +786,12 @@ const TOOLS = [
         // Phase 1-1: 记录「派发前基线」。
         // 使用与后续校验一致的 cwd，修正基准
         const baseline = enforceScope(scope, cwd);
-        state.dispatch_baseline = Array.isArray(baseline.checked) ? baseline.checked : [];
-        saveState(sessionId, state);
+        const baselineFiles = Array.isArray(baseline.checked) ? baseline.checked : [];
+        // 快照 + git diff 是慢操作，必须在锁外；这里只合并 dispatch_baseline 一个字段
+        await commitState(sessionId, (latest) => {
+          latest.dispatch_baseline = baselineFiles;
+          state.dispatch_baseline = baselineFiles;
+        });
         audit("run", sessionId, {
           kind: "dispatch_baseline",
           role,
@@ -732,16 +871,20 @@ const TOOLS = [
         const sid = args.sessionId || "unknown";
         const state = loadState(sid);
         if (!state.card) return fail("无卡，无法提交审计轴结论");
-        state.audit_axes[args.axis] = {
-          verdict: args.verdict,
-          findings: args.findings,
-          evidence: args.evidence,
-          // 绑定提交时的卡片：换卡后该轴证据立即失效，必须重审
-          card_ts: state.card_ts,
-          ts: Date.now(),
-        };
-        state.audit_axes_ts = Date.now();
-        saveState(sid, state);
+        const axisCardTs = state.card_ts;
+        await commitState(sid, (latest) => {
+          if (!latest.card) return;
+          latest.audit_axes[args.axis] = {
+            verdict: args.verdict,
+            findings: args.findings,
+            evidence: args.evidence,
+            // 绑定提交时的卡片：换卡后该轴证据立即失效，必须重审
+            card_ts: axisCardTs,
+            ts: Date.now(),
+          };
+          latest.audit_axes_ts = Date.now();
+          state.audit_axes = latest.audit_axes;
+        });
 
         // 审计留痕：轴结论此前只落在 state 里 —— 可被覆盖、不可追溯。
         // 这里补一条审计事件，回答「这条结论是谁在什么时候提交的」。
@@ -888,6 +1031,34 @@ const TOOLS = [
             return fail(formatError("验证未通过（exitCode=" + lv.exitCode + "），不能记录 PASS 裁定。" +
               "请先修复问题、让 verify.cmd 真实跑通（flow_run_verify），再记录裁定。"));
           }
+          // 「证据属于当前这张卡」：旧卡的绿灯不能给新卡复用。
+          // 兼容历史状态：2.15.0 之前写入的 last_verify 没有 card_ts 字段 —— 那时
+          // 只能靠命令一致性把关，缺字段按「无法证明属于当前卡」处理会更安全，
+          // 但会让所有升级用户手上跑通的验证立刻作废。这里取折中：
+          //   缺 card_ts 时要求验证时间晚于当前卡的提交时间（证据不可能早于卡）。
+          if (lv.card_ts !== undefined && Number(lv.card_ts) !== Number(state.card_ts)) {
+            audit("decision", sessionId, {
+              kind: "verdict_denied",
+              reason: "验证证据属于另一张任务卡",
+              verify_card_ts: lv.card_ts,
+              card_ts: state.card_ts,
+            });
+            return fail(formatError("现有的验证结果属于**上一张任务卡**（card_ts 不一致），不能给当前卡记 PASS 裁定。" +
+              "请对当前卡片重新执行 flow_run_verify（或 flow_falsify）后再记录裁定。"));
+          }
+          if (lv.card_ts === undefined) {
+            const verifiedAt = Date.parse(String(lv.ts || ""));
+            if (Number.isFinite(verifiedAt) && Number(verifiedAt) < Number(state.card_ts || 0)) {
+              audit("decision", sessionId, {
+                kind: "verdict_denied",
+                reason: "验证早于当前卡提交时间",
+                verify_ts: lv.ts,
+                card_ts: state.card_ts,
+              });
+              return fail(formatError("现有的验证结果早于当前任务卡的提交时间，不能给当前卡记 PASS 裁定。" +
+                "请重新执行 flow_run_verify 后再记录裁定。"));
+            }
+          }
           if (!want || typeof lv.cmd !== "string" || lv.cmd.trim() !== want) {
             audit("decision", sessionId, {
               kind: "verdict_denied",
@@ -1033,18 +1204,43 @@ const TOOLS = [
           }
         }
 
+        // 写入用**短锁 + card_ts CAS**：所有门禁判定都在锁外（只读快照）完成，
+        // 拿锁后先核对卡片没被替换，再写。否则出现「判定用的卡 A、写进去的是卡 B」：
+        // 裁定看起来合规，实际对着一张已经不存在的卡。
+        const judgedCardTs = state.card_ts;
         const findings = [];
-        if (state.verdict && state.verdict !== verdict) {
-          findings.push(`裁定被覆盖：${state.verdict} → ${verdict}`);
-          audit("finding", sessionId, { kind: "verdict_overwrite", from: state.verdict, to: verdict, tier: state.tier });
+        const prevVerdict = state.verdict;
+        let cardReplaced = false;
+        await withStateLock(sessionId, () => {
+          const latest = loadState(sessionId);
+          if (Number(latest.card_ts) !== Number(judgedCardTs)) {
+            cardReplaced = true;
+            return;
+          }
+          if (latest.verdict && latest.verdict !== verdict) {
+            findings.push(`裁定被覆盖：${latest.verdict} → ${verdict}`);
+            audit("finding", sessionId, { kind: "verdict_overwrite", from: latest.verdict, to: verdict, tier: latest.tier });
+          }
+          latest.verdict = verdict;
+          latest.completed_ok = verdict === "PASS";
+          latest.verdict_ts = Date.now();
+          // 落盘裁定者角色：审计链据此回溯「这条 PASS 是谁落的」。
+          latest.verdict_role = a.role === undefined ? null : a.role;
+          saveState(sessionId, latest);
+          state.verdict = latest.verdict;
+          state.completed_ok = latest.completed_ok;
+          state.verdict_role = latest.verdict_role;
+        });
+        if (cardReplaced) {
+          audit("decision", sessionId, {
+            kind: "verdict_denied",
+            reason: "裁定期间任务卡被替换",
+            judged_card_ts: judgedCardTs,
+          });
+          return fail(formatError("裁定期间任务卡被替换（card_ts 已变化），本次裁定未写入。" +
+            "请重新读 flow_status 确认当前卡，再重新走验证与裁定。"));
         }
-
-        state.verdict = verdict;
-        state.completed_ok = verdict === "PASS";
-        state.verdict_ts = Date.now();
-        // 落盘裁定者角色：审计链据此回溯「这条 PASS 是谁落的」。
-        state.verdict_role = a.role === undefined ? null : a.role;
-        saveState(sessionId, state);
+        void prevVerdict;
 
         audit("resolution", sessionId, { kind: "verdict", verdict, notes: a.notes, role: a.role });
 
@@ -1075,15 +1271,91 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { sessionId: { type: "string" }, mode: { type: "string", enum: ["pro", "guide"] }, reason: { type: "string" } }, required: ["mode"] },
     handler: async (args) => {
       const { sessionId, mode, reason } = args;
-      const state = loadState(sessionId || "unknown");
-      state.mode = mode;
-      state.mode_ts = Date.now();
-      saveState(sessionId, state);
-      audit("decision", sessionId || "unknown", { kind: "mode_on", mode: mode, reason: reason });
-      return ok({ mode: state.mode });
+      const sid = sessionId || "unknown";
+      let nextMode = mode;
+      await commitState(sid, (latest) => {
+        latest.mode = mode;
+        latest.mode_ts = Date.now();
+        nextMode = latest.mode;
+      });
+      audit("decision", sid, { kind: "mode_on", mode: mode, reason: reason });
+      return ok({ mode: nextMode });
     }
   },
   // 6 -----------------------------------------------------------------------
+  {
+    name: "flow_stats",
+    description:
+      "存储与运行态统计（**只读**）：各会话占用 Top N、备份去重率、审计日志按日增长、" +
+      "陈旧会话清单（含最近活跃时间与是否终态）。清理/归档前先用它看清楚「现在占了多少、谁占的、删了会不会影响回溯」，" +
+      "不要凭感觉删目录。不会修改任何文件。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "integer", description: "返回多少个会话/多少天（默认 10，最大 50）" },
+        inactiveDays: { type: "integer", description: "判定「陈旧会话」的天数阈值（默认 7）" },
+      },
+    },
+    handler: async (args) => {
+      try {
+        const a = args || {};
+        const limit = Math.min(50, Math.max(1, Number(a.limit) || 10));
+        const inactiveDays = Math.max(1, Number(a.inactiveDays) || 7);
+
+        const sessions = listSessions(300);
+        const summaries = sessions.map(sessionSummary);
+        const totalBytes = summaries.reduce((n, x) => n + x.bytes, 0);
+        const backupBytes = summaries.reduce((n, x) => n + x.backup_bytes, 0);
+        const top = summaries.slice().sort((x, y) => y.bytes - x.bytes).slice(0, limit);
+
+        // 陈旧会话：久未活动 + 已有结论（终态）—— 这类才是可以放心归档的；
+        // 没有结论的会话可能是被别人接手、或还没走完，删掉会丢门禁状态。
+        const staleCandidates = summaries
+          .filter((x) => x.inactive_days !== null && x.inactive_days >= inactiveDays)
+          .sort((x, y) => y.inactive_days - x.inactive_days);
+        const terminal = staleCandidates.filter((x) => x.verdict !== null);
+
+        const auditDays = auditDayStats();
+        const auditBytes = auditDays.reduce((n, x) => n + x.bytes, 0);
+        const triggerDir = path.join(FLOW_HOME, "trigger-state");
+        const triggerUsage = dirUsage(triggerDir);
+
+        return ok({
+          ok: true,
+          home: FLOW_HOME,
+          generated_at: new Date().toISOString(),
+          total: {
+            bytes: totalBytes,
+            sessions: summaries.length,
+            backup_bytes: backupBytes,
+            backup_share: totalBytes > 0 ? Number((backupBytes / totalBytes).toFixed(3)) : 0,
+          },
+          sessions_top: top,
+          backup: backupDedup(sessions),
+          audit: {
+            total_bytes: auditBytes,
+            days: auditDays.length,
+            recent_days: auditDays.slice(0, limit),
+            note: "单文件上限由 CARLOS_FLOW_AUDIT_MAX_BYTES 控制（默认 8MB），超出后滚动为 <date>.N.jsonl。",
+          },
+          trigger_state: triggerUsage,
+          stale: {
+            threshold_days: inactiveDays,
+            count: staleCandidates.length,
+            terminal_count: terminal.length,
+            samples: staleCandidates.slice(0, limit),
+            note: "verdict 非 null 的会话属终态，可安全归档；没有结论的会话请先确认没有在跑的派发。",
+          },
+          advice: staleCandidates.length > 0
+            ? "存在陈旧会话：" + terminal.length + " 个已是终态（可归档），其余 " + (staleCandidates.length - terminal.length) + " 个仍有未完成状态，建议先看 flow_status 再决定。"
+            : "没有超过阈值的陈旧会话。",
+        });
+      } catch (e) {
+        return fail(e && e.message ? e.message : String(e));
+      }
+    },
+  },
+
   {
     name: "flow_status",
     description:
@@ -1295,9 +1567,14 @@ const TOOLS = [
           return fail("开启免检需要显式确认：用户必须明确授权后，传入 confirmed=true。");
         }
 
-        state.bypass = a.on === true;
-        state.bypass_ts = Date.now();
-        saveState(sessionId, state);
+        let bypassNow = false;
+        await commitState(sessionId, (latest) => {
+          latest.bypass = a.on === true;
+          latest.bypass_ts = Date.now();
+          bypassNow = latest.bypass;
+          state.bypass = bypassNow;
+        });
+        void bypassNow;
         audit("decision", sessionId, {
           kind: state.bypass ? "bypass_on" : "bypass_off",
           reason: a.reason,
@@ -1440,22 +1717,36 @@ const TOOLS = [
           ? state.card.env.project
           : "";
         const workdir = a.cwd || cardProject || undefined;
-        const result = await runVerifyCommand(state.card.verify.cmd, workdir);
-        const state2 = loadState(sessionId);
-        state2.last_verify = {
-          ts: new Date().toISOString(),
-          cmd: state.card.verify.cmd,
-          cwd: workdir || process.cwd(),
-          exitCode: result.exitCode,
-          ok: result.ok,
-          // 输出指纹：把「验证通过」绑定到一次可复现的运行，而不是「我说过了」。
-          output_hash: computeOutputHash(result.exitCode, result.stdout, result.stderr),
-          // 代码状态指纹：把「验证通过」绑定到**当时的代码状态**。
-          // 没有它，验证通过后再改坏代码，flow_verdict(PASS) 仍会放行（见 A1）。
-          fingerprint: workspaceFingerprint(workdir || process.cwd()),
-        };
-        saveState(sessionId, state2);
-        
+        // 记住「这次验证针对哪张卡」：命令跑完再写状态时，卡片可能已被替换。
+        const verifiedCardTs = state.card_ts;
+        const verifiedCmd = state.card.verify.cmd;
+
+        // ⚠️ 命令必须在**锁外**跑（最长 120s）。若把整段包进 withStateLock，
+        // 持锁超过 staleMs（30s）就会被判陈旧并回收，另一个进程随即拿到同一把锁
+        // → 两个进程同时写，比不加锁更难复现。
+        const result = await runVerifyCommand(verifiedCmd, workdir);
+        const fingerprint = workspaceFingerprint(workdir || process.cwd());
+        const outputHash = computeOutputHash(result.exitCode, result.stdout, result.stderr);
+
+        // 短锁内重新读最新状态，只合并 last_verify（不覆盖别人写的其它字段）。
+        await commitState(sessionId, (state2) => {
+          state2.last_verify = {
+            ts: new Date().toISOString(),
+            cmd: verifiedCmd,
+            cwd: workdir || process.cwd(),
+            exitCode: result.exitCode,
+            ok: result.ok,
+            // card_ts：把证据绑定到**当前这张卡**，防止「旧卡的验证结果」被新卡复用
+            // （新卡即使写了同一条命令，也不该继承上一张卡的绿灯）。
+            card_ts: verifiedCardTs,
+            // 输出指纹：把「验证通过」绑定到一次可复现的运行，而不是「我说过了」。
+            output_hash: outputHash,
+            // 代码状态指纹：把「验证通过」绑定到**当时的代码状态**。
+            // 没有它，验证通过后再改坏代码，flow_verdict(PASS) 仍会放行（见 A1）。
+            fingerprint,
+          };
+        });
+
         return ok({ ok: result.ok, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, cwd: workdir || process.cwd() });
       } catch (e) {
         return fail(e && e.message ? e.message : String(e));
@@ -1496,33 +1787,41 @@ const TOOLS = [
           return fail(r.error || "负对照无法执行");
         }
 
-        const state2 = loadState(sessionId);
-        state2.last_falsify = {
-          ts: new Date().toISOString(),
-          cmd: state.card.verify.cmd,
-          cwd: workdir || process.cwd(),
-          verdict: r.verdict,
-          reason: r.reason,
-          before: { exitCode: r.before.exitCode, ok: r.before.ok, hash: r.before.hash },
-          after: { exitCode: r.after.exitCode, ok: r.after.ok, hash: r.after.hash },
-          // 工作区还原是否被核对通过（ok=false 表示负对照过程中改动可能没被完整写回）。
-          // 不参与 PASS 判定，但会随裁定一起暴露 —— 免得「改动消失」只留在 stderr 里。
-          restore: r.restore ? { ok: r.restore.ok, checked: r.restore.checked, mismatched: r.restore.mismatched } : null,
-        };
-        // 把「改动后」的运行写为 last_verify —— 裁定的证据绑定到这一次运行。
-        state2.last_verify = {
-          ts: new Date().toISOString(),
-          cmd: state.card.verify.cmd,
-          cwd: workdir || process.cwd(),
-          exitCode: r.after.exitCode,
-          ok: r.after.ok,
-          output_hash: r.after.hash,
-          // 代码状态指纹：负对照同样是一次「验证通过」，
-          // 必须与 flow_run_verify 一样绑定代码状态，
-          // 否则「先负对照、再改代码、再记 PASS」这条路径会绕过 STALE 闸门。
-          fingerprint: workspaceFingerprint(workdir || process.cwd()),
-        };
-        saveState(sessionId, state2);
+        const falsifiedCardTs = state.card_ts;
+        const falsifiedCmd = state.card.verify.cmd;
+        // 指纹要 spawn 一次 git，属于「慢操作」，必须在拿锁之前算好。
+        const falsifiedFingerprint = workspaceFingerprint(workdir || process.cwd());
+
+        // 负对照本身跑了两次命令（最长 240s），同样只能在锁外跑；写入段用短锁合并，
+        // 只覆盖 last_falsify / last_verify 两个字段，不碰别人写的其它字段。
+        await commitState(sessionId, (state2) => {
+          state2.last_falsify = {
+            ts: new Date().toISOString(),
+            cmd: falsifiedCmd,
+            cwd: workdir || process.cwd(),
+            verdict: r.verdict,
+            reason: r.reason,
+            before: { exitCode: r.before.exitCode, ok: r.before.ok, hash: r.before.hash },
+            after: { exitCode: r.after.exitCode, ok: r.after.ok, hash: r.after.hash },
+            // 工作区还原是否被核对通过（ok=false 表示负对照过程中改动可能没被完整写回）。
+            // 不参与 PASS 判定，但会随裁定一起暴露 —— 免得「改动消失」只留在 stderr 里。
+            restore: r.restore ? { ok: r.restore.ok, checked: r.restore.checked, mismatched: r.restore.mismatched } : null,
+          };
+          // 把「改动后」的运行写为 last_verify —— 裁定的证据绑定到这一次运行。
+          state2.last_verify = {
+            ts: new Date().toISOString(),
+            cmd: falsifiedCmd,
+            cwd: workdir || process.cwd(),
+            exitCode: r.after.exitCode,
+            ok: r.after.ok,
+            output_hash: r.after.hash,
+            card_ts: falsifiedCardTs,
+            // 代码状态指纹：负对照同样是一次「验证通过」，
+            // 必须与 flow_run_verify 一样绑定代码状态，
+            // 否则「先负对照、再改代码、再记 PASS」这条路径会绕过 STALE 闸门。
+            fingerprint: falsifiedFingerprint,
+          };
+        });
 
         audit("run", sessionId, {
           kind: "falsify",
@@ -1714,7 +2013,7 @@ const TOOLS = [
             const card = { ...stepArgs };
             card.env = { git_head: gitHead(a.cwd || process.cwd()), project: a.cwd || process.cwd() };
             const tier = riskTier(card.scope);
-            const withLock = withStateLock(sessionId, () => {
+            const withLock = await withStateLock(sessionId, () => {
               const prev = loadState(sessionId);
               const state = {
                 ...defaultState(),

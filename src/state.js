@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 
 
 // 展开路径里的 `~`（家目录）。
@@ -223,6 +224,16 @@ export function defaultState() {
   };
 }
 
+// 同步退避：只用于 loadState 的**极短**重试（10~50ms，且是罕见的竞争窗口）。
+// 它会短暂阻塞事件循环，所以绝不能拿去做锁等待 —— 见下面的 sleepAsync。
+const sleepMs = (ms) => {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    /* SharedArrayBuffer 不可用时退化为自旋 */
+  }
+};
+
 export function loadState(sid) {
   const file = path.join(RUNS_DIR, sanitizeId(sid), "state.json");
 
@@ -292,15 +303,24 @@ export function saveState(sid, state) {
 // 若两者交错，后写入者可能用**过期的 prevState** 算出 pending=[]，
 // 而它写入的卡片字段仍为空 —— 闸门就被绕过了（红队实测 40 轮复现 4 次）。
 // 这里用 mkdir 的原子性做锁（open(..., "wx") 同理），把读-改-写包成临界区。
-const sleepMs = (ms) => {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  } catch {
-    /* SharedArrayBuffer 不可用时退化为自旋 */
-  }
-};
+// 异步退避：锁等待必须用它。
+//
+// 历史实现用 Atomics.wait 做锁自旋（15ms/次、上限 5s）—— 那是**同步阻塞主线程**：
+// 一旦有别的进程持锁，本进程的整个事件循环被冻住，同一 MCP server 上的其它请求
+// （甚至只是 ping）在锁释放前全部无响应。现在等待期让出事件循环。
+const sleepAsync = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export function withStateLock(sid, fn, opts = {}) {
+/**
+ * 跨进程状态锁（异步）。
+ *
+ * 用法：`await withStateLock(sid, () => { const s = loadState(sid); ...; saveState(sid, s); })`
+ *
+ * ⚠️ 铁律：**锁内只做内存操作**（读最新状态 → 合并 → 写）。
+ * 不要把外部命令（verify.cmd 最长 120s）包进临界区：
+ * 持锁超过 staleMs（默认 30s）会被判为陈旧锁并回收，另一个进程随即拿到同一把锁
+ * → 两个进程同时写 → 比不加锁更难复现的丢更新。
+ */
+export async function withStateLock(sid, fn, opts = {}) {
   const dir = path.join(RUNS_DIR, sanitizeId(sid));
   const lockFile = path.join(dir, ".state.lock");
   const timeoutMs = Number(opts.timeoutMs) || 5000;
@@ -358,23 +378,39 @@ export function withStateLock(sid, fn, opts = {}) {
         } catch { /* 读不到内容就不提 */ }
         throw new Error(`获取状态锁超时（session=${sanitizeId(sid)}${holder}），请稍后重试`);
       }
-      // 指数退避 + 抖动。
+      // 指数退避 + 抖动（异步等待，把事件循环让给其它请求）。
       // 固定 15ms 会让多个进程「同步醒来」反复撞在一起（并发套件里表现为偶发超时）；
       // 抖动把重试错开，退避上限 120ms 保证总吞吐不被拖垮。
       attempt++;
       const base = Math.min(120, 5 * Math.pow(1.6, attempt));
       const jitter = Math.floor(Math.random() * base * 0.3);
-      sleepMs(Math.floor(base + jitter));
+      await sleepAsync(Math.floor(base + jitter));
     }
   }
 
   try {
-    return fn();
+    return await fn();
   } finally {
     if (acquired) {
       try { fs.unlinkSync(lockFile); } catch { /* 已回收 */ }
     }
   }
+}
+
+/**
+ * 「读最新状态 → 合并 → 写」的短临界区封装。
+ *
+ * 为什么需要它：flow_run_verify / flow_falsify 的读-改-写窗口横跨整个命令执行期
+ * （最长 120s×2），期间别的进程可能提交了新的任务卡或写了别的字段。
+ * 正确做法是**命令在锁外跑**，跑完再用这个函数在短锁内重新读最新状态、只合并自己那份结果。
+ */
+export async function commitState(sid, mutate, opts = {}) {
+  return withStateLock(sid, () => {
+    const state = loadState(sid);
+    const ret = mutate(state);
+    saveState(sid, state);
+    return ret;
+  }, opts);
 }
 
 // 追加审计行；永不抛错，失败仅写 stderr；返回记录对象
@@ -422,22 +458,77 @@ function lastHashOf(file) {
 //
 // `audit()` 用 nextPrevHash 把每天的 tail 串成完整链，
 // `verifyAuditChain()` 用同一套规则逐天串联验证。
-function auditDayFiles() {
-  try {
-    return fs.readdirSync(AUDIT_DIR).filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)).sort();
-  } catch {
-    return [];
-  }
+// 审计单文件上限：超过就滚动成 <date>.1.jsonl、<date>.2.jsonl …
+//
+// 为什么滚动：单日文件实测已到 2MB 量级，全年约 180MB。整文件 readFileSync 校验
+// 会随使用时间线性变慢、并一次性吃掉几百 MB 内存；按 8MB 滚动后单文件有硬上界，
+// 校验可以逐行流式累加哈希（不整体读入），归档（按月 gzip）也不会因为一个巨文件
+// 而卡住。可用 CARLOS_FLOW_AUDIT_MAX_BYTES 调整。
+const AUDIT_MAX_BYTES = (() => {
+  const raw = process.env.CARLOS_FLOW_AUDIT_MAX_BYTES;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 64 * 1024 ? n : 8 * 1024 * 1024;
+})();
+
+const DAY_FILE_RE = /^(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.jsonl$/;
+
+// 当前该往哪个分片写：当天最后一个分片没超过上限就续写，否则滚动到下一个序号的**新文件**。
+// 只做 stat（不读内容），开销可忽略；滚动判定以「写入前的大小」为准，
+// 因此单个文件最多超出上限一条记录的量级。
+function auditWriteFileName(date) {
+  const files = auditDayFilesOf(date);
+  if (files.length === 0) return `${date}.jsonl`;
+  const last = files[files.length - 1];
+  let size = 0;
+  try { size = fs.statSync(path.join(AUDIT_DIR, last)).size; } catch { size = 0; }
+  if (size < AUDIT_MAX_BYTES) return last;
+  const m = DAY_FILE_RE.exec(last);
+  const nextSeq = (m && m[2] !== undefined ? Number(m[2]) : 0) + 1;
+  return `${date}.${nextSeq}.jsonl`;
 }
 
+// 某一天的**全部**分片文件名，按写入顺序（base → .1 → .2 …）。
+function auditDayFilesOf(date) {
+  let names = [];
+  try { names = fs.readdirSync(AUDIT_DIR); } catch { return []; }
+  const hits = [];
+  for (const n of names) {
+    const m = DAY_FILE_RE.exec(n);
+    if (!m || m[1] !== date) continue;
+    hits.push({ name: n, seq: m[2] === undefined ? 0 : Number(m[2]) });
+  }
+  hits.sort((a, b) => a.seq - b.seq);
+  return hits.map((x) => x.name);
+}
+
+// 全部分片文件名（跨天），按「日期升序 → 当天分片序」排列。
+// 这是校验链的扫描顺序，也是 readAudit 的读取顺序。
+function auditDayFiles() {
+  let names = [];
+  try { names = fs.readdirSync(AUDIT_DIR); } catch { return []; }
+  const hits = [];
+  for (const n of names) {
+    const m = DAY_FILE_RE.exec(n);
+    if (!m) continue;
+    hits.push({ name: n, date: m[1], seq: m[2] === undefined ? 0 : Number(m[2]) });
+  }
+  hits.sort((a, b) => (a.date === b.date ? a.seq - b.seq : a.date < b.date ? -1 : 1));
+  return hits.map((x) => x.name);
+}
+
+// 某天文件的最后一条 hash（跨分片：取当天最后一个分片的 tail）
 function lastHashOfDay(date) {
-  return lastHashOf(path.join(AUDIT_DIR, `${date}.jsonl`));
+  const files = auditDayFilesOf(date);
+  for (let i = files.length - 1; i >= 0; i--) {
+    const h = lastHashOf(path.join(AUDIT_DIR, files[i]));
+    if (h !== ZERO_HASH) return h;
+  }
+  return ZERO_HASH;
 }
 
 // 取「当天 tail」，当天没有就往前找最近一天的 tail（修跨天断链）
 function nextPrevHash(date) {
-  const file = path.join(AUDIT_DIR, `${date}.jsonl`);
-  const prev = lastHashOf(file);
+  const prev = lastHashOfDay(date);
   if (prev !== "0".repeat(64)) return prev; // 当天有链，正常运行
   // 当天还没有记录：**从 date 前一天起**按日期降序找最近已有 tail，绝不看 future。
   const today = localDate();
@@ -560,7 +651,7 @@ export function audit(type, sid, fields = {}) {
   };
   try {
     fs.mkdirSync(AUDIT_DIR, { recursive: true });
-    const file = path.join(AUDIT_DIR, `${localDate()}.jsonl`);
+    const file = path.join(AUDIT_DIR, auditWriteFileName(localDate()));
     // 前驱 hash 取自当天文件 tail；当天没有记录时退成分片链上一天的 tail
     //（nextPrevHash），这样审计链在午夜也不断开。
     const prev = nextPrevHash(localDate());
@@ -574,6 +665,54 @@ export function audit(type, sid, fields = {}) {
     } catch {}
   }
   return rec;
+}
+
+// 逐行流式读取（同步）：不把整份文件读进内存。
+//
+// 审计文件按 8MB 滚动后单文件有上界，但全年仍有上百个文件；
+// 校验时若每个文件都 readFileSync + split，峰值内存会随「当天最大文件」而不是
+// 实际需要增长。这里用 256KB 缓冲块 + StringDecoder 处理多字节字符跨块问题，
+// 保证不把半个汉字当成坏行。
+function forEachLineSync(file, cb) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, "r");
+  } catch {
+    return;
+  }
+  try {
+    const buf = Buffer.allocUnsafe(256 * 1024);
+    const decoder = new StringDecoder("utf8");
+    let rest = "";
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n <= 0) break;
+      rest += decoder.write(buf.subarray(0, n));
+      let idx;
+      while ((idx = rest.indexOf("\n")) >= 0) {
+        cb(rest.slice(0, idx));
+        rest = rest.slice(idx + 1);
+      }
+    }
+    rest += decoder.end();
+    if (rest.trim()) cb(rest);
+  } catch {
+    /* 读失败按「读到这里为止」处理，不抛错打断整链校验 */
+  } finally {
+    try { fs.closeSync(fd); } catch { /* ignore */ }
+  }
+}
+
+// 把「文件名列表」按日期分组（同一天的多个滚动分片保持写入顺序）。
+function groupAuditFilesByDay(files) {
+  const groups = [];
+  for (const f of files) {
+    const date = f.slice(0, 10);
+    const last = groups[groups.length - 1];
+    if (last && last.date === date) last.files.push(f);
+    else groups.push({ date, files: [f] });
+  }
+  return groups;
 }
 
 // 校验审计链完整性（可选：需完整文件，不能只看尾部）。
@@ -593,128 +732,120 @@ export function verifyAuditChain(opts = {}) {
   // 实际拿到今天的数据（错而不报，最难发现）。
   const fullChain = typeof opts.fullChain === "boolean" ? opts.fullChain : true;
   if (fullChain && !opts.date) {
-    // 全链验证：逐天（按文件名升序 == 升时）串联，每天的 tail 是下一天的 prevHash。
+    // 全链验证：按「日期升序 → 当天分片序」逐条串联；每天的 tail 是下一天的前驱。
     //
-    // 跨天重启容忍（2026-11-14）：
-    //   写入侧 nextPrevHash() 取「当天文件最后一条**带 hash** 的记录」作为前驱；
-    //   若当天先前的记录都是 v2.5 升级上来的 legacy 记录（无 hash），就取不到 tail，
-    //   于是这条链首记录的 prevHash 只能是全 0。
-    //   这不是篡改，是**合法的链首**。旧校验器一律要求 prevHash === 运行中的 prev，
-    //   于是每天的第一条带 hash 记录都被判 broken —— 实测 4 处误报全部是这个形态。
-    //   误报比漏报更伤信任（同 legacy 那条注释的口径）。
-    //
-    // 规则：一天内**第一条带 hash 的记录**若 prevHash 为全 0，
-    //   按链首处理 —— 用它自己的 prevHash（全 0）重算 hash，吻合即放行；
-    //   从它开始照常串联。计数为 dayRestart，与 broken 分开报，不静默吞掉。
-    const files = auditDayFiles();
+    // 跨天重启容忍（2026-11-14）与分片说明（2026-11-18）：
+    //   写入侧 nextPrevHash() 取「当天最后一条带 hash 记录」作为前驱；
+    //   若当天先前记录都是 v2.5 升级上来的 legacy 记录（无 hash），取不到 tail，
+    //   这条链首记录的 prevHash 只能是全 0 —— 这是**合法链首**，不是篡改。
+    //   「链首」的判定按**天**做（不是按分片）：当天第一个分片的第一条带 hash 记录
+    //   才可能是链首；滚动出来的后续分片一律必须严格接上 prev，不允许重新起链。
+    const groups = groupAuditFilesByDay(auditDayFiles());
     const byDay = [];
     let total = 0, broken = 0, legacy = 0, restart = 0;
     const brokenAt = [];
     let prev = ZERO_HASH; // 链起点
-    for (const f of files) {
-      let raw = "";
-      try {
-        raw = fs.readFileSync(path.join(AUDIT_DIR, f), "utf8");
-      } catch {
-        continue;
-      }
+    for (const g of groups) {
       let dayBroken = 0, dayLegacy = 0, dayRestart = 0;
       let hashedSeen = 0;
-      for (const line of raw.split("\n")) {
-        const t = line.trim();
-        if (!t) continue;
-        let r;
-        try {
-          r = JSON.parse(t);
-        } catch {
-          continue;
-        }
-        total++;
-        if (typeof r.hash !== "string") {
-          // 旧格式记录（无 hash）→ 计入 legacy 计数，但**不重置链起点**
-          legacy++;
-          dayLegacy++;
-          continue;
-        }
-        hashedSeen++;
-        // 一天内的首条带 hash 记录且 prevHash 为全 0 → 合法链首（见上）。
-        const isDayStart = hashedSeen === 1 && r.prevHash === ZERO_HASH;
-        const base = isDayStart ? ZERO_HASH : prev;
-        const expect = computeAuditHash(r, base);
-        if (isDayStart) {
-          // 只有当它自己的 hash 确实是用全 0 前驱算出来的才算合法链首；
-          // 否则仍按 broken 处理（防「把任意记录伪装成链首」）。
-          if (expect === r.hash) {
-            restart++;
-            dayRestart++;
-            prev = r.hash;
-            continue;
+      for (const f of g.files) {
+        forEachLineSync(path.join(AUDIT_DIR, f), (line) => {
+          const t = line.trim();
+          if (!t) return;
+          let r;
+          try {
+            r = JSON.parse(t);
+          } catch {
+            return;
           }
-        }
-        if (expect !== r.hash || r.prevHash !== base) {
-          broken++;
-          dayBroken++;
-          if (brokenAt.length < 10) brokenAt.push({ date: f.slice(0, 10), ts: r.ts, type: r.type, kind: r.kind });
-        }
-        prev = r.hash;
+          total++;
+          if (typeof r.hash !== "string") {
+            // 旧格式记录（无 hash）→ 计入 legacy，但**不重置链起点**
+            legacy++;
+            dayLegacy++;
+            return;
+          }
+          hashedSeen++;
+          const isDayStart = hashedSeen === 1 && r.prevHash === ZERO_HASH;
+          const base = isDayStart ? ZERO_HASH : prev;
+          const expect = computeAuditHash(r, base);
+          if (isDayStart) {
+            // 只有当它自己的 hash 确实是用全 0 前驱算出来的才算合法链首；
+            // 否则仍按 broken 处理（防「把任意记录伪装成链首」）。
+            if (expect === r.hash) {
+              restart++;
+              dayRestart++;
+              prev = r.hash;
+              return;
+            }
+          }
+          if (expect !== r.hash || r.prevHash !== base) {
+            broken++;
+            dayBroken++;
+            if (brokenAt.length < 10) brokenAt.push({ date: g.date, ts: r.ts, type: r.type, kind: r.kind });
+          }
+          prev = r.hash;
+        });
       }
-      byDay.push({ date: f.slice(0, 10), dayBroken, dayLegacy, dayRestart, tailHash: prev });
+      byDay.push({ date: g.date, shards: g.files.length, dayBroken, dayLegacy, dayRestart, tailHash: prev });
     }
     return { mode: "pro", mode_ts: 0, claimed_profile: null,
       ok: broken === 0, total, broken, legacy, restart, brokenAt, byDay, mode: auditHashMode(),
-      note: "全链验证：逐天串联，每天的 tail 是下一天的前驱。dayRestart 为「当天首条带 hash 记录以全 0 前驱合法起链」的处数，不是篡改。",
+      note: "全链验证：逐天（含当天滚动分片）串联，每天的 tail 是下一天的前驱；逐行流式累加，不整文件读入。dayRestart 为「当天首条带 hash 记录以全 0 前驱合法起链」的处数，不是篡改。",
     };
   }
 
-  // 单日验证：按 date 读一天文件，链起点用前一天 tail（跨天联动）或全 0（新链第一天）。
-  const file = path.join(AUDIT_DIR, `${rawDate}.jsonl`);
-  let raw = "";
-  try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch {
-    return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: true, total: 0, broken: 0, legacy: 0, brokenAt: [], file, mode: auditHashMode() };
+  // 单日验证：读该日全部分片，链起点用前一天 tail（跨天联动）或全 0（新链第一天）。
+  const shards = auditDayFilesOf(rawDate).map((f) => path.join(AUDIT_DIR, f));
+  if (shards.length === 0) {
+    return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: true, total: 0, broken: 0, legacy: 0, brokenAt: [], file: path.join(AUDIT_DIR, `${rawDate}.jsonl`), mode: auditHashMode() };
   }
   // 单日的链起点：前一个 tail hash（跨天）或全 0（新链第一天）。
-  const files = auditDayFiles();
-  let prev = "0".repeat(64);
-  for (const f of files) {
-    if (f === `${rawDate}.jsonl`) break;
+  let prev = ZERO_HASH;
+  for (const f of auditDayFiles()) {
+    if (f.slice(0, 10) >= rawDate) break;
     prev = lastHashOf(path.join(AUDIT_DIR, f));
   }
   let total = 0, broken = 0, legacy = 0;
   const brokenAt = [];
-  for (const line of raw.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    let r;
-    try {
-      r = JSON.parse(t);
-    } catch {
-      continue;
-    }
-    total++;
-    if (typeof r.hash !== "string") {
-      // 旧格式记录（无 hash）→ 计入 legacy 计数，但**不重置链起点**。
-      //
-      // 早先这里写的是 prev = "0".repeat(64)，于是**一条**旧记录就会让
-      // 它之后所有记录的 prevHash 全部对不上 → 全判 broken。
-      // 后果：v2.5 升级上来的用户，审计链校验会长期报红，
-      // 而 README 把「可验证审计链」列为核心能力 —— 用户会以为自己的
-      // 审计记录被篡改了。**漏报比误报可接受，误报更伤信任。**
-      legacy++;
-      continue;
-    }
-    const expect = computeAuditHash(r, prev);
-    if (expect !== r.hash || r.prevHash !== prev) {
-      broken++;
-      if (brokenAt.length < 10) brokenAt.push({ ts: r.ts, type: r.type, kind: r.kind });
-    }
-    prev = r.hash;
+  let hashedSeen = 0;
+  for (const file of shards) {
+    forEachLineSync(file, (line) => {
+      const t = line.trim();
+      if (!t) return;
+      let r;
+      try {
+        r = JSON.parse(t);
+      } catch {
+        return;
+      }
+      total++;
+      if (typeof r.hash !== "string") {
+        // 旧格式记录（无 hash）→ 计入 legacy，但**不重置链起点**。
+        // 早先这里写的是 prev = "0".repeat(64)，于是**一条**旧记录就会让它之后
+        // 所有记录的 prevHash 全部对不上 → 全判 broken。误报比漏报更伤信任。
+        legacy++;
+        return;
+      }
+      hashedSeen++;
+      const isDayStart = hashedSeen === 1 && r.prevHash === ZERO_HASH;
+      const base = isDayStart ? ZERO_HASH : prev;
+      const expect = computeAuditHash(r, base);
+      if (isDayStart && expect === r.hash) {
+        prev = r.hash;
+        return;
+      }
+      if (expect !== r.hash || r.prevHash !== base) {
+        broken++;
+        if (brokenAt.length < 10) brokenAt.push({ ts: r.ts, type: r.type, kind: r.kind });
+      }
+      prev = r.hash;
+    });
   }
   // mode 字段说明本次校验的**保证强度**：
   //   hmac → 带密钥（CARLOS_FLOW_AUDIT_KEY），能发现有意篡改
   //   plain → 裸 SHA-256，只能发现意外损坏（攻击者能重算整条链）
-  return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: broken === 0, total, broken, legacy, brokenAt, file, mode: auditHashMode() };
+  return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: broken === 0, total, broken, legacy, brokenAt, file: shards[shards.length - 1], mode: auditHashMode() };
 }
 
 
@@ -723,21 +854,23 @@ export function readAudit(opts = {}) {
   const rawDate = typeof opts.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : localDate();
   try {
     // ⚠️ 必须用 rawDate（而不是 localDate()）—— 否则 opts.date 完全失效。
-    const file = path.join(AUDIT_DIR, `${rawDate}.jsonl`);
-    const raw = fs.readFileSync(file, "utf8");
+    // 该日的全部分片（含滚动出来的 .1/.2…），按写入顺序读
+    const files = auditDayFilesOf(rawDate).map((f) => path.join(AUDIT_DIR, f));
     const out = [];
-    for (const line of raw.split("\n")) {
-      const t = line.trim();
-      if (!t) continue;
-      let rec;
-      try {
-        rec = JSON.parse(t);
-      } catch {
-        continue; // 坏行跳过
-      }
-      if (sessionId != null && rec.sessionID !== sanitizeId(sessionId)) continue;
-      if (type != null && rec.type !== type) continue;
-      out.push(rec);
+    for (const file of files) {
+      forEachLineSync(file, (line) => {
+        const t = line.trim();
+        if (!t) return;
+        let rec;
+        try {
+          rec = JSON.parse(t);
+        } catch {
+          return; // 坏行跳过
+        }
+        if (sessionId != null && rec.sessionID !== sanitizeId(sessionId)) return;
+        if (type != null && rec.type !== type) return;
+        out.push(rec);
+      });
     }
     if (typeof limit === "number" && limit >= 0) return out.slice(-limit); // 取最近 N 条
     return out;

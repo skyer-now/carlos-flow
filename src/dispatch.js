@@ -151,7 +151,69 @@ export function buildContractPrompt(role, card, extra, options = {}) {
   return prompt;
 }
 
-// 快照：存在→复制到 RUNS_DIR/<id>/backup/<ts>_<name>；不存在→created:true；复制失败→error 且不中断其余
+// 每个 orig 保留几份历史快照。
+//
+// 为什么是 3：flow_revert_plan 的语义是「回到派发时」，多轮返工时真正需要的是
+// 「最近几轮」；保留全部历史只有审计价值，却让 backup/ 随返工次数线性膨胀
+// （实测单会话 94% 的目录占用都在 backup/）。改成 3 版后占用变成常数级上界。
+export const SNAPSHOT_KEEP_VERSIONS = 3;
+
+// 内容寻址备份文件名：sha-<sha256 前 32 位>_<原文件名>。
+// 同内容只存一份 —— 多轮返工时最常见的形态是「来来回回改同一批文件」，
+// 内容哈希天然去重，比按时间戳存 N 份省得多。
+function backupFileNameFor(sha, orig) {
+  return `sha-${sha.slice(0, 32)}_${path.basename(orig)}`;
+}
+
+// 清理：每个 orig 只保留最近 maxVersions 条 manifest 记录，并删除不再被引用的 blob。
+// 只在快照时调用（低频），不参与任何热路径。
+export function pruneSnapshots(sid, maxVersions = SNAPSHOT_KEEP_VERSIONS) {
+  const dir = path.join(RUNS_DIR, sanitizeId(sid), "backup");
+  const manifest = path.join(dir, "manifest.jsonl");
+  let all = [];
+  try {
+    all = fs.readFileSync(manifest, "utf8").split("\n").filter((x) => x.trim()).map((x) => JSON.parse(x));
+  } catch {
+    return { kept: 0, dropped: 0, blobsRemoved: 0 };
+  }
+  const byOrig = new Map();
+  for (const e of all) {
+    if (!e || !e.orig) continue;
+    if (!byOrig.has(e.orig)) byOrig.set(e.orig, []);
+    byOrig.get(e.orig).push(e);
+  }
+  const kept = [];
+  let dropped = 0;
+  for (const [, list] of byOrig) {
+    // 稳定排序：时间戳相同（同一次快照）时按写入顺序
+    list.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+    const keepFrom = Math.max(0, list.length - maxVersions);
+    for (let i = 0; i < list.length; i++) {
+      if (i >= keepFrom) kept.push(list[i]);
+      else dropped++;
+    }
+  }
+  const referenced = new Set();
+  for (const e of kept) if (e.backup) referenced.add(path.resolve(e.backup));
+  let blobsRemoved = 0;
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.startsWith("sha-")) continue;
+      const full = path.resolve(path.join(dir, name));
+      if (referenced.has(full)) continue;
+      try { fs.unlinkSync(full); blobsRemoved++; } catch { /* 可能正被别人读着 */ }
+    }
+  } catch { /* ignore */ }
+  if (dropped > 0 || blobsRemoved > 0) {
+    try {
+      fs.writeFileSync(manifest, kept.map((x) => JSON.stringify(x)).join("\n") + (kept.length ? "\n" : ""), "utf8");
+    } catch { /* 写不进去就保留旧 manifest，最多不省空间 */ }
+  }
+  return { kept: kept.length, dropped, blobsRemoved };
+}
+
+// 快照：存在→复制到 RUNS_DIR/<id>/backup/sha-<hash>_<name>（内容相同只存一份）；
+// 不存在→created:true；复制失败→error 且不中断其余
 export function snapshotFiles(sid, paths, cwd) {
   const bdir = path.join(RUNS_DIR, sanitizeId(sid), "backup");
   fs.mkdirSync(bdir, { recursive: true });
@@ -165,31 +227,30 @@ export function snapshotFiles(sid, paths, cwd) {
       continue;
     }
     try {
-      // 生成随机后缀（确保是字符串）
-      const randSuffix = Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
-      const backup = path.join(bdir, `${Date.now()}_${randSuffix}_${path.basename(orig)}`);
-      fs.copyFileSync(orig, backup);
-      // 完整性校验：比较大小
-      const srcStat = fs.statSync(orig);
-      const bakStat = fs.statSync(backup);
-      if (srcStat.size !== bakStat.size) {
-        fs.unlinkSync(backup);
-        entries.push({ ts, orig, error: "完整性校验失败（大小不匹配）" });
+      const buf = fs.readFileSync(orig);
+      const sha = createHash("sha256").update(buf).digest("hex");
+      const backup = path.join(bdir, backupFileNameFor(sha, orig));
+      let deduped = false;
+      if (fs.existsSync(backup)) {
+        deduped = true; // 同内容已存在：不重复写盘
       } else {
-        entries.push({ ts, orig, backup, created: false });
+        fs.writeFileSync(backup, buf);
       }
+      entries.push({ ts, orig, backup, created: false, sha, bytes: buf.length, deduped });
     } catch (e) {
       entries.push({ ts, orig, error: String(e) });
     }
   }
   try {
-    const lines = entries.map((x) => JSON.stringify(x)).join("\n") + "\n";
-    fs.appendFileSync(path.join(RUNS_DIR, sanitizeId(sid), "backup", "manifest.jsonl"), lines, "utf8");
+    const manifest = path.join(RUNS_DIR, sanitizeId(sid), "backup", "manifest.jsonl");
+    fs.appendFileSync(manifest, entries.map((x) => JSON.stringify(x)).join("\n") + "\n", "utf8");
   } catch (e) {
     try {
       process.stderr.write(`[flow-snapshot] manifest 追加失败: ${e && e.message ? e.message : e}\n`);
     } catch {}
   }
+  // 写完立刻做一次版本裁剪（每个 orig 只留最近 N 版 + 删无引用 blob）
+  try { pruneSnapshots(sid); } catch { /* 裁剪失败不影响快照本身 */ }
   return entries;
 }
 
@@ -255,12 +316,55 @@ export function writeDispatchPrompt(sid, role, message, cwd) {
 }
 
 // 保存子 Agent 执行结果到会话目录
+// ---------------------------------------------------------------------------
+// 输出截断（子 Agent 结果落盘 / verify 命令输出共用）
+// ---------------------------------------------------------------------------
+//
+// 为什么必须截断：flow_save_result 会把子 Agent 的**完整** stdout/stderr 落盘，
+// flow_run_verify 会把命令输出原样回传。两条路都没有上限 —— 一次 50MB 的输出
+// 足以把磁盘（落盘）或宿主进程内存（回传 JSON）一起打爆，而门禁信息量集中在
+// 头尾（结论 + 报错尾部堆栈），中间多半是重复日志。
+//
+// 策略：头部 + 尾部 + 中间折叠，并**如实记录原始字节数**（截断不能静默）。
+export const OUTPUT_KEEP_BYTES = 256 * 1024; // 头尾各留 256KB
+
+export function truncateOutput(text, keepBytes = OUTPUT_KEEP_BYTES) {
+  const s = typeof text === "string" ? text : String(text == null ? "" : text);
+  const bytes = Buffer.byteLength(s, "utf8");
+  if (bytes <= keepBytes * 2) return { text: s, bytes, truncated: false };
+  // 按字节切，避免把多字节字符截成半个（Buffer 切片后再 toString 会丢字符，
+  // 用 toString("utf8") 的解码容错把末尾残缺字符丢掉即可）。
+  const buf = Buffer.from(s, "utf8");
+  const head = buf.subarray(0, keepBytes).toString("utf8");
+  const tail = buf.subarray(bytes - keepBytes).toString("utf8");
+  const omitted = bytes - keepBytes * 2;
+  return {
+    text: head + "\n" + `…[已截断 ${omitted} 字节，原始 ${bytes} 字节]…` + "\n" + tail,
+    bytes,
+    truncated: true,
+    omitted_bytes: omitted,
+  };
+}
+
 export function saveAgentResult(sid, role, stdout, stderr, code) {
   try {
     const dir = path.join(RUNS_DIR, sanitizeId(sid), "dispatch");
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${Date.now()}_${role}.result.json`);
-    const rec = { ts: new Date().toISOString(), role, code: code ?? -1, stdout: String(stdout || ""), stderr: String(stderr || "") };
+    const out = truncateOutput(stdout);
+    const err = truncateOutput(stderr);
+    const rec = {
+      ts: new Date().toISOString(),
+      role,
+      code: code ?? -1,
+      // 截断结果 + 原始字节数：审计时能看出「这里被折叠了多少」，
+      // 而不是以为子 Agent 只说了这么点。
+      stdout: out.text,
+      stderr: err.text,
+      stdout_bytes: out.bytes,
+      stderr_bytes: err.bytes,
+      truncated: out.truncated || err.truncated,
+    };
     fs.writeFileSync(file, JSON.stringify(rec, null, 2), "utf8");
     return file;
   } catch {
@@ -280,6 +384,28 @@ export function saveAgentResult(sid, role, stdout, stderr, code) {
 //     `node -e "process.exit(3)"` 的引号吃掉，退出码变成 0 而不是 3 ——
 //     那样「验证失败必须拦住 PASS」的门禁就形同虚设）；
 //   · POSIX：/bin/sh -c + shell:false（明确指定解释器，不依赖 PATH 里的 sh）。
+// 结束整棵进程树。
+//
+// Windows：taskkill /T /F 才是真的「连子进程一起杀」；child.kill 只结束 cmd.exe 外壳，
+// 命令派生的 node.exe 会变孤儿（实测残留进程长期占着端口与文件句柄，下一次验证因此 EBUSY）。
+// POSIX：进程组杀（detached 启动时 child.pid 就是组长），拿不到就退回 kill。
+function killProcessTree(child) {
+  try {
+    if (!child || !child.pid) return;
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+        timeout: 10000,
+      });
+      return;
+    }
+    try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+  } catch {
+    try { child.kill("SIGKILL"); } catch { /* 已经退出 */ }
+  }
+}
+
 export async function runVerifyCommand(cmd, cwd) {
   if (!cmd || !cmd.trim()) {
     return { ok: false, exitCode: -1, stdout: "", stderr: formatError("验证命令为空") };
@@ -319,26 +445,62 @@ export async function runVerifyCommand(cmd, cwd) {
       shell: isWindows,
       windowsHide: true,
     });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => { stdout += d.toString(); });
-    child.stderr.on("data", (d) => { stderr += d.toString(); });
+    // 输出上限：命令可能刷出几十 MB 日志。全量拼字符串会把本进程内存打爆，
+    // 门禁最后给出的会是「插件崩了」而不是「验证没通过」。这里做**环形截断**：
+    // 超过上限后只计数不再占用内存，头尾各留一份，并如实回传原始字节数。
+    const chunks = { stdout: [], stderr: [] };
+    const lengths = { stdout: 0, stderr: 0 };
+    const CAP = OUTPUT_KEEP_BYTES * 4;
+    const collect = (which, d) => {
+      const text = d.toString();
+      lengths[which] += Buffer.byteLength(text, "utf8");
+      if (lengths[which] > CAP) return; // 已远超上限：只计数，不再占内存
+      chunks[which].push(text);
+    };
+    child.stdout.on("data", (d) => collect("stdout", d));
+    child.stderr.on("data", (d) => collect("stderr", d));
+
+    // 回调入参：{ ok, exitCode, stderrText（可选）, appendStderr（可选）, formatStderr（可选） }
+    const finish = (result) => {
+      const out = truncateOutput(chunks.stdout.join(""));
+      const rawErr = chunks.stderr.join("");
+      let errText;
+      if (result.stderrText !== undefined) errText = result.stderrText;
+      else if (result.formatStderr) errText = formatError(String(rawErr));
+      else errText = rawErr;
+      if (result.appendStderr) errText = (errText ? errText + result.appendStderr : String(result.appendStderr).replace(/^\n+/g, ""));
+      const err = truncateOutput(errText);
+      resolve({
+        ok: result.ok,
+        exitCode: result.exitCode,
+        stdout: out.text,
+        stderr: err.text,
+        stdout_bytes: lengths.stdout,
+        stderr_bytes: lengths.stderr,
+        output_truncated: out.truncated || err.truncated,
+      });
+    };
+
+    // 超时上限可用 CARLOS_VERIFY_TIMEOUT_MS 覆盖（测试要能在秒级复现「超时必须整树回收」）
+    const timeoutMs = (() => {
+      const n = Number(process.env.CARLOS_VERIFY_TIMEOUT_MS);
+      return Number.isFinite(n) && n >= 200 ? n : 120000;
+    })();
     const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      resolve({ ok: false, exitCode: -1, stdout, stderr: stderr + "\n验证命令超时 (120s)" });
-    }, 120000);
+      // Windows 上 child.kill 只杀 cmd.exe 外壳，命令真正派生的 node 子进程会变成孤儿
+      // （实测残留 node.exe 能活很久，还占着端口/文件）。必须整棵进程树一起结束。
+      killProcessTree(child);
+      finish({ ok: false, exitCode: -1, appendStderr: `\n验证命令超时 (${Math.round(timeoutMs / 1000)}s)` });
+    }, timeoutMs);
+
     child.on("close", (code) => {
       clearTimeout(timeout);
-      if (code === 0) {
-        resolve({ ok: true, exitCode: code, stdout, stderr });
-      } else {
-        // 所有 child 错误输出都必须带上建议层
-        resolve({ ok: false, exitCode: code, stdout, stderr: formatError(String(stderr)) });
-      }
+      if (code === 0) finish({ ok: true, exitCode: code });
+      else finish({ ok: false, exitCode: code, formatStderr: true });
     });
     child.on("error", (err) => {
       clearTimeout(timeout);
-      resolve({ ok: false, exitCode: -1, stdout, stderr: formatError(String(err)) });
+      finish({ ok: false, exitCode: -1, stderrText: formatError(String(err)) });
     });
   });
 }

@@ -23,6 +23,8 @@
 | `bridge/` 或 `client/` | `test/bridge-identity.mjs`（身份隔离） | `npm run test:bridge` |
 | `ghost.json` 的工具清单 / `main.js` | `docs/TOOL_CONTRACTS.md` §1.3（两段式目录） | `test/cindy-dispatch.mjs`、`npm run check:full` |
 | `src/mcp-stdio.mjs`（协议层） | `docs/TOOL_CONTRACTS.md` §1.3 + MCP stdio 规范 | `npm run test:mcp` |
+| 写状态的锁窗口 / 合并策略 | `docs/TOOL_CONTRACTS.md` §2.3 | `test/verify-cas.mjs`、`test/concurrency-e2e.mjs` |
+| 快照 / 审计存储形态 | `docs/TOOL_CONTRACTS.md` §2.3 | `test/hardening.mjs`、`test/audit-roll.mjs` |
 | CI / 发布流程 | `.github/workflows/` | `npm run check:full` |
 
 ---
@@ -50,6 +52,17 @@
    - `.carlos.json` 的 `sensitive` 只能**加**规则；`!x` / `-x` 否定式必须被忽略。
    - 配置损坏时退回内置基线，不许因为「配置读不到」而放宽。
 
+4.3 **长命令必须跑在锁外（v2.15.0）**
+   - `flow_run_verify` / `flow_falsify` / 任何 spawn 外部命令的 handler：**命令在锁外跑，
+     跑完用 `commitState` 在短锁内合并写**。
+   - 禁止把整段读-改-写包进 `withStateLock`：持锁超过 `staleMs`(30s) 会被判陈旧并回收，
+     另一个进程随即拿到同一把锁 → 同时写入，比不加锁更难复现。
+   - 锁等待必须是**异步**的（`sleepAsync`）；同步自旋会冻住整个事件循环。
+
+4.4 **裁定的证据必须属于当前卡（v2.15.0）**
+   - `last_verify.card_ts` 与当前卡不一致 → 拒绝 PASS；`flow_verdict` 写入前核对 `card_ts`（CAS）。
+   - 老状态缺 `card_ts` 时退化为「验证时间不得早于卡提交时间」，不得直接放行。
+
 4.2 **负对照不得让工作区停在改动前（v2.14.0）**
    - 进入临界区前必须写 `journal.json`；`finally` 里还原后必须逐文件核对摘要。
    - 还原失败时**保留备份目录**（下一次调用靠它恢复），不许删了当没事。
@@ -60,7 +73,7 @@
 
 6.1 **插件清单只能是 chip，且工具面 ≤16 项（v2.14.1）**
    - Cindy 已移除 `kind:"mcp"`；`tools` 超过 16 项直接拒装。
-   - 20 个操作走两段式：`ghost.json` 只声明 `list_tools` / `call_tool`，
+   - 21 个操作走两段式：`ghost.json` 只声明 `list_tools` / `call_tool`，
      `main.js` 的类目表必须**恰好覆盖**服务端全部操作（`check:full` 守着）。
    - 随包 Node 程序不能依赖 node_modules（Forge 打包会跳过），
      所以协议层是自研的 `src/mcp-stdio.mjs`，不是 SDK。
@@ -87,6 +100,9 @@ npm run test:lock           # 状态锁：退避 / 死锁回收 / fail-closed
 npm run test:falsify        # 负对照：还原核对 + 崩溃恢复
 npm run test:mcp            # 零依赖 MCP stdio 服务端（握手 / stdout 纯净 / 未知方法）
 npm run test:dispatch       # chip 两段式目录（真实服务端 + main.js 端到端）
+npm run test:hardening      # 超时整树回收 / 输出截断 / 快照去重 / 存储可观测
+npm run test:cas            # 长验证并发合并 + 旧卡证据不得复用
+npm run test:roll           # 审计按大小滚动 + 流式校验 + 篡改可检出
 npm run test:lang           # 产物语言体检的自检
 npm run test:package        # 包级端到端（真实 tarball + 干净安装 + 真实 MCP 握手）
 npm run check:full          # 对外产物全面体检

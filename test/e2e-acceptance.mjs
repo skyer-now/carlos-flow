@@ -1,7 +1,7 @@
 // 端到端验收脚本（跨平台）：验证本轮全部修复的真实行为
 // 覆盖：P0-1 acceptance 伪填充 / P0-2 config 深合并 / T-30 中文词表 / T-29 MCP 触发 / 插件
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -63,8 +63,13 @@ check("MCP server 启动", /ready \(stdio\)|connected/.test(stderr), stderr.slic
 
 // ---- 1. 工具数 ----
 const list = await req("tools/list", {});
-check("20 个工具（含 flow_trigger_check / flow_falsify / 双轴审计三件套）", (list.result?.tools || []).length === 20,
-  `实际 ${(list.result?.tools || []).length}`);
+{
+  const expected = [...new Set([...readFileSync(join(REPO, "src", "index.js"), "utf8")
+    .matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1]))].length;
+  const got = (list.result?.tools || []).length;
+  check(`工具数与源码一致（${expected} 个，含 flow_trigger_check / flow_falsify / 双轴审计三件套）`,
+    got === expected, `实际 ${got}`);
+}
 
 // ---- 2. T-29: MCP 路径自动触发（中文）----
 const sidZh = "e2e-zh-" + Date.now();

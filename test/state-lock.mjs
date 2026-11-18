@@ -41,13 +41,13 @@ fs.mkdirSync(dir, { recursive: true });
 
 // 1. 正常路径
 let ran = 0;
-withStateLock(sid, () => { ran++; });
+await withStateLock(sid, () => { ran++; });
 check("1a. 正常加锁后临界区执行", ran === 1);
 check("1b. 退出后不残留锁文件", !fs.existsSync(lockFile));
 
 // 1c. 锁文件里写的是持有者 pid（诊断用）
 let sawPid = 0;
-withStateLock(sid, () => {
+await withStateLock(sid, () => {
   try { sawPid = parseInt(fs.readFileSync(lockFile, "utf8").trim(), 10); } catch { sawPid = 0; }
 });
 check("1c. 锁文件记录持有者 pid", sawPid === process.pid, `pid=${sawPid}`);
@@ -58,7 +58,7 @@ let blocked = false;
 let blockedMsg = "";
 const t2 = Date.now();
 try {
-  withStateLock(sid, () => {}, { timeoutMs: 250 });
+  await withStateLock(sid, () => {}, { timeoutMs: 250 });
 } catch (e) {
   blocked = true;
   blockedMsg = String(e && e.message ? e.message : e);
@@ -76,7 +76,7 @@ fs.writeFileSync(lockFile, String(deadPid), "utf8");
 const t3 = Date.now();
 let reclaimed = false;
 try {
-  withStateLock(sid, () => { reclaimed = true; }, { timeoutMs: 3000, staleMs: 60000 });
+  await withStateLock(sid, () => { reclaimed = true; }, { timeoutMs: 3000, staleMs: 60000 });
 } catch { reclaimed = false; }
 const wait3 = Date.now() - t3;
 check("3a. 死锁号（pid 已不存在）被即时回收", reclaimed === true, `deadPid=${deadPid}`);
@@ -88,7 +88,7 @@ const old = new Date(Date.now() - 120000);
 try { fs.utimesSync(lockFile, old, old); } catch { /* 某些文件系统不支持，跳过 */ }
 let reclaimedOld = false;
 try {
-  withStateLock(sid, () => { reclaimedOld = true; }, { timeoutMs: 3000, staleMs: 30000 });
+  await withStateLock(sid, () => { reclaimedOld = true; }, { timeoutMs: 3000, staleMs: 30000 });
 } catch { reclaimedOld = false; }
 check("4a. 无 pid 的陈旧锁按 mtime 回收", reclaimedOld === true);
 check("4b. 回收后不残留锁文件", !fs.existsSync(lockFile));
@@ -96,7 +96,7 @@ check("4b. 回收后不残留锁文件", !fs.existsSync(lockFile));
 // 5. 退避不放大总耗时（多次竞争后仍能在 timeoutMs 内拿到锁）
 let ok5 = 0;
 for (let i = 0; i < 20; i++) {
-  try { withStateLock(sid, () => { ok5++; }, { timeoutMs: 2000 }); } catch { /* 计入失败 */ }
+  try { await withStateLock(sid, () => { ok5++; }, { timeoutMs: 2000 }); } catch { /* 计入失败 */ }
 }
 check("5a. 连续 20 次加锁全部成功（退避不会造成假超时）", ok5 === 20, `${ok5}/20`);
 

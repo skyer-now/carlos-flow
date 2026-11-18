@@ -102,14 +102,14 @@ A red-team run reproduced 4 state losses in 40 concurrent rounds; now it reports
 
 ## 🧩 Calling it from Cindy
 
-The plugin exposes a **two-level catalogue** (Cindy caps a plugin at 16 declared tools; this one has 20 operations):
+The plugin exposes a **two-level catalogue** (Cindy caps a plugin at 16 declared tools; this one has 21 operations):
 
 - `list_tools` — browse first: omit `category` for an overview of the 5 categories
   (gate / verify / audit / infra / trigger); pass it for that category's operations **plus the RULES** you must read first.
 - `call_tool` — then execute: `name` from `list_tools`, `args` per its parameter help.
   An unknown name returns every available operation; missing or invalid args return the schema and rules.
 
-On other platforms (OpenCode / Cursor / Cline / VS Code / Claude Desktop) the 20 tools are exposed directly — no extra hop.
+On other platforms (OpenCode / Cursor / Cline / VS Code / Claude Desktop) the 21 tools are exposed directly — no extra hop.
 
 ---
 

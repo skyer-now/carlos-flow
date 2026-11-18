@@ -58,7 +58,7 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
 │ 第二层：工作流辅助（主 Agent 实际调用，不写门禁字段）      │  3 个
 │   flow_status · flow_check_scope · flow_bypass           │
 ├─────────────────────────────────────────────────────────┤
-│ 第三层：追溯与查询（只读，低频，独立价值）                 │  7 个
+│ 第三层：追溯与查询（只读，低频，独立价值）                 │  8 个
 │   flow_audit · flow_protocol · flow_add_user_msg         │
 │   flow_save_result · flow_revert_plan                    │
 │   flow_diff_hunks · flow_audit_guard                     │
@@ -117,7 +117,7 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
 
 ### 1.3 Cindy 侧的两段式目录（chip，v2.14.1 起）
 
-Cindy 对插件 `tools` 声明有**硬上限 16 项**，本插件有 20 个操作 —— 直接声明必然被拒装
+Cindy 对插件 `tools` 声明有**硬上限 16 项**，本插件有 21 个操作 —— 直接声明必然被拒装
 （v2.14.0 的 `kind:"mcp"` 声明更是已被宿主移除）。因此插件清单改成宿主手册 §3.5 的
 「两段式目录」：
 
@@ -125,7 +125,7 @@ Cindy 对插件 `tools` 声明有**硬上限 16 项**，本插件有 20 个操�
 |---|---|---|
 | 清单 | `ghost.json` | `kind: chip`，只声明 `list_tools` / `call_tool` 两个元工具；`node.protocol = mcp-stdio`，`node.entry = src/index.js` |
 | 分发 | `main.js` | 类目表（5 类）+ 每类 RULES；向随包 MCP 服务端取 `tools/list`（说明与参数 schema 的**唯一真源**），再按 name 转发 `tools/call` |
-| 能力 | `src/index.js` | 20 个 `flow_*` 操作的实现，不变 |
+| 能力 | `src/index.js` | 21 个 `flow_*` 操作的实现 |
 
 **为什么要这么接**：`tools/list` 由服务端提供，所以操作说明与参数 schema 不会在
 main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 → 类目」映射与规则文本。
@@ -139,18 +139,18 @@ main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 →
 - 长任务（`flow_run_verify` / `flow_falsify` / `flow_dispatch`）按 45s 发 `tool-progress` 续命，
   避免 330s 工具窗口把慢验证判超时。
 
-**类目划分（20 个操作，`scripts/full-audit.mjs` 校验「恰好覆盖、不多不少」）**
+**类目划分（21 个操作，`scripts/full-audit.mjs` 校验「恰好覆盖、不多不少」）**
 
 | 类目 | 操作 |
 |---|---|
 | `gate` | submit_requirement / claim / dispatch / verdict |
 | `verify` | run_verify / falsify |
 | `audit` | audit_axes / audit_submit / audit_guard / audit |
-| `infra` | status / protocol / mode / bypass / add_user_msg / save_result / revert_plan / check_scope / diff_hunks |
+| `infra` | status / stats / protocol / mode / bypass / add_user_msg / save_result / revert_plan / check_scope / diff_hunks |
 | `trigger` | trigger_check |
 
 **测试**：`test/cindy-dispatch.mjs`（23 条，真实起服务端 + vm 里跑 main.js）、
-`test/mcp-stdio.mjs`（18 条，协议握手 / stdout 纯净 / 通知不回包 / 未知方法 -32601）。
+`test/mcp-stdio.mjs`（20 条，协议握手 / stdout 纯净 / 通知不回包 / 未知方法 -32601 / require 可加载）。
 
 ---
 
@@ -181,7 +181,7 @@ main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 →
 | `audit_axes` | object | audit_submit | verdict, status, audit_guard | 两轴结论{standards, spec} |
 | `audit_axes_ts` | number | audit_submit | status | 两轴最后提交时间（审计留痕） |
 | `verdict_role` | string\|null | verdict | status | 实际落裁定者角色 |
-| `last_verify` | object\|null | run_verify, falsify | verdict, status | 验证结果{ok, cmd, exitCode, output_hash, fingerprint} |
+| `last_verify` | object\|null | run_verify, falsify | verdict, status | 验证结果{ok, cmd, exitCode, output_hash, fingerprint, **card_ts**} |
 | `verdict_ts` | number | verdict | — | 裁定时间戳 |
 | `task_id` | string\|null | — | — | 预留 |
 
@@ -196,6 +196,29 @@ main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 →
 
 > 迁移的意义：旧用户的 `state.json` 会被**显式升级**而不是静默丢弃字段。
 > 历史上没有版本号时，改字段名会让老用户状态被当成"未知字段"丢掉，表现为「免检没清零」「待补项丢失」。
+
+### 2.3 并发与存储（v2.15.0）
+
+**写状态的三条铁律**
+
+1. **命令在锁外跑**：`flow_run_verify` / `flow_falsify` 的读-改-写窗口若横跨命令执行期
+   （最长 120s / 240s），持锁超过 `staleMs`（30s）会被判陈旧并回收 → 另一进程拿到同一把锁
+   → 同时写入。现在：命令跑完再进短锁。
+2. **短锁内重新读最新状态**（`commitState`），只合并自己那份字段，绝不把执行前的快照整体写回。
+3. **裁定要 CAS**：`flow_verdict` 判定在锁外，写入时核对 `card_ts`；不一致就拒写。
+
+**证据绑定**：`last_verify.card_ts` 记录这次验证针对哪张卡；PASS 门禁要求它与当前卡一致，
+旧卡的绿灯不能被新卡复用（缺该字段的历史状态退化为「验证时间必须晚于卡提交时间」）。
+
+**存储形态**
+
+| 项目 | 策略 | 为什么 |
+|---|---|---|
+| 派发快照 | 内容寻址 `sha-<hash>_<name>`，同内容只存一份；每个文件留最近 3 版 | 多轮返工常改同一批文件；实测单会话 94% 占用在 backup/ |
+| 审计日志 | 单文件超 `CARLOS_FLOW_AUDIT_MAX_BYTES`（默认 8MB）滚动为 `<date>.N.jsonl` | 单日实测 2MB、全年 ~180MB；整文件读入会随使用线性变慢 |
+| 审计校验 | 256KB 缓冲 + StringDecoder 逐行流式累加哈希 | 不整文件读入；跨分片严格串联，篡改中间分片仍被抓 |
+| 命令输出 | 头尾各 256KB + 中间折叠，记录原始字节数 | 一次 50MB 输出足以撑爆内存/磁盘 |
+| 度量 | `flow_stats`（只读） | 先能回答「占了多少、谁占的」，再谈清理阈值 |
 
 ### 2.2 协议漂移防护
 
@@ -474,7 +497,21 @@ main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 →
 
 ---
 
-### 3.3 第三层：追溯与查询（7 个）
+### 3.3 第三层：追溯与查询（8 个）
+
+#### `flow_stats`
+
+| 维度 | 内容 |
+|---|---|
+| **状态门** | 无（只读）。清理/归档前的度量入口 |
+| **问题层** | 存储问题的真痛点是「说不出占了多少、谁占的、删了会不会影响回溯」，于是清理只能靠猜。它把三件事量出来：各会话占用 Top N、备份去重率、审计按日增长 + 陈旧会话清单（含是否终态） |
+| **读写字段** | 只读：扫 `RUNS_DIR/*`（按目录大小）、`backup/manifest.jsonl`（算去重率）、`AUDIT_DIR`（按日分片大小）、`trigger-state`。**不写任何文件** |
+| **测试覆盖** | `test/hardening.mjs`（4a–4f 六条断言，含「只读」验证） |
+
+**关键约束**
+- 目录扫描有上限（会话 300、文件 20000），不会因为历史堆积而卡死；
+- 只报度量与建议，**不执行任何删除**；真正的清理口径要靠人决定（哪些是终态、哪些还在跑）。
+
 
 ---
 

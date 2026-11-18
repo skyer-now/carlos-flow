@@ -171,7 +171,11 @@ if (!failed) pass("没有「算出却从未使用」的死变量");
 section("date 参数贯通检查");
 const readAuditBody = extractFunction(stateSrc, "readAudit");
 const verifyBody = extractFunction(stateSrc, "verifyAuditChain");
-const usesDate = (b) => b && /rawDate[}`]*\.jsonl/.test(b);
+// 「date 参数真的决定读哪天」有两种合法实现：
+//   ① 直接拼 `<date>.jsonl`
+//   ② 通过 auditDayFilesOf(date) 取当天**全部分片**（按大小滚动后必须这样写）
+// 两者都证明 date 参与了文件选择；只看 ① 会把滚动分片的实现误判成失效。
+const usesDate = (b) => !!b && (/rawDate[}`]*\.jsonl/.test(b) || /auditDayFilesOf\(\s*rawDate\s*\)/.test(b));
 if (usesDate(readAuditBody)) pass("readAudit 用 rawDate 构造文件路径");
 else fail("readAudit 没有用 rawDate 构造文件路径（date 参数静默失效）");
 if (usesDate(verifyBody)) pass("verifyAuditChain 用 rawDate 构造文件路径");

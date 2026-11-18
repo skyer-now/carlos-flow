@@ -48,7 +48,10 @@ try {
   // 2. 工具目录
   const listed = await client.request("tools/list", {});
   const tools = (listed.result && listed.result.tools) || [];
-  check("2a. tools/list 返回 20 个工具", tools.length === 20, `${tools.length} 个`);
+  // 期望数量从源码推导：加/删工具时不用手改一堆魔法数字（改错反而制造假红）
+  const srcTools = [...new Set([...fs.readFileSync(path.join(ROOT, "src", "index.js"), "utf8")
+    .matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1]))];
+  check(`2a. tools/list 与源码一致（${srcTools.length} 个）`, tools.length === srcTools.length, `${tools.length} 个`);
   check("2b. 工具定义不泄露 handler（函数不可序列化）",
     tools.every((t) => t.handler === undefined), "");
   check("2c. 每个工具都有 name/description/inputSchema",

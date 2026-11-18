@@ -156,8 +156,10 @@ const MUTANTS = [
     id: "M15-审计链校验恒真",
     desc: "verifyAuditChain 永远返回 ok:true → 任何篡改都发现不了",
     file: "src/state.js",
-    from: `  return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: broken === 0, total, broken, legacy, brokenAt, file, mode: auditHashMode() };`,
-    to: `  return { ok: true, total, broken, legacy, brokenAt, file, mode: auditHashMode() }; // MUTANT: 恒真`,
+    // 锚点跟随流式改造更新（2026-11-18）：单日验证的返回行。
+    // 语义不变：把 broken 判定改成恒真，让任何篡改都发现不了。
+    from: `  return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: broken === 0, total, broken, legacy, brokenAt, file: shards[shards.length - 1], mode: auditHashMode() };`,
+    to: `  return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: true, total, broken, legacy, brokenAt, file: shards[shards.length - 1], mode: auditHashMode() }; // MUTANT: 恒真`,
   },
   {
     id: "M16-越界检查退回 fail-open",
@@ -176,10 +178,10 @@ const MUTANTS = [
     id: "M17-date 参数失效",
     desc: "readAudit 用 localDate() 代替 rawDate → date 参数静默失效（读到的永远是今天）",
     file: "src/state.js",
-    from: `    // ⚠️ 必须用 rawDate（而不是 localDate()）—— 否则 opts.date 完全失效。
-    const file = path.join(AUDIT_DIR, \`\${rawDate}.jsonl\`);`,
-    to: `    // MUTANT: 用回 localDate() → date 参数静默失效
-    const file = path.join(AUDIT_DIR, \`\${localDate()}.jsonl\`);`,
+    // 锚点跟随滚动分片更新（2026-11-18）：读哪个日期由 rawDate 决定（现经 auditsDayFilesOf）。
+    // 语义不变：改成 localDate() → 传 date 查历史时仍读今天，静默失效。
+    from: `  const shards = auditDayFilesOf(rawDate).map((f) => path.join(AUDIT_DIR, f));`,
+    to: `  const shards = auditDayFilesOf(localDate()).map((f) => path.join(AUDIT_DIR, f)); // MUTANT: date 参数静默失效`,
   },
   {
     id: "M7-空scope fail-open",

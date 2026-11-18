@@ -80,7 +80,9 @@ try {
   check("2a. list_tools 不传 category 返回概览", !!(ov && ov.categories));
   check("2b. 类目为 gate/verify/audit/infra/trigger",
     names === "gate,verify,audit,infra,trigger", names);
-  check("2c. 概览里的操作总数 = 20", ov && ov.total === 20, String(ov && ov.total));
+  const expectedTotal = [...new Set([...fs.readFileSync(path.join(ROOT, "src", "index.js"), "utf8")
+    .matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1]))].length;
+  check(`2c. 概览里的操作总数与源码一致（${expectedTotal}）`, ov && ov.total === expectedTotal, String(ov && ov.total));
   check("2d. 概览给出下一步提示", !!(ov && ov.hint));
 
   // 3. 类目下钻：必须同时给工具明细与 RULES
@@ -113,9 +115,9 @@ try {
   // 6. 未知操作名 → 附全部可用操作名 + 回查提示
   const unknown = await invoke("call_tool", { name: "flow_不存在" });
   check("6a. 未知操作返回 ok:false", unknown && unknown.ok === false);
-  check("6b. 未知操作附全部可用操作名（20 个）",
+  check(`6b. 未知操作附全部可用操作名（${expectedTotal} 个）`,
     unknown && unknown.result && Array.isArray(unknown.result.available_tools)
-      && unknown.result.available_tools.length === 20,
+      && unknown.result.available_tools.length === expectedTotal,
     unknown && unknown.result ? `${unknown.result.available_tools.length} 个` : "");
   check("6c. 提示先 list_tools 回查", /list_tools/.test(String(unknown && unknown.message)));
 

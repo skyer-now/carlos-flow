@@ -71,8 +71,10 @@ try {
   const hasValidation = /validateToolArgs\(/.test(src);
   if (hasValidation) pass("CallTool handler 调用了 validateToolArgs（参数校验未丢失）");
   else fail("CallTool handler 没有调用 validateToolArgs —— 参数校验可能已丢失");
-  if (declared.length === 20) pass(`TOOLS 声明 ${declared.length} 个工具`);
-  else fail(`TOOLS 声明了 ${declared.length} 个工具（期望 20）`);
+  // 数量下限而不是精确值：加工具不该因为「门禁里写死了 20」而变红，
+  // 但**大批删除**必须被抓住（低于 20 说明有工具被静默摘掉了）。
+  if (declared.length >= 20) pass(`TOOLS 声明 ${declared.length} 个工具`);
+  else fail(`TOOLS 只声明了 ${declared.length} 个工具（应 ≥20，可能有工具被静默删掉）`);
 } catch (e) {
   fail(`读取 src/index.js 失败：${e.message}`);
 }

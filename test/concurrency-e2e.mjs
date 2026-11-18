@@ -208,7 +208,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const cnt = ${JSON.stringify(cntFile)};
 for (let i = 0; i < 100; i++) {
-  withStateLock("lock-probe", () => {
+  await withStateLock("lock-probe", () => {
     let v = 0;
     try { v = JSON.parse(readFileSync(cnt, "utf8")).v || 0; } catch {}
     writeFileSync(cnt, JSON.stringify({ v: v + 1 }));

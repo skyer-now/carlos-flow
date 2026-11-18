@@ -1,3 +1,15 @@
+## [2.15.0] - 2026-11-18
+- 并发正确性（P0）：`flow_run_verify` / `flow_falsify` 改为「命令在锁外跑 → 短锁内重新读最新状态 → 只合并自己的结果」。旧实现用命令执行**前**的快照裸写 saveState，长达 120s 的窗口里别人写的卡片/字段会被静默回滚
+- 裁定 CAS（P0）：`flow_verdict` 的判定在锁外完成，写入时核对 `card_ts`；卡片已被替换则拒写并提示重走流程。同时新增「验证证据必须属于当前卡」的门禁（`last_verify.card_ts`），旧卡的绿灯不能给新卡复用
+- 锁等待异步化（P0）：`withStateLock` 由 `Atomics.wait` 同步自旋改为异步退避 —— 旧实现一旦遇到别人持锁会**冻住整个事件循环**，同进程其它请求全部无响应；锁内铁律写入注释（只做内存操作，禁止包住长命令）
+- 进程树回收（P0）：verify 超时从 `child.kill("SIGKILL")`（Windows 只杀 cmd.exe 外壳）改为 `taskkill /T /F` / POSIX 进程组；实测无孤儿残留
+- 输出上限（P0）：verify 命令输出头尾各留 256KB、中间折叠并记录原始字节数；`flow_save_result` 落盘同样截断（另一条不带上限的 OOM/撑盘通道）
+- 快照去重（P1）：备份改为内容寻址 `sha-<hash>_<name>`，同内容只存一份；每个文件只保留最近 3 版并清理无引用 blob —— 实测单会话 94% 占用都在 backup/
+- 审计滚动 + 流式校验（P1）：单文件超过 `CARLOS_FLOW_AUDIT_MAX_BYTES`（默认 8MB）滚动为 `<date>.N.jsonl`；`verifyAuditChain` 改为 256KB 缓冲 + StringDecoder 逐行流式计算，不再整文件读入；跨分片链路严格串联，篡改中间分片仍被抓到
+- 存储可观测（P1）：新增只读工具 `flow_stats` —— 总占用、Top N 会话、备份去重率、审计按日增长、陈旧会话清单（含终态标记）。先有度量再谈清理，避免误删活跃会话
+- 基准（不做的事也给出依据）：新增 `npm run bench:latency`。实测回环 RTT p50≈0.02ms、读路径 p50 0.03~0.15ms（**0.5ms 对读已达成**）、写路径地板是 fs 落盘≈0.7ms；把写入压到 0.5ms 以下只能靠异步 WAL 或进程内引擎，代价是丢门禁状态 / 出现第二个写入者 —— 明确不换
+- 门禁同步：`check:params` 认识滚动分片形式的 date 贯通；`check:no-dead-handler` 的工具数改为下限；各测试的工具数改为从源码推导，新增 `test:hardening` / `test:cas` / `test:roll`
+
 ## [2.14.2] - 2026-11-17
 - 装机致命修复：Cindy 的随包 Node 用 `require()` 加载入口，而 `src/index.js` 的**顶层 await** 让它抛 `ERR_REQUIRE_ASYNC_MODULE` —— 2.14.1 装进去后一调就「Node 工作进程已退出」。改为 `serveStdio(...).catch(...)`（不 await 也安全：readline 订阅着 stdin，进程不会空闲退出）
 - 新守卫（防复发）：`check:full` 第 9 步「插件运行时契约」——静态查入口不得含顶层 await，并**真跑一次 `require()`**；`test:mcp` 增加同类断言（20 条）

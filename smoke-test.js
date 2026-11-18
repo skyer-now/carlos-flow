@@ -6,11 +6,22 @@
 //   3. 速率限制 10 次/秒，本测试仅 2 次
 import { spawn } from "node:child_process";
 import net from "node:net";
+import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 
 const PORT = Number(process.env.BRIDGE_PORT || 22099);
 const TOKEN = process.env.CARLOS_BRIDGE_TOKEN || "";
-const EXPECTED_TOOLS_COUNT = 20;
+// 工具数量：从源码推导，而不是写死数字。
+// 写死的代价很实在：加一个工具就要改这里，忘了改就是「冒烟失败」，而失败原因
+// 看着像转发坏了 —— 与真实故障混在一起。改为读 src/index.js 的 TOOL 名集合。
+const EXPECTED_TOOLS_COUNT = (() => {
+  try {
+    const src = readFileSync(new URL("./src/index.js", import.meta.url), "utf8");
+    return new Set([...src.matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1])).size;
+  } catch {
+    return 20; // 兜底：至少保证桥接链路本身被验证
+  }
+})();
 
 // 单次 RPC：一条连接发一个请求，收满响应就返回
 function rpcOnce(request) {

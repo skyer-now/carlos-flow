@@ -71,6 +71,9 @@ jobs:
           npm run test:falsify
           npm run test:mcp
           npm run test:dispatch
+          npm run test:hardening
+          npm run test:cas
+          npm run test:roll
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home
