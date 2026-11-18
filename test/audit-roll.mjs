@@ -12,96 +12,180 @@
 //   4. readAudit 能读回该日全部记录（含所有分片）。
 //
 // 跑法：node test/audit-roll.mjs
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
-const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "carlos-audit-roll-"));
-process.env.CARLOS_FLOW_HOME = HOME;
-const MAX = 64 * 1024; // 64KB 阈值：让滚动在测试里立刻发生
-process.env.CARLOS_FLOW_AUDIT_MAX_BYTES = String(MAX);
+const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'carlos-audit-roll-'))
+process.env.CARLOS_FLOW_HOME = HOME
+const MAX = 64 * 1024 // 64KB 阈值：让滚动在测试里立刻发生
+process.env.CARLOS_FLOW_AUDIT_MAX_BYTES = String(MAX)
 
-let pass = 0;
-let fail = 0;
-const check = (name, ok, detail = "") => {
-  if (ok) { pass++; console.log(`  ✓ ${name}${detail ? "  " + detail : ""}`); }
-  else { fail++; console.log(`  ✗ ${name}${detail ? "  " + detail : ""}`); }
-};
+let pass = 0
+let fail = 0
+const check = (name, ok, detail = '') => {
+  if (ok) {
+    pass++
+    console.log(`  ✓ ${name}${detail ? '  ' + detail : ''}`)
+  } else {
+    fail++
+    console.log(`  ✗ ${name}${detail ? '  ' + detail : ''}`)
+  }
+}
 
-const state = await import("../src/state.js");
+const state = await import('../src/state.js')
 
-const shards = () => fs.readdirSync(state.AUDIT_DIR)
-  .filter((n) => /^\d{4}-\d{2}-\d{2}(?:\.\d+)?\.jsonl$/.test(n))
-  .sort((a, b) => {
-    const ka = /\.(\d+)\.jsonl$/.exec(a);
-    const kb = /\.(\d+)\.jsonl$/.exec(b);
-    const da = a.slice(0, 10);
-    const db = b.slice(0, 10);
-    if (da !== db) return da < db ? -1 : 1;
-    return (ka ? Number(ka[1]) : 0) - (kb ? Number(kb[1]) : 0);
-  });
+const shards = () =>
+  fs
+    .readdirSync(state.AUDIT_DIR)
+    .filter((n) => /^\d{4}-\d{2}-\d{2}(?:\.\d+)?\.jsonl$/.test(n))
+    .sort((a, b) => {
+      const ka = /\.(\d+)\.jsonl$/.exec(a)
+      const kb = /\.(\d+)\.jsonl$/.exec(b)
+      const da = a.slice(0, 10)
+      const db = b.slice(0, 10)
+      if (da !== db) return da < db ? -1 : 1
+      return (ka ? Number(ka[1]) : 0) - (kb ? Number(kb[1]) : 0)
+    })
 
 try {
-  const N = 1500;
+  const N = 2200
   for (let i = 0; i < N; i++) {
-    state.audit("run", "roll-session", { kind: "k" + i, payload: "x".repeat(120) });
+    state.audit('run', 'roll-session', {
+      kind: 'k' + i,
+      payload: 'x'.repeat(120),
+    })
   }
-  const files = shards();
-  check("1a. 超过阈值后发生滚动（分片数 > 1）", files.length > 1, `${files.length} 个分片`);
-  const oversized = files.filter((f) => fs.statSync(path.join(state.AUDIT_DIR, f)).size > MAX * 1.5);
-  check("1b. 没有分片明显超过上限（滚动真的生效）", oversized.length === 0,
-    oversized.length ? oversized.slice(0, 2).join(",") : `上限 ${Math.round(MAX / 1024)}KB`);
+  const files = shards()
+  check(
+    '1a. 超过阈值后发生滚动（分片数 > 1）',
+    files.length > 1,
+    `${files.length} 个分片`,
+  )
+  check(
+    '1c. 跨日回归确实覆盖 .9/.10 数值分片边界',
+    files.some((f) => f.endsWith('.9.jsonl')) &&
+      files.some((f) => f.endsWith('.10.jsonl')),
+  )
+  const oversized = files.filter(
+    (f) => fs.statSync(path.join(state.AUDIT_DIR, f)).size > MAX * 1.5,
+  )
+  check(
+    '1b. 没有分片明显超过上限（滚动真的生效）',
+    oversized.length === 0,
+    oversized.length
+      ? oversized.slice(0, 2).join(',')
+      : `上限 ${Math.round(MAX / 1024)}KB`,
+  )
 
-  const v = state.verifyAuditChain();
-  check("2a. 滚动后全链校验通过", v.ok === true && v.broken === 0, `total=${v.total} broken=${v.broken}`);
-  check("2b. 记录总数不缺（滚动不丢行）", v.total === N, `${v.total}/${N}`);
-  check("2c. 分片数如实出现在 byDay 里", v.byDay[0] && v.byDay[0].shards === files.length,
-    `shards=${v.byDay[0] && v.byDay[0].shards}`);
+  const v = state.verifyAuditChain()
+  check(
+    '2a. 滚动后全链校验通过',
+    v.ok === true && v.broken === 0,
+    `total=${v.total} broken=${v.broken}`,
+  )
+  check('2b. 记录总数不缺（滚动不丢行）', v.total === N, `${v.total}/${N}`)
+  check(
+    '2c. 分片数如实出现在 byDay 里',
+    v.byDay[0] && v.byDay[0].shards === files.length,
+    `shards=${v.byDay[0] && v.byDay[0].shards}`,
+  )
 
-  const recs = state.readAudit({ sessionId: "roll-session" });
-  check("3a. readAudit 能读回该日全部记录（含分片）", recs.length === N, `${recs.length}/${N}`);
-  const single = state.verifyAuditChain({ date: files[0].slice(0, 10), fullChain: false });
-  check("3b. 单日验证也覆盖全部分片", single.ok === true && single.total === N, `total=${single.total}`);
+  const recs = state.readAudit({ sessionId: 'roll-session' })
+  check(
+    '3a. readAudit 能读回该日全部记录（含分片）',
+    recs.length === N,
+    `${recs.length}/${N}`,
+  )
+  const single = state.verifyAuditChain({
+    date: files[0].slice(0, 10),
+    fullChain: false,
+  })
+  check(
+    '3b. 单日验证也覆盖全部分片',
+    single.ok === true && single.total === N,
+    `total=${single.total}`,
+  )
 
   // 3c. 历史日期：把今天的分片整体改名成过去日期，再按 date 查
   //     —— 这一步专门守「date 参数静默失效」（变异体 M17：内部改回 localDate()）
   {
-    const today = files[0].slice(0, 10);
-    const past = "2020-01-01";
+    const today = files[0].slice(0, 10)
+    const past = '2020-01-01'
     for (const f of files) {
-      const seq = /\.(\d+)\.jsonl$/.exec(f);
-      const target = seq ? `${past}.${seq[1]}.jsonl` : `${past}.jsonl`;
-      fs.renameSync(path.join(state.AUDIT_DIR, f), path.join(state.AUDIT_DIR, target));
+      const seq = /\.(\d+)\.jsonl$/.exec(f)
+      const target = seq ? `${past}.${seq[1]}.jsonl` : `${past}.jsonl`
+      fs.renameSync(
+        path.join(state.AUDIT_DIR, f),
+        path.join(state.AUDIT_DIR, target),
+      )
     }
-    const pastVerify = state.verifyAuditChain({ date: past, fullChain: false });
-    check("3c. 按历史 date 校验真的读那一天（date 参数不失效）",
-      pastVerify.ok === true && pastVerify.total === N, `total=${pastVerify.total}/${N}（today=${today}）`);
-    const pastRead = state.readAudit({ date: past, sessionId: "roll-session" });
-    check("3d. readAudit 的 date 参数同样生效", pastRead.length === N, `${pastRead.length}/${N}`);
+    const pastVerify = state.verifyAuditChain({ date: past, fullChain: false })
+    check(
+      '3c. 按历史 date 校验真的读那一天（date 参数不失效）',
+      pastVerify.ok === true && pastVerify.total === N,
+      `total=${pastVerify.total}/${N}（today=${today}）`,
+    )
+    const pastRead = state.readAudit({ date: past, sessionId: 'roll-session' })
+    check(
+      '3d. readAudit 的 date 参数同样生效',
+      pastRead.length === N,
+      `${pastRead.length}/${N}`,
+    )
+    // 跨日必须接数值序最后分片，不能重新按字符串序选择 base 或 .9。
+    const tail = pastRead[pastRead.length - 1]
+    const next = state.audit('run', 'roll-session', { kind: '跨日前驱回归' })
+    check('3e. 跨日准确接上最后分片哈希', next.prevHash === tail.hash)
+    check('3f. 跨日滚动链校验通过', state.verifyAuditChain().ok === true)
+    fs.unlinkSync(path.join(state.AUDIT_DIR, `${today}.jsonl`))
     // 改回今天，后面的篡改用例继续在「今天」这条链上做
-    const renamed = fs.readdirSync(state.AUDIT_DIR).filter((n) => n.startsWith(past));
+    const renamed = fs
+      .readdirSync(state.AUDIT_DIR)
+      .filter((n) => n.startsWith(past))
     for (const f of renamed) {
-      const seq = /\.(\d+)\.jsonl$/.exec(f);
-      const target = seq ? `${today}.${seq[1]}.jsonl` : `${today}.jsonl`;
-      fs.renameSync(path.join(state.AUDIT_DIR, f), path.join(state.AUDIT_DIR, target));
+      const seq = /\.(\d+)\.jsonl$/.exec(f)
+      const target = seq ? `${today}.${seq[1]}.jsonl` : `${today}.jsonl`
+      fs.renameSync(
+        path.join(state.AUDIT_DIR, f),
+        path.join(state.AUDIT_DIR, target),
+      )
     }
   }
 
   // 篡改「中间的分片」：跨分片链路必须抓到
-  const mid = files[Math.floor(files.length / 2)];
-  const midPath = path.join(state.AUDIT_DIR, mid);
-  const lines = fs.readFileSync(midPath, "utf8").split("\n");
-  const idx = lines.findIndex((l) => l.includes('"kind":"k7'));
-  lines[idx] = lines[idx].replace('"k7', '"HACKED-7');
-  fs.writeFileSync(midPath, lines.join("\n"), "utf8");
-  const v2 = state.verifyAuditChain();
-  check("4a. 篡改中间分片被抓到", v2.ok === false && v2.broken >= 1, `broken=${v2.broken}`);
-  check("4b. 断链位置指向被改动的分片所在日期",
-    (v2.brokenAt[0] || {}).date === mid.slice(0, 10), JSON.stringify(v2.brokenAt[0] || {}));
+  const mid = files[Math.floor(files.length / 2)]
+  const midPath = path.join(state.AUDIT_DIR, mid)
+  const lines = fs.readFileSync(midPath, 'utf8').split('\n')
+  const idx = lines.findIndex((l) => l.trim())
+  check(
+    '4c. 中间分片存在可篡改的真实记录',
+    idx >= 0,
+    `分片=${mid} 行=${idx + 1}`,
+  )
+  if (idx < 0) throw new Error('中间分片为空，无法执行真实篡改验证')
+  const tampered = JSON.parse(lines[idx])
+  tampered.kind = '已篡改中间记录'
+  lines[idx] = JSON.stringify(tampered)
+  fs.writeFileSync(midPath, lines.join('\n'), 'utf8')
+  const v2 = state.verifyAuditChain()
+  check(
+    '4a. 篡改中间分片被抓到',
+    v2.ok === false && v2.broken >= 1,
+    `broken=${v2.broken}`,
+  )
+  check(
+    '4b. 断链位置指向被改动的分片所在日期',
+    (v2.brokenAt[0] || {}).date === mid.slice(0, 10),
+    JSON.stringify(v2.brokenAt[0] || {}),
+  )
 } finally {
-  try { fs.rmSync(HOME, { recursive: true, force: true }); } catch { /* ignore */ }
+  try {
+    fs.rmSync(HOME, { recursive: true, force: true })
+  } catch {
+    /* ignore */
+  }
 }
 
-console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
-if (fail > 0) process.exit(1);
-console.log("AUDIT_ROLL_OK");
+console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`)
+if (fail > 0) process.exit(1)
+console.log('AUDIT_ROLL_OK')

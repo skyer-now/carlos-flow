@@ -1,635 +1,239 @@
 #!/usr/bin/env node
-// 变异测试：在临时副本上注入退化，确认测试套件能抓住。
-// 目的：验证「激活只打印日志」「闸门失效」「会话撞名」这类退化无法蒙混过关。
-//
-// 用法: node scripts/mutation-check.mjs [源仓路径]
-// 产物: <仓库>/.mutation-report.md（可用 MUTATION_REPORT 覆盖）
-//
-// 跨平台：原先硬编码了某台开发机的本机路径与 Git Bash 路径，CI（ubuntu）必失败。
-// 现在：源仓默认取当前仓库根目录；工作副本/报告路径走临时目录或环境变量；
-// shell 按平台选择（Windows 用 cmd，POSIX 用默认 sh）。
-import { execSync } from "node:child_process";
-import { cpSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
-import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+// 变异只注入独占副本；锚点体检和执行共用同一份定义，不求值源码字符串。
+import { spawn, spawnSync } from 'node:child_process'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { join, resolve, dirname } from 'node:path'
+import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
-const SRC = resolve(process.argv[2] || process.env.MUTATION_SRC || REPO_ROOT);
-const WORK = resolve(process.env.MUTATION_WORK || join(tmpdir(), "carlos-flow-mutant-work"));
-const REPORT = resolve(process.env.MUTATION_REPORT || join(REPO_ROOT, ".mutation-report.md"));
+export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const mutant = (id, desc, file, from, to) => ({ id, desc, file, from, to })
+const gate = /Array\.isArray\(state\.activation_pending\)\s*&&\s*state\.activation_pending\.length > 0/
 
-// 变异定义：id / 描述 / 文件 / 旧文本 / 新文本（精确字符串替换）
-const MUTANTS = [
-  {
-    id: "M1-激活只打印日志",
-    desc: "把 checkTrigger 里的 callMCP 换成假返回（激活只剩日志）",
-    file: "client/carlos.js",
-    // 单行匹配，不受 CRLF/LF 影响；兼容单双引号两种写法
-    pattern: /const r = await callMCP\((['"])tools\/call\1, \{ name: step\.tool, arguments: step\.args \}\);/,
-    to: `const r = { result: { isError: false, content: [{ text: '{"ok":true}' }] } }; // MUTANT`,
-  },
-  {
-    id: "M2-claim闸门失效",
-    desc: "移除 flow_claim 的 activation_pending 闸门",
-    file: "src/index.js",
-    from: `        // 激活占位卡闸门：占位卡未补齐字段时不允许领取派发名额
-        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
-          return fail(guideError(state, "激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
-            "）。请先补齐后重新调用 flow_submit_requirement，再来领取派发名额。"));
-        }`,
-    to: `        // MUTANT: claim 闸门被移除`,
-  },
-  {
-    id: "M3-verdict闸门失效",
-    desc: "移除 flow_verdict 的 activation_pending 闸门（占位卡可记 PASS）",
-    file: "src/index.js",
-    from: `        if (Array.isArray(state.activation_pending) && state.activation_pending.length > 0) {
-          audit("decision", sessionId, {
-            kind: "verdict_denied",
-            reason: "激活占位卡未补齐",
-            pending: state.activation_pending,
-          });
-          return fail(guideError(state, "激活占位卡尚未补齐（待补：" + state.activation_pending.join("、") +
-            "），不能记录裁定。请先补齐后重新调用 flow_submit_requirement。"));
-        }`,
-    to: `        // MUTANT: verdict 闸门被移除`,
-  },  {
-    id: "M4-会话撞名",
-    desc: "去掉 sanitizeSessionId 的哈希后缀（清洗后同形的 id 会撞名）",
-    file: "src/trigger.js",
-    from: `  const suffix = h.toString(16).padStart(8, '0').slice(0, 8);
-  return safe + '-' + suffix;`,
-    to: `  return safe; // MUTANT: 无哈希后缀`,
-  },
-  {
-    id: "M5-scope不算补齐项",
-    desc: "把 scope 从「当前缺失项」里剔除（scope 未补也不算缺）",
-    file: "src/index.js",
-    from: `          ...(!cardHasScope ? ["scope"] : []),`,
-    to: `          ...(false ? ["scope"] : []), // MUTANT: scope 未补也不算缺`,
-  },
-  {
-    id: "M6-半补齐绕过闸门",
-    desc: "已激活会话改成「只要提交就解闸」（移除幂等派生）",
-    file: "src/index.js",
-    // 锚点必须**唯一且足够长**：曾经 M6/M9 共用同一段 from，
-    // 该段一改缩进/注释 → 两个变异体同时 SKIP（变异测试失去守护却仍报 13/13）。
-    // 现在带上 else-if 分支的专属上下文。
-    from: `          } else if (wasActivatedBefore) {
-            // 该会话开过占位卡：继续按**当前卡片实际缺什么**锁定。
-            // 幂等派生（而不是「上一轮 pending 传递」），所以即使并发丢更新，
-            // 落盘的 pending 永远与同一份落盘卡片一致，不会出现「卡片空却 pending=[]」。
-            activationPending = currentMissing;
-          } else {`,
-    to: `          } else if (wasActivatedBefore) {
-            // 该会话开过占位卡：继续按**当前卡片实际缺什么**锁定。
-            // 幂等派生（而不是「上一轮 pending 传递」），所以即使并发丢更新，
-            // 落盘的 pending 永远与同一份落盘卡片一致，不会出现「卡片空却 pending=[]」。
-            activationPending = []; // MUTANT: 只要提交就解闸
-          } else {`,
-  },
-  {
-    id: "M9-闸门派生回退",
-    desc: "把「普通卡分支」的待补项改回上一轮 pending 传递（并发丢更新时会失效）",
-    file: "src/index.js",
-    // 锚点与 M6 区分：M6 改「已激活会话」的赋值，M9 改「普通卡」分支的赋值。
-    from: `          } else {
-            // 普通卡（未标 activation，且本会话从未激活过）：不上闸门。
-            // 档位必填项已由 validateCard 按 tier 强制（read_only 只要 goal+quote），
-            // 此处再加闸门会误伤 T1 只读调研。
-            activationPending = [];`,
-    to: `          } else {
-            // 普通卡（未标 activation，且该会话从未激活过）：不上闸门。
-            // 档位必填项已由 validateCard 按 tier 强制（read_only 只要 goal+quote），
-            // 此处再加闸门会误伤 T1 只读调研。
-            activationPending = prevPendingBefore; // MUTANT: 回退到状态传递`,
-  },
-  {
-    id: "M10-普通卡也上闸",
-    desc: "普通卡（无 activation 且此前未被锁）也被上闸 —— 会误伤 T1 只读调研",
-    file: "src/index.js",
-    // 锚点从 2 行加长到 4 行：原来的 from 过短，任何相邻代码改动都可能连带改写它。
-    from: `            // 此处再加闸门会误伤 T1 只读调研。
-            activationPending = [];
-          }`,
-    to: `            // 此处再加闸门会误伤 T1 只读调研。
-            activationPending = currentMissing; // MUTANT: 普通卡也上闸
-          }`,
-  },
-  {
-    id: "M11-占位卡硬编码三项",
-    desc: "占位卡待补项退回硬编码三项（服务端派生失效）",
-    file: "src/index.js",
-    from: `            activationPending = currentMissing;
-          } else if (wasActivatedBefore) {`,
-    to: `            activationPending = ["scope", "acceptance", "verify.cmd"]; // MUTANT: 硬编码
-          } else if (wasActivatedBefore) {`,
-  },
-  {
-    id: "M12-跨进程锁失效",
-    desc: "把锁文件改成非排他创建（'wx' → 'a'），跨进程排他性失效 → 读-改-写重新变成非原子",
-    file: "src/state.js",
-    from: `      const fd = fs.openSync(lockFile, "wx");`,
-    to: `      const fd = fs.openSync(lockFile, "a"); // MUTANT: 非排他`,
-  },
-  {
-    id: "M13-只读意图误判",
-    desc: "把只读意图判定改为「命中只读词就算只读」（含改动动词时误判 → 会永久锁死）",
-    file: "src/trigger.js",
-    from: `  const hasMutating = mut.some((w) => s.includes(String(w).toLowerCase()));
-  return !hasMutating;`,
-    to: `  const hasMutating = mut.some((w) => s.includes(String(w).toLowerCase()));
-  return true; // MUTANT: 无视改动动词`,
-  },
-  {
-    id: "M14-审计链断链",
-    desc: "审计链去掉 prevHash 链接（每条记录各自独立哈希 → 删改中间记录也不会被发现）",
-    file: "src/state.js",
-    from: `    rec.prevHash = prev;
-    rec.hash = computeAuditHash(rec, prev);`,
-    to: `    rec.prevHash = prev;
-    rec.hash = computeAuditHash(rec, ""); // MUTANT: 断开链式链接`,
-  },
-  {
-    id: "M15-审计链校验恒真",
-    desc: "verifyAuditChain 永远返回 ok:true → 任何篡改都发现不了",
-    file: "src/state.js",
-    // 锚点跟随流式改造更新（2026-11-18）：单日验证的返回行。
-    // 语义不变：把 broken 判定改成恒真，让任何篡改都发现不了。
-    from: `  return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: broken === 0, total, broken, legacy, brokenAt, file: shards[shards.length - 1], mode: auditHashMode() };`,
-    to: `  return { mode: "pro", mode_ts: 0, claimed_profile: null, ok: true, total, broken, legacy, brokenAt, file: shards[shards.length - 1], mode: auditHashMode() }; // MUTANT: 恒真`,
-  },
-  {
-    id: "M16-越界检查退回 fail-open",
-    desc: "enforceScope 遇到任何越界都返回 ok:true → 越界改动直接放行",
-    file: "src/dispatch.js",
-    from: `  if (violations.length > 0) {
-    const msg = \`越界改动（超出 scope）：\${violations.join(", ")}\`;
-    return { ok: false, violations, checked: diffFiles.slice(), message: formatError(msg) };
-  }`,
-    to: `  if (violations.length > 0) {
-    const msg = \`越界改动（超出 scope）：\${violations.join(", ")}\`;
-    return { ok: true, violations, checked: diffFiles.slice(), message: formatError(msg) }; // MUTANT: fail-open
-  }`,
-  },
-  {
-    id: "M17-date 参数失效",
-    desc: "readAudit 用 localDate() 代替 rawDate → date 参数静默失效（读到的永远是今天）",
-    file: "src/state.js",
-    // 锚点跟随滚动分片更新（2026-11-18）：读哪个日期由 rawDate 决定（现经 auditsDayFilesOf）。
-    // 语义不变：改成 localDate() → 传 date 查历史时仍读今天，静默失效。
-    from: `  const shards = auditDayFilesOf(rawDate).map((f) => path.join(AUDIT_DIR, f));`,
-    to: `  const shards = auditDayFilesOf(localDate()).map((f) => path.join(AUDIT_DIR, f)); // MUTANT: date 参数静默失效`,
-  },
-  {
-    id: "M7-空scope fail-open",
-    desc: "enforceScope 在空 scope 时直接返回 ok:true（任意路径都算未越界）",
-    file: "src/dispatch.js",
-    from: `  if (!Array.isArray(scope) || scope.length === 0) {
-    return {
-      ok: false,
-      violations: diffFiles.slice(),
-      checked: diffFiles.slice(),
-      message: formatError(\`越界改动（卡片 scope 为空，不允许修改任何文件）：\${diffFiles.join(", ")}\`),
-    };
-  }`,
-    to: `  if (!Array.isArray(scope) || scope.length === 0) {
-    return { ok: true, violations: [] }; // MUTANT: fail-open
-  }`,
-  },
-  {
-    id: "M21-快照不去重",
-    desc: "快照写盘时无视已存在的同内容 blob（每次都重新写一份）",
-    file: "src/dispatch.js",
-    from: `      if (fs.existsSync(backup)) {
-        deduped = true; // 同内容已存在：不重复写盘
-      } else {
-        fs.writeFileSync(backup, buf);
-      }`,
-    to: `      fs.writeFileSync(backup, buf); // MUTANT: 每次都重写（去重失效）`,
-  },
-  {
-    id: "M22-快照不裁剪",
-    desc: "快照写完不裁剪（每个文件的历史版本无限堆积）",
-    file: "src/dispatch.js",
-    from: `  try { pruneSnapshots(sid); } catch { /* 裁剪失败不影响快照本身 */ }`,
-    to: `  // MUTANT: 不裁剪，历史版本无限堆积`,
-  },
-  {
-    id: "M23-审计不滚动",
-    desc: "审计写入忽略大小上限（永不滚动，单文件无限增长）",
-    file: "src/state.js",
-    from: `  if (size < AUDIT_MAX_BYTES) return last;`,
-    to: `  if (true) return last; // MUTANT: 永不滚动`,
-  },
-  {
-    id: "M24-校验只读首个分片",
-    desc: "审计校验只读每天的第一个分片（滚动出来的分片被跳过 → 篡改可藏）",
-    file: "src/state.js",
-    from: `  hits.sort((a, b) => a.seq - b.seq);
-  return hits.map((x) => x.name);`,
-    to: `  hits.sort((a, b) => a.seq - b.seq);
-  if (hits.length > 1) hits.length = 1; // MUTANT: 只读首个分片
-  return hits.map((x) => x.name);`,
-  },
-  {
-    id: "M25-输出不截断",
-    desc: "命令输出不再截断（几十 MB 日志直接把内存打爆）",
-    file: "src/dispatch.js",
-    from: `  if (bytes <= keepBytes * 2) return { text: s, bytes, truncated: false };`,
-    to: `  return { text: s, bytes, truncated: false }; // MUTANT: 永不截断`,
-  },
-  {
-    id: "M26-超时只杀外壳",
-    desc: "超时回收退回 child.kill（Windows 只杀 cmd.exe，命令派生的 node 变孤儿）",
-    file: "src/dispatch.js",
-    from: `    if (process.platform === "win32") {
-      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {`,
-    to: `    if (process.platform === "win32") {
-      child.kill("SIGKILL"); return; // MUTANT: 只杀外壳
-      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {`,
-  },
-  {
-    id: "M18-项目级敏感规则不生效",
-    desc: "isSensitive 在判定完内置基线后直接 return false（.carlos.json 追加的规则全部失效）",
-    file: "src/protocol.js",
-    from: `  // 项目级扩展（只能追加；为空时零开销）
-  if (EXTRA_SENSITIVE.names.size && EXTRA_SENSITIVE.names.has(base)) return true;`,
-    to: `  return false; // MUTANT: 项目级敏感规则不生效`,
-  },
-  {
-    id: "M19-负对照还原不核对",
-    desc: "把还原后的逐文件摘要核对换成恒真（工作区可能停在改动前却报 ok）",
-    file: "src/dispatch.js",
-    from: `    restoreReport = verifyRestoredState(saved, currentDigests);`,
-    to: `    restoreReport = { ok: true, checked: 0, mismatched: [], unreadable: [] }; // MUTANT: 不核对`,
-  },
-  {
-    id: "M20-死锁号不回收",
-    desc: "锁持有者 pid 已死（ESRCH）时不回收 → 崩溃后同一会话永久卡死",
-    file: "src/state.js",
-    from: `              if (err && err.code === "ESRCH") holderDead = true;`,
-    to: `              if (false) holderDead = true; // MUTANT: 不回收死锁号`,
-  },
-  {
-    id: "M8-未派发可记PASS",
-    desc: "移除 flow_verdict 的 dispatch_count 检查（未派发也能记 PASS）",
-    file: "src/index.js",
-    from: `        if (verdict === "PASS" && !(Number(state.dispatch_count) > 0)) {`,
-    to: `        if (false) { // MUTANT: 允许未派发就记 PASS`,
-  },
-];
+export const MUTANTS = [
+  mutant('M1-激活只打印日志', '激活调用改为假成功', 'client/carlos.js', "const r = await callMCP('tools/call', { name: step.tool, arguments: step.args });", `const r = { result: { isError: false, content: [{ text: '{"ok":true}' }] } };`),
+  mutant('M2-claim闸门失效', '领取不再检查占位卡', 'src/index.js', /\/\/ 激活占位卡闸门：占位卡未补齐字段时不允许领取派发名额\s*if \(\s*Array\.isArray\(state\.activation_pending\)\s*&&\s*state\.activation_pending\.length > 0/, (s) => s.replace(gate, 'false')),
+  mutant('M3-verdict闸门失效', '裁定不再检查占位卡', 'src/index.js', /if \(\s*Array\.isArray\(state\.activation_pending\)\s*&&\s*state\.activation_pending\.length > 0\s*\) \{\s*audit\('decision', sessionId, \{\s*kind: 'verdict_denied'/, (s) => s.replace(gate, 'false')),
+  mutant('M4-会话撞名', '删除清洗后会话哈希后缀', 'src/trigger.js', "return safe + '-' + suffix;", 'return safe;'),
+  mutant('M5-scope不算补齐项', '缺失项忽略scope', 'src/index.js', "...(!cardHasScope ? ['scope'] : []),", "...(false ? ['scope'] : []),"),
+  mutant('M6-半补齐绕过闸门', '曾激活会话提交就解闸', 'src/index.js', /else if \(wasActivatedBefore\) \{[\s\S]*?activationPending = currentMissing/, (s) => s.replace('activationPending = currentMissing', 'activationPending = []')),
+  mutant('M9-闸门派生回退', '普通卡回退上一轮pending传递', 'src/index.js', /\/\/ 此处再加闸门会误伤 T1 只读调研。\s*activationPending = \[\]/, (s) => s.replace('activationPending = []', 'activationPending = prevPendingBefore')),
+  mutant('M10-普通卡也上闸', '普通卡也派生待补项', 'src/index.js', /\/\/ 普通卡（未标 activation，且本会话从未激活过）：不上闸门。[\s\S]*?activationPending = \[\]/, (s) => s.replace('activationPending = []', 'activationPending = currentMissing')),
+  mutant('M11-占位卡硬编码三项', '占位卡不再按实际内容派生', 'src/index.js', /if \(isActivation\) \{\s*\/\/ 显式占位卡：待补项 = 服务端从这张卡实际缺什么推导出来的。\s*activationPending = currentMissing/, (s) => s.replace('activationPending = currentMissing', "activationPending = ['scope', 'acceptance', 'verify.cmd']")),
+  mutant('M12-跨进程锁失效', '非排他创建锁', 'src/state.js', "const fd = fs.openSync(lockFile, 'wx')", "const fd = fs.openSync(lockFile, 'a')"),
+  mutant('M13-只读意图误判', '无视改动动词', 'src/trigger.js', 'return !hasMutating;', 'return true;'),
+  mutant('M14-审计链断链', '记录哈希不链接上一条', 'src/state.js', 'rec.hash = computeAuditHash(rec, prev)', "rec.hash = computeAuditHash(rec, '')"),
+  mutant('M15-审计链校验恒真', '单日链校验忽略损坏计数', 'src/state.js', /ok: broken === 0,(?=\s*total,\s*broken,\s*legacy,\s*brokenAt,\s*file: shards\[shards.length - 1\])/, 'ok: true,'),
+  mutant('M16-越界检查退回 fail-open', '越界改动放行', 'src/dispatch.js', /if \(violations.length > 0\) \{[\s\S]*?ok: false,/, (s) => s.replace('ok: false,', 'ok: true,')),
+  mutant('M17-date 参数失效', '历史读取始终读今天', 'src/state.js', 'const files = auditDayFilesOf(rawDate).map((f) => path.join(AUDIT_DIR, f))', 'const files = auditDayFilesOf(localDate()).map((f) => path.join(AUDIT_DIR, f))'),
+  mutant('M7-空scope fail-open', '空scope允许任意改动', 'src/dispatch.js', /if \(!Array\.isArray\(scope\) \|\| scope.length === 0\) \{\s*return \{\s*ok: false,/, (s) => s.replace('ok: false,', 'ok: true,')),
+  mutant('M21-快照不去重', '同内容快照再次写盘且不标记去重', 'src/dispatch.js', 'deduped = true', 'fs.writeFileSync(backup, buf)'),
+  mutant('M22-快照不裁剪', '快照历史不再裁剪', 'src/dispatch.js', 'pruneSnapshotsLocked(bdir, SNAPSHOT_KEEP_VERSIONS)', 'void 0'),
+  mutant('M23-审计不滚动', '忽略大小阈值', 'src/state.js', 'if (size < AUDIT_MAX_BYTES) return last', 'if (true) return last'),
+  mutant('M24-校验只读首个分片', '跳过后续审计分片', 'src/state.js', 'hits.sort((a, b) => a.seq - b.seq)', 'hits.sort((a, b) => a.seq - b.seq)\n  if (hits.length > 1) hits.length = 1'),
+  mutant('M25-输出不截断', '忽略输出大小阈值', 'src/dispatch.js', 'if (bytes <= keepBytes * 2) return { text: s, bytes, truncated: false }', 'return { text: s, bytes, truncated: false }'),
+  mutant('M26-超时只杀外壳', '超时仅杀外壳不杀进程树', 'src/dispatch.js', /if \(!child \|\| !child.pid\) return\s*if \(process.platform === 'win32'\)/, "if (!child || !child.pid) return\n    child.kill('SIGKILL')\n    return\n    if (process.platform === 'win32')"),
+  mutant('M18-项目级敏感规则不生效', '忽略项目追加敏感规则', 'src/protocol.js', '// 项目级扩展（只能追加；为空时零开销）', 'return false; // 忽略项目追加敏感规则'),
+  mutant('M19-负对照还原不核对', '还原摘要核对恒真', 'src/dispatch.js', 'restoreReport = verifyRestoredState(saved, currentDigests)', 'restoreReport = { ok: true, checked: 0, mismatched: [], unreadable: [] }'),
+  mutant('M20-死锁号不回收', '忽略已死锁持有者', 'src/state.js', "if (err && err.code === 'ESRCH') holderDead = true", 'if (false) holderDead = true'),
+  mutant('M8-未派发可记PASS', '裁定不再检查真实派发计数', 'src/index.js', "if (verdict === 'PASS' && !(Number(state.dispatch_count) > 0)) {", 'if (false) {'),
+]
 
-function sh(cmd, cwd, env = {}) {
-  try {
-    // Windows 下走 Git Bash（npm 是 .cmd 包装器），POSIX 下用系统 sh
-    const isWin = process.platform === "win32";
-    const shell = isWin ? "C:/Program Files/Git/bin/bash.exe" : "/bin/sh";
-    return execSync(cmd, {
-      cwd,
-      encoding: "utf8",
-      shell,
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 600000,
-    });
-  } catch (e) {
-    return (e.stdout || "") + (e.stderr || "") + "\nEXIT=" + (e.status ?? "err");
-  }
+export function inject(m, source) {
+  const text = source.replace(/\r\n/g, '\n')
+  const re = m.from instanceof RegExp
+    ? new RegExp(m.from.source, 'g')
+    : new RegExp(m.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
+  const matches = [...text.matchAll(re)]
+  if (matches.length !== 1) throw new Error(`${m.id}: 锚点匹配 ${matches.length} 次（要求唯一）`)
+  const hit = matches[0]
+  const replacement = typeof m.to === 'function' ? m.to(hit[0]) : m.to
+  if (replacement === hit[0]) throw new Error(`${m.id}: 未注入实际变化`)
+  return text.slice(0, hit.index) + replacement + text.slice(hit.index + hit[0].length)
 }
 
-const lines = [];
-lines.push("# 变异测试报告");
-lines.push("");
-lines.push("- 源仓库：`carlos-flow`（单包，工作副本路径已改写为占位符）");
-lines.push(`- 变异副本：临时目录（用完自动删除，不入库）`);
-lines.push(`- 目的：确认测试套件能抓住「激活只打印日志」「闸门失效」「会话撞名」等退化`);
-lines.push("");
+export function checkSyntax(file) {
+  const r = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8', windowsHide: true })
+  if (r.error || r.signal || r.status !== 0) throw new Error(`注入语法无效：${r.stderr || r.error || r.signal}`)
+}
 
-// ---- 工具：安全删目录 / 清理残留 bridge ------------------------------------
-// Windows 上临时目录里若有后台 bridge 进程占用文件，rmSync 会抛 EBUSY 直接崩溃。
-// 这里改成「重试若干次 → 仍失败则给出可读错误并改用新工作目录继续」，不裸崩。
-const rmDirSafe = (dir) => {
-  for (let i = 0; i < 6; i++) {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-      return true;
-    } catch (e) {
-      const code = e && e.code;
-      if (code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY") {
-        // 占用的进程还没退出：等一下再试
-        try { execSync(process.platform === "win32" ? "ping -n 2 127.0.0.1 >nul" : "sleep 1"); } catch { /* ignore */ }
-        continue;
-      }
-      console.error(`⚠ 清理临时目录失败（${dir}）：${e && e.message ? e.message : e}`);
-      return false;
-    }
-  }
-  console.error(
-    `⚠ 清理临时目录失败（${dir}）：Windows 上仍有进程占用该目录（EBUSY）。` +
-    `已改用新的工作目录继续，避免整轮变异测试崩溃。`
-  );
-  return false;
-};
+// 只创建新目录；已有路径无论属于谁均不删除或复用。全部证据保留供复核。
+export function freshWorkspace(prefix = 'carlos-flow-mutation-') {
+  const parent = resolve(process.env.MUTATION_WORK || tmpdir())
+  mkdirSync(parent, { recursive: true })
+  return mkdtempSync(join(parent, prefix))
+}
 
-// 测试期间由副本拉起的 bridge 会写 <dir>/bridge-<port>.pid；
-// 只清理**本次新增**的 pid 文件（不碰用户自己的 bridge）。
-const bridgePidFiles = (dir) => {
-  try {
-    return readdirSync(dir).filter((f) => /^bridge-\d+\.pid$/.test(f));
-  } catch {
-    return [];
-  }
-};
-const killBridge = (pid) => {
-  try {
-    if (process.platform === "win32") {
-      execSync(`taskkill /PID ${pid} /T /F`, { stdio: "ignore" });
+const SUITES = ['e2e', 'trigger', 'concurrency', 'scope', 'audit', 'sensitive', 'lock', 'falsify', 'hardening', 'cas', 'roll']
+
+const COPY_NAMES = ['src', 'client', 'bridge', 'test', 'scripts', 'package.json', 'package-lock.json', 'README.md', 'README.zh.md', 'README.en.md', 'CHANGELOG.md', 'RELEASE_NOTES.md']
+
+function fingerprint(repo) {
+  const hashes = {}
+  const visit = (name) => {
+    const file = join(repo, name)
+    if (statSync(file).isDirectory()) {
+      for (const child of readdirSync(file).sort()) visit(`${name}/${child}`)
     } else {
-      process.kill(Number(pid), "SIGTERM");
+      hashes[name] = createHash('sha256').update(readFileSync(file)).digest('hex')
     }
-    return true;
-  } catch {
-    return false; // 进程已退出
   }
-};
-const cleanupBridges = (dir, before) => {
-  for (const f of bridgePidFiles(dir)) {
-    if (before && before.has(f)) continue; // 源仓已存在的 pid 文件（如用户自己的 bridge）绝不碰
-    try {
-      const pid = readFileSync(join(dir, f), "utf8").trim();
-      if (/^\d+$/.test(pid) && killBridge(pid)) {
-        console.log(`  [cleanup] 已终止残留 bridge（pid=${pid}, ${f}）`);
+  for (const name of COPY_NAMES) visit(name)
+  return hashes
+}
+
+function copyRepo(src, dst) {
+  mkdirSync(dst)
+  // 不读取插件部署清单、宿主配置、历史证据；仅复制这些测试所需代码。
+  for (const name of COPY_NAMES) {
+    cpSync(join(src, name), join(dst, name), { recursive: true })
+  }
+  if (existsSync(join(src, 'node_modules'))) cpSync(join(src, 'node_modules'), join(dst, 'node_modules'), { recursive: true })
+}
+
+// 异步等待关闭事件：同步超时会阻塞事件循环，且只结束直接进程。
+export function runSuiteCommand(command, args, { cwd, env, timeout = 600000, maxBuffer = 64 * 1024 * 1024 } = {}) {
+  return new Promise((resolveResult, rejectResult) => {
+    const win = process.platform === 'win32'
+    const child = spawn(command, args, { cwd, env, windowsHide: true, detached: !win, stdio: ['ignore', 'pipe', 'pipe'] })
+    const chunks = { stdout: [], stderr: [] }
+    const bytes = { stdout: 0, stderr: 0 }
+    let error
+    let cleanup
+    let cleanupError
+    let timer
+    const stop = (reason) => {
+      if (cleanup) return
+      error = reason
+      clearTimeout(timer)
+      // 在关闭事件返回结果之前，必须等待整树回收工具退出。
+      cleanup = Promise.resolve().then(() => {
+        if (!child.pid) return
+        if (!win) {
+          try { process.kill(-child.pid, 'SIGKILL') } catch (err) {
+            if (err.code !== 'ESRCH') throw err
+          }
+          return
+        }
+        return new Promise((done, reject) => {
+          const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+          const killTimer = setTimeout(() => {
+            killer.kill('SIGKILL')
+            reject(new Error('整树回收工具超时'))
+          }, 10000)
+          killer.once('error', (err) => {
+            clearTimeout(killTimer)
+            reject(err)
+          })
+          killer.once('close', (code) => {
+            clearTimeout(killTimer)
+            if (code === 0) done()
+            else reject(new Error(`整树回收失败：${code}`))
+          })
+        })
+      }).catch((err) => {
+        cleanupError = new Error(`${reason.message}；${err.message}`)
+        child.kill('SIGKILL')
+      })
+    }
+    for (const which of ['stdout', 'stderr']) {
+      child[which].on('data', (data) => {
+        bytes[which] += data.length
+        if (bytes[which] <= maxBuffer) chunks[which].push(data)
+        else stop(new Error(`${which} 超出输出上限`))
+      })
+    }
+    timer = setTimeout(() => stop(new Error(`套件超时 (${timeout}ms)`)), timeout)
+    child.once('error', (err) => {
+      error = err
+      clearTimeout(timer)
+    })
+    child.once('close', async (status, signal) => {
+      clearTimeout(timer)
+      await cleanup
+      if (cleanupError) {
+        rejectResult(cleanupError)
+        return
       }
-    } catch {
-      /* ignore */
-    }
-  }
-};
-
-// 基线：源仓里已存在的 bridge pid 文件（用户自己开的、或上一轮遗留的）。
-// 工作目录是从源仓复制出来的，里面的 pid 文件天然都在这个集合里 → 只有**本轮新产生**的
-// 端口对应的 pid 文件才会被清理，绝不会误杀源仓/用户已在运行的 bridge。
-const SRC_BRIDGES = new Set(bridgePidFiles(SRC));
-
-// 每个变异体的 BRIDGE_PORT 基准（可用 MUTATION_PORT_BASE 调整）。
-// 注意：**不要并发跑两个 mutation-check 实例** —— 端口段固定，并发实例会互相抢端口，
-// 导致套件启动失败/结果失真（表现为 concurrency 套件输出异常）。
-const PORT_BASE = Number(process.env.MUTATION_PORT_BASE || 20100);
-
-// 门禁加固三件套（敏感规则 / 状态锁 / 负对照还原）也纳入变异守护：
-// 它们各自有独立回归套件，不跑就等于「新守卫没被证明有效」。
-const SUITES =
-  "npm run test:e2e 2>&1; echo E2E_EXIT=$?; " +
-  "npm run test:trigger 2>&1; echo TR_EXIT=$?; " +
-  "npm run test:concurrency 2>&1; echo CONC_EXIT=$?; " +
-  "npm run test:scope 2>&1; echo SCOPE_EXIT=$?; " +
-  "npm run test:audit 2>&1; echo AUDIT_EXIT=$?; " +
-  "npm run test:sensitive 2>&1; echo SENS_EXIT=$?; " +
-  "npm run test:lock 2>&1; echo LOCK_EXIT=$?; " +
-  "npm run test:falsify 2>&1; echo FALSIFY_EXIT=$?; " +
-  "npm run test:hardening 2>&1; echo HARDENING_EXIT=$?; " +
-  "npm run test:cas 2>&1; echo CAS_EXIT=$?; " +
-  "npm run test:roll 2>&1; echo ROLL_EXIT=$?";
-
-const base = sh(SUITES, SRC, {
-  CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", "base"),
-});
-const baseE2e = /════ 结果: (\d+) 通过 \/ (\d+) 失败/.exec(base);
-const baseTr = /总测试数: (\d+)[\s\S]*?✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(base);
-const baseConc = /✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(base.slice(base.lastIndexOf("跨进程并发")));
-// 三条加固套件用各自的 OK 标记判定「真的跑通了」（不是崩在半路）
-const baseSens = /SENSITIVE_CONFIG_OK/.test(base);
-const baseLock = /STATE_LOCK_OK/.test(base);
-const baseFalsify = /FALSIFY_RESTORE_OK/.test(base);
-const baseHardening = /HARDENING_OK/.test(base);
-const baseCas = /VERIFY_CAS_OK/.test(base);
-const baseRoll = /AUDIT_ROLL_OK/.test(base);
-
-// 基线必须全绿：否则每个变异体「注入后仍然失败」会被误判成「被抓住」，
-// 脚本就会在基线本身是红的情况下报「全部被抓住」并 exit 0（假绿）。
-const baseProblems = [];
-if (!baseE2e) baseProblems.push("e2e 未取到结果");
-else if (Number(baseE2e[2]) > 0) baseProblems.push(`e2e ${baseE2e[2]} 条失败`);
-if (!baseTr) baseProblems.push("trigger 未取到结果");
-else if (Number(baseTr[3]) > 0) baseProblems.push(`trigger ${baseTr[3]} 条失败`);
-if (!baseConc) baseProblems.push("concurrency 未取到结果");
-else if (Number(baseConc[2]) > 0) baseProblems.push(`concurrency ${baseConc[2]} 条失败`);
-if (!baseSens) baseProblems.push("sensitive 未跑通");
-if (!baseLock) baseProblems.push("lock 未跑通");
-if (!baseFalsify) baseProblems.push("falsify 未跑通");
-if (!baseHardening) baseProblems.push("hardening 未跑通");
-if (!baseCas) baseProblems.push("cas 未跑通");
-if (!baseRoll) baseProblems.push("roll 未跑通");
-const baseGreen = baseProblems.length === 0;
-
-lines.push(`## 基线（未变异）`);
-lines.push("");
-lines.push(`- e2e：${baseE2e ? `${baseE2e[1]} 通过 / ${baseE2e[2]} 失败` : "未取到"}`);
-lines.push(`- trigger：${baseTr ? `${baseTr[2]} 通过 / ${baseTr[3]} 失败` : "未取到"}`);
-lines.push(`- concurrency：${baseConc ? `${baseConc[1]} 通过 / ${baseConc[2]} 失败` : "未取到"}`);
-lines.push("");
-if (!baseGreen) {
-  lines.push(`> ❌ **基线不绿**（${baseProblems.join("；")}）——基线红时无法区分「变异被抓住」与「基线本来就红」，`);
-  lines.push(`> 本次变异结果**不可信**，脚本已以退出码 1 终止。请先修好基线再跑变异测试。`);
-  lines.push("");
-  writeFileSync(REPORT, lines.join("\n") + "\n", "utf8");
-  console.error(`✗ 基线不绿：${baseProblems.join("；")}`);
-  console.error("  基线红时，任何变异体都会「注入后仍然失败」→ 会被误判成被抓住（假绿）。");
-  console.error("  请先修复基线（见报告 " + REPORT + "）。");
-  process.exit(1);
+      resolveResult({ status, signal, error, stdout: Buffer.concat(chunks.stdout).toString('utf8'), stderr: Buffer.concat(chunks.stderr).toString('utf8') })
+    })
+  })
 }
 
-const results = [];
-
-let workDir = WORK;
-
-for (const [mi, m] of MUTANTS.entries()) {
-  // 删目录失败（Windows 上后台 bridge 占用 → EBUSY）时不裸崩：换新工作目录继续
-  if (!rmDirSafe(workDir)) workDir = WORK + "-" + (mi + 1);
-  mkdirSync(workDir, { recursive: true });
-  cpSync(SRC, workDir, {
-    recursive: true,
-    filter: (src) => !src.includes("node_modules") && !src.includes(".git"),
-  });
-  // 复用依赖（必须成功，否则 bridge 找不到 MCP SDK，测试会全超时）
-  const nm = join(workDir, "node_modules");
-  if (!existsSync(nm)) {
-    // 优先 junction/symlink（快）；POSIX 上若不支持则退化为拷贝（CI 稳但慢）
-    let linked = false;
-    try {
-      symlinkSync(join(SRC, "node_modules"), nm, process.platform === "win32" ? "junction" : "dir");
-      linked = true;
-    } catch (e) {
-      console.warn("symlink 失败，退化为拷贝 node_modules：", e.message);
-    }
-    if (!linked) {
-      try {
-        cpSync(join(SRC, "node_modules"), nm, { recursive: true, dereference: true });
-      } catch (e2) {
-        console.error("✗ 无法准备 node_modules（symlink 与拷贝均失败）：", e2.message);
-        process.exit(1);
-      }
-    }
+async function runSuites(repo, root, label, port) {
+  const state = join(root, label)
+  mkdirSync(state)
+  const env = { ...process.env }
+  for (const key of ['HOME', 'USERPROFILE', 'CARLOS_FLOW_HOME', 'npm_config_cache', 'NPM_CONFIG_CACHE', 'TMP', 'TEMP', 'TMPDIR']) {
+    env[key] = join(state, key.toLowerCase())
+    mkdirSync(env[key], { recursive: true })
   }
-
-  const target = join(workDir, m.file);
-  // 统一换行符：仓库里 index.js 等是 CRLF，trigger.js 等是 LF，不归一化会匹配不上
-  const text = readFileSync(target, "utf8").replace(/\r\n/g, "\n");
-  let mutated;
-  if (m.pattern) {
-    if (!m.pattern.test(text)) {
-      results.push({ ...m, verdict: "SKIP", detail: "未匹配到变异点（源码已变）" });
-      lines.push(`## ${m.id}`);
-      lines.push("");
-      lines.push("- 结果：**SKIP** —— 未匹配到变异点");
-      lines.push("");
-      continue;
-    }
-    mutated = text.replace(m.pattern, m.to);
-  } else {
-    if (!text.includes(m.from)) {
-      results.push({ ...m, verdict: "SKIP", detail: "未匹配到变异点（源码已变）" });
-      lines.push(`## ${m.id}`);
-      lines.push("");
-      lines.push("- 结果：**SKIP** —— 未匹配到变异点");
-      lines.push("");
-      continue;
-    }
-    mutated = text.split(m.from).join(m.to);
+  env.CARLOS_FLOW_MCP_ROOT = repo
+  env.BRIDGE_PORT = String(port)
+  const results = []
+  for (const suite of SUITES) {
+    const started = Date.now()
+    console.log(`[${label}] 开始 test:${suite}`)
+    const win = process.platform === 'win32'
+    const r = await runSuiteCommand(win ? 'cmd.exe' : 'npm', win ? ['/d', '/s', '/c', `npm run test:${suite}`] : ['run', `test:${suite}`], {
+      cwd: repo, env, timeout: 600000, maxBuffer: 64 * 1024 * 1024,
+    })
+    const output = (r.stdout || '') + (r.stderr || '')
+    const seconds = (Date.now() - started) / 1000
+    writeFileSync(join(state, `${suite}.log`), output + `\n真实退出码=${r.status} 信号=${r.signal} 错误=${r.error || ''}\n耗时=${seconds}s\n`)
+    // 语法、超时、启动错误不是有效检出；异常保留而不粉饰为通过。
+    // 非零必须有测试断言或失败用例证据，普通启动报错不能冒充检出。
+    const failureEvidence = /AssertionError|✗|❌\s*失败:\s*[1-9]|结果:.*[1-9]\d* 失败/.test(output)
+    const invalid = !!r.error || !!r.signal || r.status === null || /SyntaxError:|MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND/.test(output) || (r.status !== 0 && !failureEvidence)
+    results.push({ suite, status: r.status, invalid, failureEvidence, seconds })
+    console.log(`[${label}] test:${suite} exit=${r.status} ${seconds}s${invalid ? '（无效执行）' : ''}`)
   }
-  writeFileSync(target, mutated, "utf8");
-
-  const out = sh(SUITES, workDir, {
-    CARLOS_FLOW_HOME: join(tmpdir(), "carlos-flow-mutant-home", m.id.replace(/[^A-Za-z0-9]/g, "_")),
-    // 每个变异体用**独立端口**：否则会复用上一轮副本拉起的旧 bridge，
-    // 旧 bridge 内存里跑的是旧代码 → 测试结果失真（可能假绿 / 假红）。
-    BRIDGE_PORT: String(PORT_BASE + mi),
-  });
-  const e2eFail = /════ 结果: (\d+) 通过 \/ (\d+) 失败/.exec(out);
-  const trFail = /总测试数: (\d+)[\s\S]*?✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(out);
-  const concFail = /✅ 通过: (\d+)[\s\S]*?❌ 失败: (\d+)/.exec(out.slice(out.lastIndexOf("跨进程并发")));
-
-  // fail-closed：套件**没跑起来**（输出里取不到结果）时，既不能算「被抓住」，
-  // 也不能算「逃逸」——那是测试没运行，不是退化蒙混过关。
-  // 高负载下并发套件偶尔启动失败，若当成 0 失败就会把变异体误判成 NOT CAUGHT（假红且误导）。
-  const unparsed = [];
-  if (!e2eFail) unparsed.push("e2e");
-  if (!trFail) unparsed.push("trigger");
-  if (!concFail) unparsed.push("concurrency");
-  const scopeOut = out.slice(out.lastIndexOf("越界拦截真实验证"));
-  const auditOut = out.slice(out.lastIndexOf("审计链篡改检测验证"));
-  if (!/════ 结果: \d+ 通过 \/ \d+ 失败/.test(scopeOut)) unparsed.push("scope");
-  if (!/════ 结果: \d+ 通过 \/ \d+ 失败/.test(auditOut)) unparsed.push("audit");
-  if (unparsed.length) {
-    lines.push(`## ${m.id}`);
-    lines.push("");
-    lines.push(`- 注入：${m.desc}`);
-    lines.push(`- 文件：\`${m.file}\``);
-    lines.push("- 结果：**套件未成功运行（结果不可信）**");
-    lines.push(`- 详情：无法解析结果的套件：${unparsed.join("、")}`);
-    lines.push("");
-    writeFileSync(REPORT, lines.join("\n") + "\n", "utf8");
-    console.error(`✗ 变异体 ${m.id}：套件输出无法解析（${unparsed.join("、")}）—— 测试没有真正运行，结果不可信。`);
-    console.error("  （不是「变异体逃逸」，而是套件没跑起来；请在低负载下重跑，或看 mutation-run.log）");
-    console.error("  报告已写入: " + REPORT);
-    process.exit(1);
-  }
-
-  // 三条加固套件：先确认它「真的跑了」（打印了结果块），再看是否通过
-  const hardRan = /HARDENING_OK/.test(out) || /HARDENING_EXIT=[1-9]/.test(out);
-  const casRan = /VERIFY_CAS_OK/.test(out) || /CAS_EXIT=[1-9]/.test(out);
-  const rollRan = /AUDIT_ROLL_OK/.test(out) || /ROLL_EXIT=[1-9]/.test(out);
-  if (!hardRan || !casRan || !rollRan) {
-    const missing = [];
-    if (!hardRan) missing.push("hardening");
-    if (!casRan) missing.push("cas");
-    if (!rollRan) missing.push("roll");
-    lines.push(`## ${m.id}`);
-    lines.push("");
-    lines.push(`- 注入：${m.desc}`);
-    lines.push(`- 文件：\`${m.file}\``);
-    lines.push("- 结果：**加固套件未成功运行（结果不可信）**");
-    lines.push(`- 详情：未跑通的套件：${missing.join("、")}`);
-    lines.push("");
-    writeFileSync(REPORT, lines.join("\n") + "\n", "utf8");
-    console.error(`✗ 变异体 ${m.id}：加固套件未跑通（${missing.join("、")}）—— 结果不可信。`);
-    process.exit(1);
-  }
-  const sensRan = /SENSITIVE_CONFIG_OK/.test(out) || /SENS_EXIT=[1-9]/.test(out);
-  const lockRan = /STATE_LOCK_OK/.test(out) || /LOCK_EXIT=[1-9]/.test(out);
-  const falsifyRan = /FALSIFY_RESTORE_OK/.test(out) || /FALSIFY_EXIT=[1-9]/.test(out);
-  if (!sensRan || !lockRan || !falsifyRan) {
-    const missing = [];
-    if (!sensRan) missing.push("sensitive");
-    if (!lockRan) missing.push("lock");
-    if (!falsifyRan) missing.push("falsify");
-    lines.push(`## ${m.id}`);
-    lines.push("");
-    lines.push(`- 注入：${m.desc}`);
-    lines.push(`- 文件：\`${m.file}\``);
-    lines.push("- 结果：**加固套件未成功运行（结果不可信）**");
-    lines.push(`- 详情：未跑通的套件：${missing.join("、")}`);
-    lines.push("");
-    writeFileSync(REPORT, lines.join("\n") + "\n", "utf8");
-    console.error(`✗ 变异体 ${m.id}：加固套件未跑通（${missing.join("、")}）—— 结果不可信。`);
-    console.error("  报告已写入: " + REPORT);
-    process.exit(1);
-  }
-  const caught =
-    (e2eFail && Number(e2eFail[2]) > 0) ||
-    (trFail && Number(trFail[3]) > 0) ||
-    (concFail && Number(concFail[2]) > 0) ||
-    /SCOPE_EXIT=[1-9]/.test(out) ||
-    /AUDIT_EXIT=[1-9]/.test(out) ||
-    /SENS_EXIT=[1-9]/.test(out) ||
-    /LOCK_EXIT=[1-9]/.test(out) ||
-    /FALSIFY_EXIT=[1-9]/.test(out) ||
-    /HARDENING_EXIT=[1-9]/.test(out) ||
-    /CAS_EXIT=[1-9]/.test(out) ||
-    /ROLL_EXIT=[1-9]/.test(out);
-  const verdict = caught ? "CAUGHT ✅" : "NOT CAUGHT ❌";
-  results.push({
-    ...m,
-    verdict,
-    detail: `e2e ${e2eFail ? e2eFail[1] + "/" + e2eFail[2] : "?"} 失败, trigger ${trFail ? trFail[3] : "?"} 失败, concurrency ${concFail ? concFail[2] : "?"} 失败`,
-  });
-
-  lines.push(`## ${m.id}`);
-  lines.push("");
-  lines.push(`- 注入：${m.desc}`);
-  lines.push(`- 文件：\`${m.file}\``);
-  lines.push(`- 结果：**${verdict}**`);
-  lines.push(`- 详情：e2e ${e2eFail ? e2eFail[1] + " 通过 / " + e2eFail[2] + " 失败" : "?"}；trigger ${trFail ? trFail[2] + " 通过 / " + trFail[3] + " 失败" : "?"}；concurrency ${concFail ? concFail[1] + " 通过 / " + concFail[2] + " 失败" : "?"}`);
-  lines.push("");
-  const failed = (out.match(/✗[^\n]*/g) || []).slice(0, 6);
-  if (failed.length) {
-    lines.push("失败用例：");
-    for (const f of failed) lines.push("```\n" + f.trim() + "\n```");
-    lines.push("");
-  }
-
-  // 本轮收尾：先终止本轮拉起的 bridge，再删工作目录（否则 Windows 上删不掉 → EBUSY）
-  cleanupBridges(workDir, SRC_BRIDGES);
-  rmDirSafe(workDir);
+  return results
 }
 
-cleanupBridges(workDir, SRC_BRIDGES);
-rmDirSafe(workDir);
-
-lines.unshift("## 总览");
-lines.unshift("");
-lines.push("| 变异 | 结果 | 详情 |");
-lines.push("|---|---|---|");
-for (const r of results) {
-  lines.push(`| ${r.id} | ${r.verdict} | ${r.detail} |`);
+export async function main() {
+  const src = resolve(process.argv[2] || process.env.MUTATION_SRC || REPO_ROOT)
+  const root = freshWorkspace()
+  const report = resolve(process.env.MUTATION_REPORT || join(root, 'report.md'))
+  if (existsSync(report)) throw new Error(`拒绝覆盖已有报告：${report}`)
+  mkdirSync(dirname(report), { recursive: true })
+  const snapshot = join(root, 'snapshot')
+  const before = fingerprint(src)
+  copyRepo(src, snapshot)
+  const frozen = fingerprint(snapshot)
+  if (JSON.stringify(before) !== JSON.stringify(frozen) || JSON.stringify(before) !== JSON.stringify(fingerprint(src))) {
+    throw new Error('复制期间源仓变化，拒绝使用漂移快照')
+  }
+  writeFileSync(join(root, 'snapshot-sha256.json'), JSON.stringify(frozen, null, 2))
+  console.log(`冻结副本完成：${snapshot}；此后不再从源仓复制，父可并行固定验证/负对照`)
+  const baselineRepo = join(root, 'baseline-repo')
+  copyRepo(snapshot, baselineRepo)
+  const started = Date.now()
+  const results = []
+  const save = () => {
+    writeFileSync(join(root, 'results.json'), JSON.stringify({ root, baseline, results, seconds: (Date.now() - started) / 1000 }, null, 2))
+    writeFileSync(report, '# 真实变异报告\n\n' + `证据：${root}\n\n基线：${baseline.every((r) => !r.invalid && r.status === 0) ? 'PASS' : 'FAIL'}\n\n` + results.map((r) => `- ${r.id}：${r.verdict}；失败套件：${r.failed.join('、') || '无'}\n`).join(''))
+  }
+  // 同一冻结快照、同一命令清单，基线必须每个退出码均为零。
+  const baseline = await runSuites(baselineRepo, root, 'baseline', Number(process.env.MUTATION_PORT_BASE || 20100))
+  save()
+  if (baseline.some((r) => r.invalid || r.status !== 0)) { process.exitCode = 1; return }
+  for (const [i, m] of MUTANTS.entries()) {
+    const repo = join(root, `mutant-${i + 1}`)
+    copyRepo(snapshot, repo)
+    const target = join(repo, m.file)
+    writeFileSync(target, inject(m, readFileSync(target, 'utf8')))
+    checkSyntax(target)
+    const runs = await runSuites(repo, root, `run-${i + 1}`, Number(process.env.MUTATION_PORT_BASE || 20100) + i + 1)
+    const failed = runs.filter((r) => !r.invalid && r.status !== 0).map((r) => r.suite)
+    const verdict = runs.some((r) => r.invalid) ? 'INVALID' : failed.length ? 'DETECTED' : 'SURVIVED'
+    results.push({ id: m.id, desc: m.desc, file: m.file, verdict, failed, runs })
+    save()
+    console.log(`[${i + 1}/${MUTANTS.length}] ${m.id} ${verdict}`)
+  }
+  process.exitCode = results.length === MUTANTS.length && results.every((r) => r.verdict === 'DETECTED') ? 0 : 1
+  console.log(`证据保留：${root}；报告：${report}`)
 }
-lines.push("");
 
-writeFileSync(REPORT, lines.join("\n"), "utf8");
-console.log(lines.slice(0, 40).join("\n"));
-console.log("\n报告已写入:", REPORT);
-const notCaught = results.filter((r) => r.verdict !== "CAUGHT ✅");
-process.exit(notCaught.length === 0 ? 0 : 1);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main()

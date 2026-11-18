@@ -13,6 +13,7 @@
 // 断言它在 handler（或该工具直接调用的下游函数）里**真的被读取**。
 //
 // 退出码：0 = 无静默失效；1 = 发现静默失效（逐条打印）
+import { parseTools, objectAt } from './check-no-dead-handler.mjs'
 import { readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,35 +36,14 @@ const stateSrc = read("src/state.js") || "";
 /** 从 src 的第 idx 个字符开始（idx 指向 '{'），返回配对括号内的内容与结束位置 */
 function matchBraces(src, idx) {
   if (src[idx] !== "{") return null;
-  let depth = 0;
-  for (let i = idx; i < src.length; i++) {
-    const c = src[i];
-    if (c === "{") depth++;
-    else if (c === "}") {
-      depth--;
-      if (depth === 0) return { body: src.slice(idx + 1, i), end: i };
-    }
-  }
-  return null;
+  return objectAt(src, idx)
 }
 
 /** 抽取 TOOLS 数组内容 */
 function extractTools(src) {
-  const arrStart = src.indexOf("const TOOLS = [");
-  if (arrStart < 0) return [];
-  const arrBody = src.slice(arrStart);
-  const end = arrBody.indexOf("\n];");
-  const list = arrBody.slice(0, end < 0 ? arrBody.length : end);
-
-  const tools = [];
-  const re = /name:\s*"(flow_[a-z_]+)"/g;
-  const marks = [];
-  let m;
-  while ((m = re.exec(list)) !== null) marks.push({ name: m[1], at: m.index });
-  for (let i = 0; i < marks.length; i++) {
-    const start = marks[i].at;
-    const stop = i + 1 < marks.length ? marks[i + 1].at : list.length;
-    const block = list.slice(start, stop);
+  const tools = []
+  for (const parsed of parseTools(src)) {
+    const { block, handler } = parsed
 
     // inputSchema.properties
     const schemaAt = block.indexOf("inputSchema:");
@@ -78,30 +58,20 @@ function extractTools(src) {
         // 只取**顶层**直接子键 —— 嵌套 schema 里的 items / properties / path / line
         // 不是工具参数，误当参数会报一堆假问题。
         props = [];
-        const depthOf = (pos) => {
-          let d = 0;
-          for (let i = 0; i < pos; i++) {
-            if (pBlock.body[i] === "{") d++;
-            else if (pBlock.body[i] === "}") d--;
+        let pos = 0
+        while (pos < pBlock.body.length) {
+          const key = /^\s*,?\s*(?:([A-Za-z_][A-Za-z0-9_]*)|(['"])([A-Za-z_][A-Za-z0-9_]*)\2)\s*:\s*\{/.exec(pBlock.body.slice(pos))
+          if (!key) {
+            if (pBlock.body.slice(pos).replace(/[\s,]/g, '')) throw new Error('无法解析参数字段')
+            break
           }
-          return d;
-        };
-        const keyRe = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{/g;
-        let km;
-        while ((km = keyRe.exec(pBlock.body)) !== null) {
-          if (depthOf(km.index) === 0) props.push(km[1]);
+          props.push(key[1] || key[3])
+          const open = pos + key[0].lastIndexOf('{')
+          pos = objectAt(pBlock.body, open).end + 1
         }
       }
     }
-    // handler 体
-    const hAt = block.indexOf("handler:");
-    let handler = "";
-    if (hAt >= 0) {
-      const hOpen = block.indexOf("{", hAt);
-      const hBlock = hOpen >= 0 ? matchBraces(block, hOpen) : null;
-      handler = hBlock ? hBlock.body : block.slice(hAt);
-    }
-    tools.push({ name: marks[i].name, props, handler });
+    tools.push({ name: parsed.name, props, handler })
   }
   return tools;
 }
@@ -124,7 +94,7 @@ function extractFunction(src, name) {
   }
   while (i < src.length && src[i] !== "{") i++;
   open = i;
-  const b = open >= 0 ? matchBraces(src, open) : null;
+  const b = open >= 0 ? objectAt(src, open, true) : null;
   return b ? b.body : null;
 }
 
@@ -156,9 +126,7 @@ for (const [file, src] of [["src/state.js", stateSrc], ["src/index.js", indexSrc
     const name = m[1];
     if (["i", "j", "k", "n", "r", "t", "e", "a", "b", "c", "d", "f", "s", "v", "x", "y"].includes(name)) continue;
     // 取该变量所在语句的结束位置
-    let stmtEnd = src.indexOf(";", m.index);
-    if (stmtEnd < 0) continue;
-    const after = src.slice(stmtEnd + 1);
+    const after = src.slice(m.index + m[0].length)
     if (!new RegExp(`\\b${name}\\b`).test(after)) deadVars.push(name);
   }
   if (deadVars.length) {
@@ -169,17 +137,56 @@ if (!failed) pass("没有「算出却从未使用」的死变量");
 
 // ---- 专项：opts.date 必须在下游真的用上 ----
 section("date 参数贯通检查");
-const readAuditBody = extractFunction(stateSrc, "readAudit");
-const verifyBody = extractFunction(stateSrc, "verifyAuditChain");
-// 「date 参数真的决定读哪天」有两种合法实现：
-//   ① 直接拼 `<date>.jsonl`
-//   ② 通过 auditDayFilesOf(date) 取当天**全部分片**（按大小滚动后必须这样写）
-// 两者都证明 date 参与了文件选择；只看 ① 会把滚动分片的实现误判成失效。
-const usesDate = (b) => !!b && (/rawDate[}`]*\.jsonl/.test(b) || /auditDayFilesOf\(\s*rawDate\s*\)/.test(b));
-if (usesDate(readAuditBody)) pass("readAudit 用 rawDate 构造文件路径");
-else fail("readAudit 没有用 rawDate 构造文件路径（date 参数静默失效）");
-if (usesDate(verifyBody)) pass("verifyAuditChain 用 rawDate 构造文件路径");
-else fail("verifyAuditChain 没有用 rawDate 构造文件路径（date 参数静默失效）");
+// 仅沿两个已知委托边追踪，调用点必须原样传递 opts；不能合并无关函数体。
+function dateReachesPath(src, name) {
+  const clean = (body) => (body || '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const body = clean(extractFunction(src, name))
+  if (!body || !new RegExp(`function\\s+${name}\\s*\\(\\s*opts\\s*(?:=|,|\\))`).test(src)) return false
+  if (/\bopts\s*=(?!=|>)|\bopts\.date\s*=(?!=|>)|delete\s+opts\.date/.test(body)) return false
+  const validatedDate = /\bconst\s+rawDate\s*=\s*typeof\s+opts\.date\s*===\s*(['"])string\1\s*&&\s*\/\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$\/\.test\(\s*opts\.date\s*\)\s*\?\s*opts\.date\s*:\s*localDate\(\s*\)/.test(body)
+  const selectsDate = /\bauditDayFilesOf\(\s*rawDate\s*\)/.test(body) || /`[^`]*\$\{rawDate\}\.jsonl`/.test(body)
+  if (validatedDate && selectsDate) return true
+  const delegates = {
+    readAudit: ['readAuditDetailed', /\breadAuditDetailed\(\s*opts\s*\)/],
+    verifyAuditChain: ['verifyAuditChainInternal', /\bverifyAuditChainInternal\(\s*opts\s*,\s*coverage\s*\)/],
+  }
+  const edge = delegates[name]
+  return !!edge && edge[1].test(body) && dateReachesPath(src, edge[0])
+}
+
+// 正负回归共用真实判定器，丢参和下游不再按日期选文件都必须被拒。
+function verifyDateFormats() {
+  let checked = 0
+  for (const quote of ['\'', '"']) {
+    for (const newline of ['\n', '\r\n']) {
+      for (const semicolon of ['', ';']) {
+        for (const [name, target, extra] of [['readAudit', 'readAuditDetailed', ''], ['verifyAuditChain', 'verifyAuditChainInternal', ', coverage']]) {
+          const binding = 'const rawDate = typeof opts.date === ' + quote + 'string' + quote + ' && /^\\d{4}-\\d{2}-\\d{2}$/.test(opts.date) ? opts.date : localDate()' + semicolon
+          const direct = (selection) => ['function ' + target + '(opts' + extra + ') {', binding, 'return ' + selection + semicolon, '}'].join(newline)
+          const wrapper = (argument) => 'function ' + name + '(opts = {}) { return ' + target + '(' + argument + extra + ')' + semicolon + ' }'
+          const delegated = wrapper('opts') + newline + direct('auditDayFilesOf(rawDate)')
+          const cases = [
+            [direct('auditDayFilesOf(rawDate)').replace('function ' + target + '(', 'function ' + name + '('), true],
+            [direct('`${rawDate}.jsonl`').replace('function ' + target + '(', 'function ' + name + '('), true],
+            [delegated, true],
+            [wrapper('{}') + newline + direct('auditDayFilesOf(rawDate)'), false],
+            [wrapper('opts') + newline + direct('auditDayFilesOf(localDate())'), false],
+          ]
+          for (const [source, expected] of cases) {
+            if (dateReachesPath(source, name) !== expected) throw new Error(`日期贯通回归失败：${name}，期望 ${expected}`)
+            checked++
+          }
+        }
+      }
+    }
+  }
+  return checked
+}
+pass(`日期贯通正负格式回归 ${verifyDateFormats()} 项`)
+for (const name of ['readAudit', 'verifyAuditChain']) {
+  if (dateReachesPath(stateSrc, name)) pass(`${name} 的 opts.date 经校验后用于文件选择（含明确委托）`)
+  else fail(`${name} 的 opts.date 未贯通到文件选择（date 参数可能静默失效）`)
+}
 
 console.log("\n" + "=".repeat(72));
 if (failed) {

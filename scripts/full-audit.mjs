@@ -19,6 +19,7 @@
 //   9. ghost.json 工具清单 vs 服务端实际工具
 //
 // 退出码：0 = 全部通过；1 = 发现问题
+import { parseTools } from './check-no-dead-handler.mjs'
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -253,7 +254,7 @@ const readJsonText = (text) => {
 };
 const ghostJson = readJson("ghost.json");
 const idx = read("src/index.js") || "";
-const uniqueServer = [...new Set([...idx.matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1]))];
+const uniqueServer = parseTools(idx).map((tool) => tool.name)
 const ghostTools = (ghostJson?.tools || []).map((t) => t.name);
 
 // 两种合法形态：
@@ -266,7 +267,7 @@ const TWO_LEVEL = ghostTools.length === 2 && ghostTools.includes("list_tools") &
 if (TWO_LEVEL) {
   const mainJs = read("main.js") || "";
   const members = [...mainJs.matchAll(/members:\s*\[([^\]]*)\]/gs)]
-    .flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
+    .flatMap((m) => [...m[1].matchAll(/(['"])([^'"]+)\1/g)].map((x) => x[2]));
   const uniqMembers = [...new Set(members)];
   if (!mainJs) P("工具清单", "ghost.json 走两段式，但仓库里没有 main.js");
   if (uniqMembers.length !== uniqueServer.length) {

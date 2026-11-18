@@ -1,53 +1,26 @@
-// check-mutant-anchors.mjs — 变异体锚点体检
-//
-// 作用：确认 scripts/mutation-check.mjs 里每个变异体的注入锚点**仍能命中当前源码**。
-// 背景：锚点失效时 mutation-check 会记 SKIP（不假绿，但**失去了守护作用**），
-// 而「13/13 全部被抓住」的报告仍可能因历史产物而看起来正常 —— 属于静默退化。
-// 本脚本按 mutation-check 自己的解析方式求值 MUTANTS，并逐条比对（已做 CRLF→LF 归一化）。
-//
-// 用法：node scripts/check-mutant-anchors.mjs   （exit 0 = 全部命中）
-// （复用脚本自己的解析，避免我的提取逻辑与脚本不一致）
-import { readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+#!/usr/bin/env node
+// 共用真实注入函数：锚点必须唯一，临时副本必须通过 Node 语法检查。
+// 不用 eval，不执行注入源码，不读取宿主部署配置；证据保留在独占目录。
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { MUTANTS, REPO_ROOT, inject, checkSyntax, freshWorkspace } from './mutation-check.mjs'
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const mutRaw = readFileSync(`${REPO}/scripts/mutation-check.mjs`, "utf8");
-
-// 把 mutation-check.mjs 里的 MUTANTS 数组抠出来并求值
-const arrStart = mutRaw.indexOf("const MUTANTS = [");
-const arrEnd = mutRaw.indexOf("\n];", arrStart) + 3;
-const arrSrc = mutRaw.slice(arrStart, arrEnd);
-const MUTANTS = eval(arrSrc.replace("const MUTANTS =", "").trim());
-
-const srcCache = new Map();
-const readSrc = (f) => {
-  if (!srcCache.has(f)) {
-    try { srcCache.set(f, readFileSync(`${REPO}/${f}`, "utf8").replace(/\r\n/g, "\n")); }
-    catch { srcCache.set(f, null); }
+const work = freshWorkspace('anchors-')
+const results = []
+for (const [i, m] of MUTANTS.entries()) {
+  try {
+    const mutated = inject(m, readFileSync(join(REPO_ROOT, m.file), 'utf8'))
+    const target = join(work, `mutant-${i + 1}.mjs`)
+    writeFileSync(target, mutated)
+    checkSyntax(target)
+    results.push({ id: m.id, unique: true, syntax: true })
+    console.log(`✅ ${m.id} 唯一锚点 / 注入语法有效`)
+  } catch (error) {
+    results.push({ id: m.id, error: error.message })
+    console.error(`❌ ${m.id}：${error.message}`)
   }
-  return srcCache.get(f);
-};
-
-let bad = 0;
-const dup = new Map();
-for (const m of MUTANTS) {
-  const src = readSrc(m.file);
-  let hit = false, kind = "";
-  if (m.pattern) {
-    kind = "正则";
-    hit = !!src && m.pattern.test(src);
-  } else {
-    kind = "字符串";
-    hit = !!src && src.includes(m.from);
-  }
-  if (!hit) bad++;
-  if (m.from) {
-    if (dup.has(m.from)) console.log(`  ⚠️ ${m.id} 与 ${dup.get(m.from)} 锚点完全相同`);
-    else dup.set(m.from, m.id);
-  }
-  console.log(`  ${m.id.padEnd(26)}${hit ? "✅" : "❌"}  ${(m.file || "?").padEnd(16)}${kind}`);
 }
-console.log("");
-console.log(bad ? `❌ ${bad}/${MUTANTS.length} 个锚点失效` : `✅ ${MUTANTS.length}/${MUTANTS.length} 锚点全部命中`);
-process.exit(bad ? 1 : 0);
+writeFileSync(join(work, 'anchors.json'), JSON.stringify(results, null, 2))
+const good = results.filter((r) => r.unique && r.syntax).length
+console.log(`${good}/${MUTANTS.length} 唯一锚点及语法有效；证据：${work}`)
+process.exitCode = good === MUTANTS.length ? 0 : 1

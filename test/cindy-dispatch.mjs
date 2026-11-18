@@ -9,6 +9,7 @@
 // main.js（沙箱里只有一个全局 cindy）。这样测的是**真实链路**，不是 mock 出来的假链路。
 //
 // 跑法：node test/cindy-dispatch.mjs
+import { parseTools } from '../scripts/check-no-dead-handler.mjs'
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -80,8 +81,10 @@ try {
   check("2a. list_tools 不传 category 返回概览", !!(ov && ov.categories));
   check("2b. 类目为 gate/verify/audit/infra/trigger",
     names === "gate,verify,audit,infra,trigger", names);
-  const expectedTotal = [...new Set([...fs.readFileSync(path.join(ROOT, "src", "index.js"), "utf8")
-    .matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1]))].length;
+  const expectedNames = parseTools(fs.readFileSync(path.join(ROOT, 'src', 'index.js'), 'utf8')).map((tool) => tool.name)
+  const expectedTotal = expectedNames.length
+  const listed = await server.request('tools/list', {})
+  check('源码与协议工具名单一致', JSON.stringify((listed.result?.tools || []).map((tool) => tool.name).sort()) === JSON.stringify(expectedNames.slice().sort()))
   check(`2c. 概览里的操作总数与源码一致（${expectedTotal}）`, ov && ov.total === expectedTotal, String(ov && ov.total));
   check("2d. 概览给出下一步提示", !!(ov && ov.hint));
 

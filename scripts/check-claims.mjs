@@ -19,6 +19,7 @@
 //   3. 关键不变量（fail-closed / 真实验证 / 链式审计）必须在源码里出现
 //
 // 退出码：0 = 承诺全部兑现；1 = 有承诺未兑现（逐条打印）
+import { parseTools } from './check-no-dead-handler.mjs'
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,17 +113,9 @@ for (const c of CLAIMS) {
 section("工具描述 ↔ handler 实现");
 
 // 抽取每个工具的 description 与 handler 体
-const toolBlocks = indexSrc.split(/\n  \{\n/).slice(1);
+const toolBlocks = parseTools(indexSrc)
 let paramIssues = 0;
-for (const block of toolBlocks) {
-  const nameM = block.match(/name:\s*"(flow_[a-z_]+)"/);
-  if (!nameM) continue;
-  const name = nameM[1];
-  // 描述里点名的参数（中文或英文）→ 必须在 handler 里出现
-  const descM = block.match(/description:\s*([\s\S]*?),\s*\n\s*inputSchema:/);
-  const desc = descM ? descM[1] : "";
-  const handlerM = block.match(/handler:\s*async\s*\(args\)\s*=>\s*\{([\s\S]*?)\n    \},\n  \},/);
-  const handler = handlerM ? handlerM[1] : block;
+for (const { name, desc, handler } of toolBlocks) {
 
   // 描述里提到「按日期过滤」→ handler/下游必须真的用 date
   if (/日期|date/i.test(desc) && /按.*date|date.*过滤/i.test(desc)) {
@@ -133,7 +126,7 @@ for (const block of toolBlocks) {
   }
   // 描述里提到 scope 检查 → 必须调用 enforceScope
   if (/scope/.test(desc) && /检查|越界|范围/.test(desc)) {
-    if (!/enforceScope/.test(handler) && !/enforceScope/.test(indexSrc.split(`name: "${name}"`)[1]?.slice(0, 4000) || "")) {
+    if (!/enforceScope/.test(handler)) {
       fail(`工具 ${name} 的描述承诺做 scope 检查，但实现里没调用 enforceScope`);
       paramIssues++;
     }

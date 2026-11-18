@@ -1,30 +1,41 @@
-# Carlos v2.11.2 发布说明
+# Carlos Flow v2.16.2 发布说明
 
-## 🪟 Windows 修复：Bridge 重启弹黑控制台窗口
-* **已修复**：MCP server 子进程改用 `windowsHide: true` 启动，Windows 下不再弹出黑色控制台窗口。
-* 依据：诊断文档《carlos-flow-windows-blackwindow-fix.md》——原实现缺失 Windows 进程隐藏参数。
+## 发布状态
 
-## 🔧 兼容性修复：Bridge 转发通路与路径自探测
-* **已修复**：Bridge 恢复完整的 JSON-RPC 转发通路（TCP 连接 → 子进程 stdin → 按 reqId 回包）。
-  此前一版误将 Bridge 精简为「只 spawn、不转发」，导致平台侧 `tools/list` 拿不到任何工具。
-* **新增**：路径自探测。Bridge 依据自身文件位置自动定位 `../src/index.js`，
-  不再强制依赖 `CARLOS_FLOW_MCP_ROOT` 绝对路径；该环境变量仍保留为可选覆盖，保持向后兼容。
-* **新增**：`/health` 返回解析后的真实项目根目录，供客户端做 Bridge 身份比对，避免重复拉起。
+本版是基于 2.16.1 的补丁候选，日期为 2026-11-18。按本轮提供的 registry 实时查询结果，npm latest 为 2.16.1，目标版本为 2.16.2。
 
-## 🔬 验证：真 RPC 往返冒烟测试
-* `smoke-test.js` 重写为**真协议验证**：起真实 Bridge → 发 `initialize` → 发 `tools/list` →
-  断言拿回全部 **19 个工具**。此前版本只看一行启动日志，属于假阳性。
-* `check-all.sh` 升级为 Gatekeeper 统一入口：语法校验 + 冒烟测试一体，退出码非 0 即阻断提交。
+**发布前验证待确认**：本文描述候选代码的改动范围，不表示 2.16.2 已完成全量测试或已发布。历史 2.16.1 候选的独立 23/23、450/0 仅是历史记录，不可作为本版验收证据。本轮仅更新文档及版本元数据，不执行 Git commit/push/tag、npm publish、安装或真实 Carlos 数据清理。
 
-## 📖 文档
-* 新增 `INSTALL.md`：Cursor / VS Code / Windsurf 三平台接入步骤、配置自检与常见问题对照表。
-* 模板文件（`templates/`）去掉了强制的 `CARLOS_FLOW_MCP_ROOT` 绝对路径。
+## 主要修复
 
-## ⚙️ CI
-* release workflow 的发布闸保持不变：仅当 tag 版本**高于** npm 已发布最新版时才 `npm publish`。
-* 新增约束：tag 版本必须与 `package.json` 的 `version` 一致，否则发布中止。
+### 事务恢复与回收
 
-## 📝 版本信息
-* 版本号：**v2.11.2**
-* 上一版：v2.11.1（Bridge 转发通路存在缺陷，且 tag 与 package.json 版本不一致导致发布流程中止，未进入 npm）
-* npm 上当前最新版仍为 2.11.0，本次发布后升级为 2.11.2
+- prepare 阶段校验 manifest；原子 commit 成功后再 reclaim，避免提交前回收破坏恢复依据。
+- 完善中断及多进程恢复路径，保留恢复所需证据。
+- Windows 自有回收声明遇共享冲突时采用有界重试；这不是对任意硬件故障、掉电或存储异常的 exactly-once 承诺。
+
+### 审计一致性
+
+- 将读取 prev、分片选择与 append 串行化，区分 append 结果和 persisted 落盘状态。
+- 覆盖错误不得被成功结果掩盖；完善大 UTF-8 尾部读取与跨日、数值分片顺序处理。
+- plain 哈希链用于一致性检测，不能抵抗可修改并重算整条链的恶意攻击者；安全边界仍以现有威胁模型为准。
+
+### 裁定、验证与隔离
+
+- PASS 失败路径执行补偿，不把局部写入成功当作完整裁定成功；派发、当前卡验证证据和其它既有门禁不放宽。
+- timeout 接受 1000..600000 毫秒，默认 120 秒，外层预留 30 秒；保留 stderr 诊断信息。
+- isolateHome 覆盖全 `&&` 命令链及宏展开路径，避免仅隔离首段命令。
+- appendScope 保留原快照；snapshot_identity 只读校验身份，不通过校验操作改写快照。
+- 保持 9 类解析兼容；包级 default/local 验证使用临时副本，避免污染工作区和真实用户状态。
+
+## 保留的审查边界
+
+两条独立审查轴的 WARN 原样保留：维护漂移、长方法、冗余 catch、有限 parser，以及审查员宿主工具覆盖边界。功能验证结果不能抵消维护风险；有限 parser 不代表完整 shell 语法支持，宿主工具未覆盖的路径不视为已验证。本版不宣称无条件 PASS、硬件级 exactly-once 或 plain 链抗恶意篡改。
+
+## 验证与发布安排
+
+- 版本以 package.json 为真源，仅通过仓库既有 scripts/sync-version.mjs 同步 lock、插件清单及触发指南；清单除版本外的字段和权限保持不变。
+- 冻结后先在独立 HOME、USERPROFILE、CARLOS_FLOW_HOME 与 npm cache 中进行版本同步只读检查、README、版本一致性、产物及语言短验证，结果由独立命令记录提供。
+- 全量基线、变异测试与独立审查仍需执行组确认；在获得本版真实结果前不把历史结果写成本版通过。
+- 后续提交和发布由父任务单独控制。现有 v* 标签会触发 release.yml，自动运行配置中的全套测试和门禁，再按发布闸决定是否发布 npm 并创建 GitHub Release；不能仅凭标签或工作流启动就宣布发布成功。
+- 本轮不清理验收产物、不接触真实 Carlos 数据，也不修改功能实现或变异脚本。

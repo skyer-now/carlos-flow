@@ -8,6 +8,7 @@
 //   3. 通知被当成请求回包 / 未知方法不回错 → 客户端永久挂起。
 //
 // 跑法：node test/mcp-stdio.mjs
+import { parseTools, verifyParserFormats } from '../scripts/check-no-dead-handler.mjs'
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +26,8 @@ const check = (name, ok, detail = "") => {
   if (ok) { pass++; console.log(`  ✓ ${name}${detail ? "  " + detail : ""}`); }
   else { fail++; console.log(`  ✗ ${name}${detail ? "  " + detail : ""}`); }
 };
+
+check('工具解析格式回归', verifyParserFormats() === 8)
 
 const pkgVersion = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
 const client = startMcpClient({
@@ -49,8 +52,19 @@ try {
   const listed = await client.request("tools/list", {});
   const tools = (listed.result && listed.result.tools) || [];
   // 期望数量从源码推导：加/删工具时不用手改一堆魔法数字（改错反而制造假红）
-  const srcTools = [...new Set([...fs.readFileSync(path.join(ROOT, "src", "index.js"), "utf8")
-    .matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1]))];
+  const sourceText = fs.readFileSync(path.join(ROOT, 'src', 'index.js'), 'utf8')
+  const parsedTools = parseTools(sourceText)
+  const srcTools = parsedTools.map((tool) => tool.name)
+  // 用实际工具对象回归两种引号及数组换行，避免只验证孤立名称片段。
+  for (const quote of ['\'', '"']) {
+    for (const ending of ['\n];', '\r\n]']) {
+      const blocks = parsedTools.map((tool) => `{${tool.block.replace(/^(\s*name\s*:\s*)(['"])(flow_[a-z_]+)\2/, (_, prefix, old, name) => prefix + quote + name + quote)}}`)
+      const reparsed = parseTools('const TOOLS = [\n' + blocks.join(',\n') + ending)
+      check(`工具解析兼容引号 ${quote} 与数组边界 ${JSON.stringify(ending)}`,
+        JSON.stringify(reparsed) === JSON.stringify(parsedTools.map((tool, i) => ({ ...tool, block: blocks[i].slice(1, -1) }))))
+    }
+  }
+  check('工具名单与源码一致', JSON.stringify(tools.map((tool) => tool.name).sort()) === JSON.stringify(srcTools.slice().sort()))
   check(`2a. tools/list 与源码一致（${srcTools.length} 个）`, tools.length === srcTools.length, `${tools.length} 个`);
   check("2b. 工具定义不泄露 handler（函数不可序列化）",
     tools.every((t) => t.handler === undefined), "");

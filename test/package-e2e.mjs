@@ -15,6 +15,8 @@
 //
 // 跑法：node test/package-e2e.mjs
 // 依赖：网络（从 registry 装依赖）。离线环境可用 --local 跳过安装步骤。
+import { createHash } from 'node:crypto'
+import { parseTools } from '../scripts/check-no-dead-handler.mjs'
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,6 +37,7 @@ const run = (cmd, args, opts = {}) => {
   const isWin = process.platform === "win32";
   return execFileSync(cmd, args, {
     cwd: opts.cwd || ROOT,
+    env: { ...process.env, ...isolatedEnv },
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     shell: isWin && /^(npm|npx|node|git)$/i.test(cmd),
@@ -44,7 +47,23 @@ const run = (cmd, args, opts = {}) => {
 console.log("\n════ 包级端到端实测 ════\n");
 
 const tmp = mkdtempSync(join(tmpdir(), "carlos-pkg-e2e-"));
-let pkgRoot = ROOT;   // --local 模式下直接用源码目录
+let pkgRoot
+let server
+const isolatedEnv = { GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(tmp, 'gitconfig') }
+for (const [key, sub] of Object.entries({ HOME: 'home', USERPROFILE: 'profile', CARLOS_FLOW_HOME: 'flow', npm_config_cache: 'npm-cache' })) {
+  isolatedEnv[key] = join(tmp, sub)
+  mkdirSync(isolatedEnv[key], { recursive: true })
+}
+// 保存全部已跟踪文件内容和工作区状态，验收结束必须逐项保持不变。
+const sourceSnapshot = () => {
+  const files = run('git', ['ls-files', '-z']).split('\0').filter(Boolean)
+  return {
+    status: run('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+    readme: createHash('sha256').update(readFileSync(join(ROOT, 'README.md'))).digest('hex'),
+    tracked: files.map((file) => [file, existsSync(join(ROOT, file)) ? createHash('sha256').update(readFileSync(join(ROOT, file))).digest('hex') : null]),
+  }
+}
+const sourceBefore = sourceSnapshot()
 
 try {
   // ---- 1. 打出真实 tarball ----
@@ -62,8 +81,20 @@ try {
     run("npm", ["install", "--no-audit", "--no-fund", tarball], { cwd: proj });
     pkgRoot = join(proj, "node_modules", "carlos-flow");
   } else {
-    console.log("▶ ② 跳过安装（--local，用源码目录）");
+    console.log('▶ ② 跳过安装，将真实包解压到临时副本')
+    const unpacked = join(tmp, 'unpacked')
+    mkdirSync(unpacked)
+    run('tar', ['-xzf', tarball.slice(tmp.length + 1), '-C', 'unpacked'], { cwd: tmp })
+    pkgRoot = join(unpacked, 'package')
   }
+
+  // 负对照必须从干净基线开始；发现旧标记立即失败，不能悄悄沿用污染数据。
+  if (readFileSync(join(pkgRoot, 'README.md'), 'utf8').includes('PKG-E2E-CHANGED')) {
+    throw new Error('包内 README 已含测试标记，拒绝运行负对照')
+  }
+  run('git', ['init'], { cwd: pkgRoot })
+  run('git', ['add', '--all'], { cwd: pkgRoot })
+  run('git', ['-c', 'user.name=包级测试', '-c', 'user.email=package-test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', '包级测试临时基线'], { cwd: pkgRoot })
 
   // ---- 3. 包内文件齐备 ----
   console.log("▶ ③ 包内关键文件");
@@ -90,7 +121,7 @@ try {
   console.log("▶ ⑤ 工具清单一致性");
   const ghost = JSON.parse(readFileSync(join(pkgRoot, "ghost.json"), "utf8"));
   const idxSrc = readFileSync(join(pkgRoot, "src", "index.js"), "utf8");
-  const serverTools = [...new Set([...idxSrc.matchAll(/name:\s*"(flow_[a-z_]+)"/g)].map((m) => m[1]))];
+  const serverTools = parseTools(idxSrc).map((tool) => tool.name)
   const ghostTools = (ghost.tools || []).map((t) => t.name);
   // 两种合法形态（详见 docs/TOOL_CONTRACTS.md §1.3）：
   //   A. 直接声明：ghost.json 逐条列出全部 flow_*（宿主上限 16 项）
@@ -99,7 +130,7 @@ try {
   if (twoLevel) {
     const mainSrc = readFileSync(join(pkgRoot, "main.js"), "utf8");
     const members = [...mainSrc.matchAll(/members:\s*\[([^\]]*)\]/gs)]
-      .flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
+      .flatMap((m) => [...m[1].matchAll(/(['"])([^'"]+)\1/g)].map((x) => x[2]));
     const uniq = [...new Set(members)];
     check(`两段式目录：main.js 类目表覆盖 ${serverTools.length} 个操作`, uniq.length === serverTools.length,
       `main=${uniq.length} server=${serverTools.length}`);
@@ -123,7 +154,11 @@ try {
   // ---- 7. 真实 MCP 握手 + 完整门禁流程 ----
   console.log("▶ ⑦ 真实 MCP 调用（完整门禁流程）");
   const serverPath = join(pkgRoot, "src", "index.js");
-  const child = spawn(process.execPath, [serverPath], { stdio: ["pipe", "pipe", "pipe"] });
+  const child = server = spawn(process.execPath, [serverPath], {
+    cwd: pkgRoot,
+    env: { ...process.env, ...isolatedEnv },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
   let buf = ""; const pending = new Map(); let id = 1;
   child.stdout.on("data", (d) => {
     buf += d.toString(); let i;
@@ -149,7 +184,7 @@ try {
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: rid, method, params }) + "\n");
   });
   const tool = async (name, args) => {
-    const r = await req("tools/call", { name, arguments: args });
+    const r = await req('tools/call', { name, arguments: { ...args, cwd: pkgRoot } })
     const text = String(r.result?.content?.[0]?.text || "");
     try { return { ...JSON.parse(text), __isError: r.result?.isError === true }; }
     catch { return { ok: false, __raw: text, __isError: r.result?.isError === true }; }
@@ -191,7 +226,7 @@ try {
   r = await tool("flow_dispatch", { sessionId: SID, role: "executor", message: "只读检查", run: false, cwd: pkgRoot });
   check("flow_dispatch 派发并快照", r.ok === true && Array.isArray(r.snapshot));
 
-  // 真实改动：给 README.md 打标记（pkgRoot 是临时安装目录，改了不污染源码）
+  // 真实改动只写临时副本；默认安装和离线解包均不得引用源码目录。
   writeFileSync(join(pkgRoot, "README.md"),
     readFileSync(join(pkgRoot, "README.md"), "utf8") + "\n" + "PKG-E2E-CHANGED" + "\n");
 
@@ -226,7 +261,13 @@ try {
 
   child.kill();
 } finally {
-  rmSync(tmp, { recursive: true, force: true });
+  if (server && server.exitCode === null && server.signalCode === null) {
+    await new Promise((done) => { server.once('exit', done); server.kill() })
+  }
+  rmSync(tmp, { recursive: true, force: true })
+  const sourceAfter = sourceSnapshot()
+  if (JSON.stringify(sourceBefore) !== JSON.stringify(sourceAfter)) throw new Error('包级测试污染了源仓库文件或工作区状态')
+  console.log(`源仓库无副作用核验通过：README、${sourceBefore.tracked.length} 个已跟踪文件及工作区状态均不变`)
 }
 
 console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
