@@ -814,6 +814,8 @@ function withAuditReaper(lock, fn, until) {
     }
     return peers
   }
+  const errors = []
+  let result
   try {
     publish({ pid: process.pid, ticket: 0, choosing: true })
     const ticket = Math.max(0, ...list().map((p) => p.ticket)) + 1
@@ -826,18 +828,31 @@ function withAuditReaper(lock, fn, until) {
             p.ticket < ticket ||
             (p.ticket === ticket && p.id < id)),
       )
-      if (!blocked) return fn()
+      if (!blocked) {
+        result = fn()
+        break
+      }
       if (Date.now() >= until)
         throw new Error('审计回收锁活持有者等待超时，未抢占')
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
     }
+  } catch (e) {
+    errors.push(e)
   } finally {
     try {
       cleanupOwnReaperFiles([slot, temp])
     } catch (e) {
-      throw new Error(`审计回收锁清理失败: ${e.message}`, { cause: e })
+      errors.push(new Error(`审计回收锁清理失败: ${e.message}`, { cause: e }))
     }
   }
+  if (errors.length) {
+    throw new AggregateError(
+      errors,
+      `审计回收锁失败: ${errors.map((e) => e.message).join('; ')}`,
+      { cause: errors[0] },
+    )
+  }
+  return result
 }
 
 // 同步跨进程锁：持有者存活时绝不按年龄抢锁。
@@ -847,17 +862,12 @@ function withAuditLock(fn) {
   const owner = path.join(lock, 'owner.json')
   const until = Date.now() + 5000
   const candidate = `${lock}.candidate-${process.pid}-${randomBytes(8).toString('hex')}`
-  fs.mkdirSync(candidate)
+  const ownText = JSON.stringify({ pid: process.pid, token: randomBytes(12).toString('hex') })
+  const errors = []
+  let result
   try {
-    fs.writeFileSync(
-      path.join(candidate, 'owner.json'),
-      JSON.stringify({ pid: process.pid }),
-    )
-  } catch (e) {
-    fs.rmSync(candidate, { recursive: true, force: true })
-    throw e
-  }
-  try {
+    fs.mkdirSync(candidate)
+    fs.writeFileSync(path.join(candidate, 'owner.json'), ownText)
     for (;;) {
       try {
         // 完整发布持有者目录，避免 mkdir 后进程死亡留下无 owner 的锁。
@@ -867,8 +877,13 @@ function withAuditLock(fn) {
         if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes(e.code))
           throw e
         try {
-          const { pid } = JSON.parse(fs.readFileSync(owner, 'utf8'))
-          if (Number.isInteger(pid) && pid > 0) {
+          const ownerText = fs.readFileSync(owner, 'utf8')
+          const { pid, token } = JSON.parse(ownerText)
+          if (
+            Number.isInteger(pid) && pid > 0 &&
+            (token === undefined ||
+              (typeof token === 'string' && /^[a-f0-9]{24}$/.test(token)))
+          ) {
             let dead = false
             try {
               process.kill(pid, 0)
@@ -881,11 +896,25 @@ function withAuditLock(fn) {
                 () => {
                   // 其他回收者可能已经换了持有者，必须重新核对。
                   if (
-                    fs.readFileSync(owner, 'utf8') === JSON.stringify({ pid })
+                    fs.readFileSync(owner, 'utf8') === ownerText
                   ) {
-                    const stale = `${lock}.dead-${process.pid}-${Date.now()}`
-                    fs.renameSync(lock, stale)
-                    fs.rmSync(stale, { recursive: true })
+                    const stale = `${lock}.dead-${process.pid}-${randomBytes(12).toString('hex')}`
+                    try {
+                      fs.renameSync(lock, stale)
+                    } catch (err) {
+                      throw new Error(
+                        `审计回收锁 dead rename 失败 (${err.code || 'UNKNOWN'}): ${err.message}`,
+                        { cause: err },
+                      )
+                    }
+                    try {
+                      fs.rmSync(stale, { recursive: true })
+                    } catch (err) {
+                      throw new Error(
+                        `审计回收锁 dead cleanup 失败 (${err.code || 'UNKNOWN'}): ${err.message}`,
+                        { cause: err },
+                      )
+                    }
                   }
                 },
                 until,
@@ -903,14 +932,60 @@ function withAuditLock(fn) {
       }
     }
     try {
-      return fn()
+      result = fn()
+    } catch (e) {
+      errors.push(e)
     } finally {
-      fs.unlinkSync(owner)
-      fs.rmdirSync(lock)
+      // 仅在完整唯一 owner 仍属于本进程时重试共享错误。
+      // 移动成功（含报错但可能已移动）后，永不重试共享路径。
+      const retired = `${lock}.retired-${process.pid}-${randomBytes(12).toString('hex')}`
+      try {
+        retryOwnReaperOperation(() => {
+          if (fs.readFileSync(owner, 'utf8') !== ownText)
+            throw new Error('审计锁 owner 身份改变，未重试共享路径')
+          try {
+            fs.renameSync(lock, retired)
+          } catch (e) {
+            let stillOwn = false
+            try {
+              stillOwn = fs.readFileSync(owner, 'utf8') === ownText
+            } catch {}
+            if (!stillOwn) {
+              const uncertain = new Error(`${e.code || 'UNKNOWN'}: ${e.message}; owner 已移走或改变`, { cause: e })
+              throw uncertain
+            }
+            throw e
+          }
+        })
+      } catch (e) {
+        throw new Error(`审计锁 retire 失败 (${e.code || e.cause?.code || 'UNKNOWN'}): ${e.message}; 追加可能已完成，勿盲重试`, { cause: e })
+      }
+      try {
+        retryOwnReaperOperation(() => fs.rmSync(retired, { recursive: true, force: true }))
+      } catch (e) {
+        throw new Error(`审计锁 retired cleanup 失败 (${e.code || 'UNKNOWN'}): ${e.message}; 追加可能已完成，勿盲重试`, { cause: e })
+      }
     }
+  } catch (e) {
+    errors.push(e)
   } finally {
-    fs.rmSync(candidate, { recursive: true, force: true })
+    try {
+      fs.rmSync(candidate, { recursive: true, force: true })
+    } catch (e) {
+      errors.push(new Error(
+        `审计锁 candidate cleanup 失败 (${e.code || 'UNKNOWN'}): ${e.message}; 追加可能已完成，勿盲重试`,
+        { cause: e },
+      ))
+    }
   }
+  if (errors.length) {
+    throw new AggregateError(
+      errors,
+      errors.map((e) => e.message).join('; '),
+      { cause: errors[0] },
+    )
+  }
+  return result
 }
 
 // 返回的 persisted 是回执元数据，不参与落盘哈希。

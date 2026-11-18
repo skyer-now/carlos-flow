@@ -15,6 +15,7 @@
 // 跑法：node test/audit-chain.mjs
 import { spawnSync } from 'node:child_process'
 import {
+  cpSync,
   mkdtempSync,
   rmSync,
   readFileSync,
@@ -44,6 +45,7 @@ const check = (n, ok, d = '') => {
   } else {
     fail++
     console.log(`  ✗ ${n}  ${d}`)
+    if (existsSync(join(home, 'gate-audit'))) cpSync(join(home, 'gate-audit'), join(home, `failed-audit-${fail}`), { recursive: true })
   }
 }
 
@@ -169,6 +171,446 @@ check(
   reaperSharing.stderr,
 )
 
+// 确定性释放屏障下的真实文件系统发布；不伪造成功 rename。
+async function retirementChecks(source) {
+  const { default: fs } = await import('node:fs')
+  const { default: path } = await import('node:path')
+  const { default: assert } = await import('node:assert/strict')
+  const { spawn, spawnSync } = await import('node:child_process')
+  const { pathToFileURL } = await import('node:url')
+  const s = await import(pathToFileURL(source).href)
+  const lock = path.join(s.AUDIT_DIR, '.append-lock')
+  const wait = (file) => {
+    const end = Date.now() + 10000
+    while (!fs.existsSync(file)) {
+      if (Date.now() > end) throw new Error('屏障等待超时: ' + file)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+    }
+  }
+  const isolatedModule = async (name, expose = false) => {
+    const priorHome = process.env.CARLOS_FLOW_HOME
+    const caseHome = path.join(priorHome, name)
+    fs.mkdirSync(caseHome, { recursive: true })
+    const file = path.join(caseHome, 'state.mjs')
+    let text = fs.readFileSync(source, 'utf8')
+    if (expose) text += '\nexport { withAuditLock }\n'
+    fs.writeFileSync(file, text)
+    process.env.CARLOS_FLOW_HOME = caseHome
+    try {
+      return await import(pathToFileURL(file).href)
+    } finally {
+      process.env.CARLOS_FLOW_HOME = priorHome
+    }
+  }
+  async function successor({ source, lock, ready, go }) {
+    const { default: fs } = await import('node:fs')
+    const { pathToFileURL } = await import('node:url')
+    const rename = fs.renameSync
+    fs.renameSync = (a, b, ...args) => {
+      const result = rename(a, b, ...args)
+      if (String(b) === lock) {
+        fs.writeFileSync(ready, String(process.pid))
+        const end = Date.now() + 10000
+        while (!fs.existsSync(go)) {
+          if (Date.now() > end) throw new Error('后继屏障超时')
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+        }
+      }
+      return result
+    }
+    const s = await import(pathToFileURL(source).href)
+    const receipt = s.audit('run', 'successor')
+    console.log(JSON.stringify({
+      persisted: receipt.persisted,
+      error: receipt.error,
+      receipt,
+    }))
+    if (!receipt.persisted) process.exitCode = 2
+  }
+  const controls = process.platform === 'win32' ? [false] : [true, false]
+  // 负控仅替换释放块，候选目录仍通过真实 rename 发布。
+  const cases = controls.map((old) => ({ old, mode: 'normal' }))
+  cases.push(
+    { old: false, mode: 'exception' },
+    { old: false, mode: 'barrier-failure' },
+    { old: false, mode: 'cleanup-retry' },
+    { old: false, mode: 'go-failure' },
+  )
+  for (const { old, mode } of cases) {
+    const copy = path.join(process.env.CARLOS_FLOW_HOME, `control-${old}-${mode}.mjs`)
+    let text = fs.readFileSync(source, 'utf8')
+    if (old) {
+      const start = text.indexOf('      // 仅在完整唯一 owner')
+      const end = text.indexOf('\n    }\n  } catch (e)', start)
+      assert.ok(start > 0 && end > start)
+      text = text.slice(0, start) +
+        '      fs.unlinkSync(owner)\n      fs.rmdirSync(lock)' + text.slice(end)
+    }
+    fs.writeFileSync(copy, text)
+    const m = await import(pathToFileURL(copy).href)
+    const ready = path.join(process.env.CARLOS_FLOW_HOME, `ready-${old}-${mode}`)
+    const go = ready + '.go'
+    let peer
+    let closed
+    let diag = ''
+    let observed = false
+    let closedObserved = false
+    let spawnCount = 0
+    let cleanupHits = 0
+    let receipt
+    let failure
+    let signalError
+    let code = -1
+    const rename = fs.renameSync
+    const unlink = fs.unlinkSync
+    const remove = fs.rmSync
+    const write = fs.writeFileSync
+    const terminateOwnTree = () => {
+      if (process.platform === 'win32') {
+        const killed = spawnSync('taskkill', ['/PID', String(peer.pid), '/T', '/F'], {
+          encoding: 'utf8',
+        })
+        diag += killed.stderr || ''
+        if (killed.status !== 0) throw new Error('自有 peer 整树终止失败: ' + diag)
+      } else {
+        try {
+          process.kill(-peer.pid, 'SIGKILL')
+        } catch (e) {
+          if (e.code !== 'ESRCH') throw e
+        }
+      }
+    }
+    const barrier = () => {
+      // 私有 cleanup 重试不得再派生第二个等待中的后继。
+      if (peer) return
+      const script = `(${successor.toString()})(${JSON.stringify({ source, lock, ready, go })})`
+      peer = spawn(process.execPath, ['--input-type=module', '-e', script], {
+        env: process.env,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      spawnCount++
+      closed = new Promise((resolve) => {
+        peer.on('error', (e) => { diag += e.message })
+        peer.on('close', (value) => {
+          closedObserved = true
+          resolve(value)
+        })
+      })
+      peer.stdout.on('data', (b) => { diag += b })
+      peer.stderr.on('data', (b) => { diag += b })
+      wait(ready)
+      observed = true
+    }
+    fs.unlinkSync = (file, ...args) => {
+      const result = unlink(file, ...args)
+      if (old && String(file) === path.join(lock, 'owner.json')) barrier()
+      return result
+    }
+    fs.rmSync = (file, ...args) => {
+      if (!old && String(file).includes('.retired-')) {
+        barrier()
+        if (mode === 'barrier-failure') throw new Error('注入屏障清理异常')
+        const owner = fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')
+        assert.equal(JSON.parse(owner).pid, Number(fs.readFileSync(ready, 'utf8')))
+        if (mode === 'cleanup-retry' && cleanupHits++ === 0) {
+          const e = new Error('注入私有清理瞬时冲突')
+          e.code = 'EPERM'
+          throw e
+        }
+        const result = remove(file, ...args)
+        assert.equal(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'), owner)
+        return result
+      }
+      return remove(file, ...args)
+    }
+    fs.writeFileSync = (file, ...args) => {
+      if (mode === 'go-failure' && file === go) throw new Error('注入 go 写入失败')
+      return write(file, ...args)
+    }
+    try {
+      receipt = m.audit('run', 'predecessor')
+      if (mode === 'exception') throw new Error('注入屏障主体异常')
+    } catch (e) {
+      failure = e
+    } finally {
+      fs.renameSync = rename
+      fs.unlinkSync = unlink
+      fs.rmSync = remove
+      try {
+        if (peer) fs.writeFileSync(go, 'go')
+      } catch (e) {
+        signalError = e
+        try {
+          terminateOwnTree()
+        } catch (killError) {
+          signalError = new AggregateError([e, killError], e.message, { cause: e })
+        }
+      } finally {
+        fs.writeFileSync = write
+        if (peer) code = await closed
+      }
+    }
+    assert.equal(observed, true)
+    assert.equal(closedObserved, true, '断言前必须收到全部后继 close')
+    assert.equal(spawnCount, 1, '清理重试不能遗留额外 peer')
+    if (mode === 'go-failure') {
+      assert.match(signalError.message, /go 写入失败/)
+      assert.notEqual(code, 0, diag)
+      // 自有 worker 已整树 close，才清理其崩溃遗留隔离锁。
+      fs.rmSync(lock, { recursive: true, force: true })
+    } else {
+      assert.equal(code, 0, diag)
+      assert.equal(signalError, undefined)
+    }
+    if (mode === 'exception') assert.match(failure.message, /屏障主体异常/)
+    else assert.equal(failure, undefined)
+    assert.equal(receipt.persisted, !old && mode !== 'barrier-failure', JSON.stringify(receipt))
+    if (mode === 'barrier-failure') assert.match(receipt.error, /屏障清理异常/)
+    if (old) assert.match(receipt.error, /ENOTEMPTY|EEXIST/)
+    assert.equal(s.verifyAuditChain().ok, true)
+    fs.unlinkSync(copy)
+    console.log(JSON.stringify({
+      control: old ? 'old-negative' : 'new-positive',
+      mode,
+      persisted: receipt.persisted,
+      error: receipt.error,
+      close: code,
+      closedObserved,
+      spawnCount,
+      signalError: signalError?.message,
+      peer: diag,
+    }))
+  }
+  const matrix = []
+  for (const phase of ['retire', 'cleanup']) {
+    for (const permanent of [false, true]) {
+      for (const after of [false, true]) {
+        for (const errno of ['EPERM', 'EACCES', 'EBUSY']) {
+          matrix.push({ phase, permanent, after, errno })
+        }
+      }
+    }
+  }
+  for (const { phase, permanent, after, errno } of matrix) {
+    const f = await isolatedModule(`fault-${phase}-${permanent}-${after}-${errno}`)
+    const caseLock = path.join(f.AUDIT_DIR, '.append-lock')
+    const rename = fs.renameSync
+    const remove = fs.rmSync
+    let hits = 0
+    const fault = () => {
+      hits++
+      const e = new Error('注入 ' + phase)
+      e.code = errno
+      throw e
+    }
+    fs.renameSync = (a, b, ...args) => {
+      if (phase === 'retire' && String(b).includes('.retired-') && (permanent || hits === 0)) {
+        if (after) rename(a, b, ...args)
+        fault()
+      }
+      return rename(a, b, ...args)
+    }
+    fs.rmSync = (file, ...args) => {
+      if (phase === 'cleanup' && String(file).includes('.retired-') && (permanent || hits === 0)) {
+        if (after) remove(file, ...args)
+        fault()
+      }
+      return remove(file, ...args)
+    }
+    const before = f.verifyAuditChain().total
+    let receipt
+    try {
+      receipt = f.audit('run', 'fault', { phase, permanent, after })
+    } finally {
+      fs.renameSync = rename
+      fs.rmSync = remove
+    }
+    const expected = !permanent && (phase === 'cleanup' || !after)
+    assert.equal(receipt.persisted, expected, JSON.stringify(receipt))
+    if (phase === 'retire' && after) assert.equal(hits, 1, '模糊成功不得重试')
+    else if (permanent) assert.ok(hits > 1 && hits <= 51, '自有操作重试有界')
+    else assert.equal(hits, 1)
+    if (!expected) {
+      assert.ok(receipt.error.includes(errno) && receipt.error.includes(
+        phase === 'retire' ? 'retire 失败' : 'cleanup 失败',
+      ), receipt.error)
+      assert.match(receipt.error, /追加可能已完成/)
+    }
+    assert.equal(f.verifyAuditChain().total, before + 1)
+    console.log(JSON.stringify({
+      phase,
+      permanent,
+      after,
+      errno,
+      hits,
+      persisted: receipt.persisted,
+      error: receipt.error,
+      receipt,
+    }))
+    // 全部 worker close 后才重置隔离 fixture；绝不截断审计历史。
+    fs.rmSync(caseLock, { recursive: true, force: true })
+    for (const name of fs.readdirSync(f.AUDIT_DIR).filter((n) => n.includes('.retired-'))) {
+      fs.rmSync(path.join(f.AUDIT_DIR, name), { recursive: true })
+    }
+  }
+  // 业务首因、释放和候选清理异常必须全部保留，回执可直接看见首因。
+  for (const phase of ['retire', 'cleanup']) {
+    const f = await isolatedModule('compound-' + phase, true)
+    const primary = new Error('PRIMARY-WRITE-FAILURE')
+    const secondary = new Error('SECONDARY-' + phase)
+    secondary.code = 'EIO'
+    const candidateError = new Error('CANDIDATE-CLEANUP-FAILURE')
+    candidateError.code = 'EIO'
+    const rename = fs.renameSync
+    const remove = fs.rmSync
+    const open = fs.openSync
+    fs.renameSync = (a, b, ...args) => {
+      if (phase === 'retire' && String(b).includes('.retired-')) throw secondary
+      return rename(a, b, ...args)
+    }
+    fs.rmSync = (file, ...args) => {
+      if (String(file).includes('.candidate-')) throw candidateError
+      if (phase === 'cleanup' && String(file).includes('.retired-')) throw secondary
+      return remove(file, ...args)
+    }
+    let thrown
+    let receipt
+    try {
+      try {
+        f.withAuditLock(() => { throw primary })
+      } catch (e) {
+        thrown = e
+      }
+      assert.ok(thrown instanceof AggregateError)
+      assert.equal(thrown.cause, primary)
+      assert.equal(thrown.errors[0], primary)
+      assert.equal(thrown.errors[1].cause, secondary)
+      assert.equal(thrown.errors[2].cause, candidateError)
+      // 上次调用已完成，且没有其他 worker，才复位本用例的锁。
+      remove(path.join(f.AUDIT_DIR, '.append-lock'), { recursive: true, force: true })
+      fs.openSync = (file, ...args) => {
+        if (String(file).endsWith('.jsonl')) throw primary
+        return open(file, ...args)
+      }
+      receipt = f.audit('run', 'compound')
+    } finally {
+      fs.renameSync = rename
+      fs.rmSync = remove
+      fs.openSync = open
+    }
+    assert.equal(receipt.persisted, false)
+    assert.match(receipt.error, /PRIMARY-WRITE-FAILURE/)
+    assert.match(receipt.error, /SECONDARY-/)
+    assert.match(receipt.error, /CANDIDATE-CLEANUP-FAILURE/)
+    console.log(JSON.stringify({ compound: phase, error: receipt.error, causes: thrown.errors.length }))
+  }
+  const initialization = await isolatedModule('candidate-initialization', true)
+  const initPrimary = new Error('OWNER-WRITE-PRIMARY')
+  const initCleanup = new Error('OWNER-CANDIDATE-CLEANUP')
+  const originalWrite = fs.writeFileSync
+  const originalRemove = fs.rmSync
+  fs.writeFileSync = (file, ...args) => {
+    if (String(file).includes('.candidate-')) throw initPrimary
+    return originalWrite(file, ...args)
+  }
+  fs.rmSync = (file, ...args) => {
+    if (String(file).includes('.candidate-')) throw initCleanup
+    return originalRemove(file, ...args)
+  }
+  try {
+    assert.throws(() => initialization.withAuditLock(() => assert.fail('未发布不得执行')), (e) => {
+      assert.ok(e instanceof AggregateError)
+      assert.equal(e.cause, initPrimary)
+      assert.equal(e.errors[0], initPrimary)
+      assert.equal(e.errors[1].cause, initCleanup)
+      console.log(JSON.stringify({ initialization: e.message, causes: e.errors.length }))
+      return true
+    })
+  } finally {
+    fs.writeFileSync = originalWrite
+    fs.rmSync = originalRemove
+  }
+  // 死主锁的实际私有清理和共享移动 IO 故障不得被当未知 owner 吞掉。
+  for (const phase of ['rename', 'cleanup']) {
+    const f = await isolatedModule('dead-' + phase)
+    const dead = spawnSync(process.execPath, ['-e', '']).pid
+    const caseLock = path.join(f.AUDIT_DIR, '.append-lock')
+    fs.mkdirSync(caseLock, { recursive: true })
+    const ownerText = JSON.stringify({ pid: dead })
+    fs.writeFileSync(path.join(caseLock, 'owner.json'), ownerText)
+    const rename = fs.renameSync
+    const remove = fs.rmSync
+    let hits = 0
+    const fault = () => {
+      hits++
+      const e = new Error('DEAD-' + phase + '-EIO')
+      e.code = 'EIO'
+      throw e
+    }
+    fs.renameSync = (a, b, ...args) => {
+      if (phase === 'rename' && String(b).includes('.dead-')) fault()
+      return rename(a, b, ...args)
+    }
+    fs.rmSync = (file, ...args) => {
+      if (phase === 'cleanup' && String(file).includes('.dead-')) fault()
+      return remove(file, ...args)
+    }
+    let receipt
+    const before = f.verifyAuditChain().total
+    try {
+      receipt = f.audit('run', 'dead-fault')
+    } finally {
+      fs.renameSync = rename
+      fs.rmSync = remove
+    }
+    assert.equal(receipt.persisted, false)
+    assert.equal(hits, 1, '死锁共享移动及私有清理不得盲重试')
+    assert.match(receipt.error, /DEAD-.*-EIO/)
+    assert.match(receipt.error, /审计回收锁 dead/)
+    assert.equal(f.verifyAuditChain().total, before)
+    if (phase === 'rename') {
+      assert.equal(fs.readFileSync(path.join(caseLock, 'owner.json'), 'utf8'), ownerText)
+    } else {
+      assert.equal(fs.existsSync(caseLock), false)
+      assert.equal(fs.readdirSync(f.AUDIT_DIR).filter((n) => n.includes('.dead-')).length, 1)
+    }
+    console.log(JSON.stringify({ dead: phase, hits, persisted: receipt.persisted, error: receipt.error }))
+  }
+  async function crashWorker({ source, after }) {
+    const { default: fs } = await import('node:fs')
+    const { pathToFileURL } = await import('node:url')
+    const rename = fs.renameSync
+    fs.renameSync = (a, b, ...args) => {
+      if (String(b).includes('.retired-')) {
+        if (after) rename(a, b, ...args)
+        process.exit(74)
+      }
+      return rename(a, b, ...args)
+    }
+    const s = await import(pathToFileURL(source).href)
+    s.audit('run', 'release-crash')
+  }
+  for (const after of [false, true]) {
+    const script = `(${crashWorker.toString()})(${JSON.stringify({ source, after })})`
+    const crash = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: process.env,
+      encoding: 'utf8',
+    })
+    assert.equal(crash.status, 74, crash.stderr)
+    assert.equal(s.audit('run', 'after-crash').persisted, true)
+    assert.equal(s.verifyAuditChain().ok, true)
+    console.log(JSON.stringify({ crash: after ? 'after-retire' : 'before-retire', status: crash.status }))
+  }
+}
+rmSync(join(home, 'gate-audit'), { recursive: true, force: true })
+const retirement = runInChild(
+  'plain',
+  `(${retirementChecks.toString()})(${JSON.stringify(join(ROOT, 'src', 'state.js'))})`,
+)
+check('真实屏障、异常全部 close、24 项矩阵、复合首因及死锁 IO 回执', retirement.status === 0, retirement.stderr)
+console.log(retirement.stdout)
+
 // ---- 大尾行回归：反向跨块读取，不以固定窗口截断记录 ----
 for (const mode of ['plain', 'hmac']) {
   rmSync(join(home, 'gate-audit'), { recursive: true, force: true })
@@ -240,11 +682,36 @@ const reliable = runInChild(
   import { spawn, spawnSync } from 'node:child_process';
   import * as s from ${JSON.stringify(pathToFileURL(join(ROOT, 'src', 'state.js')).href)};
   assert.equal(s.audit('run','reliable').persisted,true);
-  const worker = "import {audit} from './src/state.js'; for(let i=0;i<40;i++) if(!audit('run','worker',{i}).persisted)process.exit(2);";
-  await Promise.all(Array.from({length:4},()=>new Promise((resolve,reject)=>{
-    const p=spawn(process.execPath,['--input-type=module','-e',worker],{env:process.env,stdio:'ignore'});
-    p.on('error',reject); p.on('exit',c=>c===0?resolve():reject(new Error('worker '+c)));
-  })));
+  async function workerMain() {
+    const { audit } = await import('./src/state.js')
+    for (let i = 0; i < 40; i++) {
+      const receipt = audit('run', 'worker', { i })
+      if (!receipt.persisted) {
+        console.error(JSON.stringify({
+          pid: process.pid,
+          i,
+          persisted: receipt.persisted,
+          error: receipt.error,
+        }))
+        process.exitCode = 2
+        break
+      }
+    }
+  }
+  const worker = '(' + workerMain.toString() + ')()'
+  const workers = await Promise.all(Array.from({ length: 4 }, () => new Promise((resolve) => {
+    const p = spawn(process.execPath, ['--input-type=module', '-e', worker], {
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stderr = ''
+    let error = ''
+    p.stderr.on('data', (b) => { stderr += b })
+    p.stdout.resume()
+    p.on('error', (e) => { error = e.message })
+    p.on('close', (code) => resolve({ code, stderr, error }))
+  })))
+  assert.ok(workers.every((w) => w.code === 0 && !w.error), JSON.stringify(workers))
   assert.equal(s.verifyAuditChain().total,161);
   assert.equal(s.verifyAuditChain().ok,true);
   assert.deepEqual(s.readAudit({limit:0}),[]);
@@ -253,6 +720,13 @@ const reliable = runInChild(
   const dead=spawnSync(process.execPath,['-e','']).pid;
   fs.mkdirSync(lock); fs.writeFileSync(path.join(lock,'owner.json'),JSON.stringify({pid:dead}));
   assert.equal(s.audit('run','dead-recovery').persisted,true);
+  fs.mkdirSync(lock)
+  const badOwner = JSON.stringify({ pid: dead, token: 'invalid' })
+  fs.writeFileSync(path.join(lock, 'owner.json'), badOwner)
+  const bad = s.audit('run', 'bad-token')
+  assert.equal(bad.persisted, false)
+  assert.equal(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'), badOwner)
+  fs.rmSync(lock, { recursive: true })
   fs.mkdirSync(lock); fs.writeFileSync(path.join(lock,'owner.json'),JSON.stringify({pid:process.pid}));
   fs.utimesSync(lock,0,0);
   assert.equal(s.audit('run','live-lock').persisted,false);
@@ -650,9 +1124,10 @@ check(
   JSON.stringify(last),
 )
 
-try {
+if (fail === 0) try {
   rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
 } catch {}
+else console.error(`失败证据保留: ${home}`)
 
 console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`)
 console.log(
