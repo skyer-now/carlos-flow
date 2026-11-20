@@ -93,6 +93,14 @@ A: Simply reply with **"Cancel gate"** to release the session immediately, or **
 
 ---
 
+## 📚 Documentation
+
+* [Smart Trigger Guide](./TRIGGER_GUIDE.md) — Scoring, side-effect triage, and dual-threshold decisions
+* [Migration Guide](./MIGRATION.md) — Upgrading smoothly from older versions
+* [Changelog](./CHANGELOG.md) — Detailed version release notes
+
+---
+
 ## 📄 License
 
 MIT © Carlos Flow Contributors
