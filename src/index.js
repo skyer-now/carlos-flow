@@ -2341,6 +2341,12 @@ const TOOLS = [
           state.completed_ok = latest.completed_ok
           state.verdict_role = latest.verdict_role
         })
+        if (verdict === 'PASS' && state.card && state.card.quote) {
+          try {
+            const { LearnedRulesManager } = await import('./trigger.js')
+            LearnedRulesManager.recordPositiveFeedback(state.card.quote)
+          } catch {}
+        }
         if (cardReplaced) {
           audit('decision', sessionId, {
             kind: 'verdict_denied',
@@ -2756,6 +2762,14 @@ const TOOLS = [
           reason: a.reason || '用户请求撤销',
         })
 
+        // 在线学习：捕获负向信号，自动将触发句式与特征存入本地抑制规则库
+        try {
+          const { LearnedRulesManager } = await import('./trigger.js')
+          if (state && state.card && state.card.quote) {
+            LearnedRulesManager.recordNegativeFeedback(state.card.quote, 'hard_negative')
+          }
+        } catch {}
+
         return ok({
           ok: true,
           sessionId,
@@ -2828,6 +2842,12 @@ const TOOLS = [
           reason: a.reason,
           confirmed: a.confirmed === true,
         })
+        if (state.bypass && state.card && state.card.quote) {
+          try {
+            const { LearnedRulesManager } = await import('./trigger.js')
+            LearnedRulesManager.recordNegativeFeedback(state.card.quote, 'hard_negative')
+          } catch {}
+        }
         return ok({
           ok: true,
           bypass: state.bypass,

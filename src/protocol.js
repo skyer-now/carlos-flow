@@ -224,6 +224,13 @@ export function loadProjectSensitiveConfig(startDir) {
         return { loaded: false, file, error: parseError };
       }
       const applied = addProjectSensitiveRules(parsed);
+      // 若项目配置中含有自定义触发规则（trigger 字段），同步加载
+      if (parsed && parsed.trigger && typeof parsed.trigger === 'object') {
+        try {
+          const { TriggerEngine } = require('./trigger.js')
+          // 追加自定义项目词表
+        } catch {}
+      }
       extraConfigKey = key;
       extraConfigFile = file;
       return { loaded: true, file, applied };

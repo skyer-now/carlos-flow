@@ -97,6 +97,7 @@ const DEFAULT_CONFIG = {
     'explain', 'describe', 'analyse', 'analyze', 'summarize', 'summarise',
     'what', 'why', 'how', 'understand', 'overview', 'compare', 'inspect',
     'read', '查找', '解释', '分析', '总结', '为什么', '是什么', '调研', '对比', '了解', '查看', '读一下', '看看',
+    '看一下', '看下', '参考', '浏览', '评估'
   ],
   mutatingActionWords: [
     'fix', 'refactor', 'change', 'update', 'implement', 'add', 'remove',
@@ -173,6 +174,99 @@ if (existsSync(CONFIG_PATH)) {
  * 该会话会被永久锁死，且没有任何合法路径解闸。
  */
 /**
+ * 复合名词与伪改动词清洗列表（如“开源实现/方案设计/架构实现/如何实现”，属于只读名词短语）
+ */
+const COMPOUND_NOUN_PHRASES = [
+  /开源实现/g, /技术实现/g, /功能实现/g, /架构实现/g, /如何实现/g, /怎么实现/g,
+  /方案设计/g, /系统设计/g, /设计方案/g, /重构计划/g, /修改建议/g, /更新说明/g
+];
+
+/**
+ * 疑问前缀与否定/探讨反转词（具有最高静默优先级）
+ */
+const QUESTION_OR_NEGATION_PREFIXES = [
+  '为什么', '为何', '怎么看', '如何看待', '是什么', '什么原因',
+  '先别改', '不要改', '只是讨论', '随便问问', '不用动代码', '仅分析', '别执行'
+];
+
+const LEARNED_RULES_FILE = join(TRIGGER_HOME, 'learned-rules.json');
+
+/**
+ * 本地隐式强化学习与规则自适应管理器
+ */
+export class LearnedRulesManager {
+  static load() {
+    try {
+      if (existsSync(LEARNED_RULES_FILE)) {
+        return JSON.parse(readFileSync(LEARNED_RULES_FILE, 'utf8'));
+      }
+    } catch {}
+    return { version: 1, suppressed_patterns: [], boosted_patterns: [], threshold_offset: 0 };
+  }
+
+  static save(data) {
+    try {
+      ensureHome();
+      writeFileSync(LEARNED_RULES_FILE, JSON.stringify(data, null, 2), 'utf8');
+    } catch {}
+  }
+
+  /**
+   * 记录负向行为信号（用户叫停/撤销/老化）
+   */
+  static recordNegativeFeedback(triggerMessage, reason = 'hard_negative') {
+    const data = this.load();
+    const text = String(triggerMessage || '').trim();
+    if (!text) return;
+    
+    // 提炼简明正则特征（如包含核心动词与名词的模式）
+    const clean = text.slice(0, 30).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!data.suppressed_patterns.includes(clean)) {
+      data.suppressed_patterns.push(clean);
+      if (data.suppressed_patterns.length > 50) data.suppressed_patterns.shift();
+    }
+    // 动态抬高惩罚阈值
+    data.threshold_offset = Math.min(20, (data.threshold_offset || 0) + (reason === 'hard_negative' ? 3 : 1));
+    this.save(data);
+  }
+
+  /**
+   * 记录正向履约信号（正常完成 claim -> verdict PASS）
+   */
+  static recordPositiveFeedback(triggerMessage) {
+    const data = this.load();
+    const text = String(triggerMessage || '').trim();
+    if (!text) return;
+    const clean = text.slice(0, 30).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!data.boosted_patterns.includes(clean)) {
+      data.boosted_patterns.push(clean);
+      if (data.boosted_patterns.length > 50) data.boosted_patterns.shift();
+    }
+    // 恢复/降低阈值偏移
+    if (data.threshold_offset > 0) {
+      data.threshold_offset = Math.max(0, data.threshold_offset - 1);
+    }
+    this.save(data);
+  }
+
+  /**
+   * 检查是否命中抑制模式
+   */
+  static isSuppressed(message) {
+    const data = this.load();
+    const s = String(message || '').toLowerCase();
+    for (const pat of data.suppressed_patterns || []) {
+      try {
+        if (new RegExp(pat, 'i').test(s)) return true;
+      } catch {
+        if (s.includes(pat.toLowerCase())) return true;
+      }
+    }
+    return false;
+  }
+}
+
+/**
  * 语义副作用分级识别
  * LEVEL_0: READ_ONLY (只读/闲聊，0分静默)
  * LEVEL_1: EPHEMERAL (轻量排查/单测/打印，记录流水不建卡)
@@ -181,20 +275,35 @@ if (existsSync(CONFIG_PATH)) {
 export function classifySideEffect(message) {
   const s = String(message || '').toLowerCase();
   if (!s) return 'LEVEL_0';
+
+  // 0. 在线学习抑制规则拦截（历史误触句式强制静默）
+  if (LearnedRulesManager.isSuppressed(s)) {
+    return 'LEVEL_0';
+  }
+
+  // 1. 疑问前缀与否定反转词优先（优先静默）
+  if (QUESTION_OR_NEGATION_PREFIXES.some((q) => s.startsWith(q) || s.includes(q))) {
+    return 'LEVEL_0';
+  }
+
   const ro = config.readOnlyIntentWords || [];
   const mut = config.mutatingActionWords || [];
   const eph = config.ephemeralActionWords || [];
 
-  // 1. 优先检查改动动词（如“实现/修改/新增/重构”），但“开源实现/功能实现”属于只读调研名词短语，排除误判
-  const cleanForMut = s.replace(/开源实现|技术实现|功能实现|如何实现|怎么实现/g, '');
+  // 2. 复合名词清洗（消除“开源实现/方案设计”等伪改动动词误判）
+  let cleanForMut = s;
+  for (const reg of COMPOUND_NOUN_PHRASES) {
+    cleanForMut = cleanForMut.replace(reg, '');
+  }
+
   const hasMutating = mut.some((w) => cleanForMut.includes(String(w).toLowerCase()));
   if (hasMutating) return 'LEVEL_2';
 
-  // 2. 检查临时排查/调试词汇
+  // 3. 检查临时排查/调试词汇
   const hasEphemeral = eph.some((w) => s.includes(String(w).toLowerCase()));
   if (hasEphemeral) return 'LEVEL_1';
 
-  // 3. 检查只读意图词汇
+  // 4. 检查只读意图词汇
   const hasReadOnly = ro.some((w) => s.includes(String(w).toLowerCase()));
   if (hasReadOnly) return 'LEVEL_0';
 
@@ -612,8 +721,9 @@ class TriggerDecisionEngine {
       : config.triggerThreshold;
 
     // 反馈学习：负反馈多 → 抬高触发阈值（更保守）；正反馈多 → 降低阈值（更灵敏）
-    // 两个来源：当前会话的即时反馈 + 持久化的历史学习结果
-    const feedbackAdj = this.getFeedbackThresholdAdjustment() + (Number(config.feedbackThresholdOffset) || 0);
+    // 三个来源：当前会话即时反馈 + 配置持久化偏移 + 在线学习规则管理器偏移
+    const learnedOffset = Number(LearnedRulesManager.load().threshold_offset) || 0;
+    const feedbackAdj = this.getFeedbackThresholdAdjustment() + (Number(config.feedbackThresholdOffset) || 0) + learnedOffset;
     const effectiveThreshold = Math.max(1, threshold + feedbackAdj);
 
     let decision;
