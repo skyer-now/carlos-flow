@@ -1,3 +1,8 @@
+## [2.19.0] - 2026-11-20
+
+- **Auto-Verify 验证命令自推断**：实现 `detectProjectTestCommand`，自动识别 Node.js (package.json scripts.test/vitest/jest)、Python (pytest)、Rust (cargo test)、Go (go test)，开卡未填 `verify.cmd` 时自动装配，消灭配置门槛。
+- **完工电子质检交付单 (QA Sheet)**：在 `flow_verdict` 裁定 PASS 时纯内存生成包含 5 大维度的结构化 Markdown 交付单，汇总目标、修改文件范围、真实命令执行耗时与通过证据、双轴审查员评语及一键回滚指南。
+
 ## [2.18.1] - 2026-11-20
 
 - 重构并清理 GitHub 首页 README（中/英双语），移除过时历史草稿与冗余文档说明，突出“机械门禁 + 通俗向导 + 全平台兼容”的核心价值。

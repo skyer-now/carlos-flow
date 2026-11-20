@@ -1,3 +1,25 @@
+# Carlos Flow v2.19.0 发布说明
+
+## 核心新特性
+
+### 1. Auto-Verify 验证命令自推断 (TASK-101 & TASK-102)
+- 自动识别当前项目的测试工具链：
+  - Node.js：自动读取 `package.json` 中的 `scripts.test` / `test:all` / `test:e2e` / `vitest` / `jest`
+  - Python：自动识别 `pytest.ini` / `tests/`
+  - Rust：自动识别 `Cargo.toml` (`cargo test`)
+  - Go：自动识别 `go.mod` (`go test ./...`)
+- 在开卡（`flow_submit_requirement`）未提供验证命令时自动完成装配，免去手动配置繁琐参数。
+
+### 2. 完工电子质检交付单自动生成 (TASK-103)
+- 任务落定 `PASS` 裁定时，纯内存生成结构化 Markdown 交付单：
+  - 📋 **任务目标与原话**
+  - ✏️ **修改范围与授权文件清单**
+  - 🧪 **真实验证证据与退出状态**
+  - ⚖️ **双轴独立审查员结论**
+  - 🛡️ **安全快照与一键回滚指南**
+
+---
+
 # Carlos Flow v2.18.1 发布说明
 
 ## 核心新特性

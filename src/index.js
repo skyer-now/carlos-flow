@@ -20,8 +20,8 @@ import { createServer, connect } from 'node:net'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { serveStdio } from './mcp-stdio.mjs'
 import { PROTOCOL, loadProjectSensitiveConfig } from './protocol.js'
-import { parseCard, validateCard, validateNewFiles, riskTier, isSensitive, pathKey, checkNewFilesBoundary } from './card.js'
-import { deriveWizardStatus } from '../ui/narrator.js'
+import { parseCard, validateCard, validateNewFiles, riskTier, isSensitive, pathKey, checkNewFilesBoundary, detectProjectTestCommand } from './card.js'
+import { deriveWizardStatus, generateQASheet } from '../ui/narrator.js'
 import { storageOverview } from './storage.js'
 import {
   loadState,
@@ -1019,6 +1019,13 @@ const TOOLS = [
             files: Array.isArray(a.files) ? a.files : [],
             verify: asObject(a.verify),
             confirmed: a.confirmed === true,
+          }
+          // Auto-Verify: 若未显式传入 verify.cmd，自动尝试推断当前项目的测试命令
+          if (!card.verify || !card.verify.cmd) {
+            const detectedCmd = detectProjectTestCommand(scopeRoot || execDir);
+            if (detectedCmd) {
+              card.verify = { ...(card.verify || {}), cmd: detectedCmd, autoInferred: true };
+            }
           }
           if (typeof a.parallel_plan === 'string' && a.parallel_plan !== '')
             card.parallel_plan = a.parallel_plan
@@ -2354,6 +2361,9 @@ const TOOLS = [
         }
         if (warns.length) result.warn_findings = warns
         if (findings.length) result.findings = findings
+        if (verdict === 'PASS') {
+          result.qa_sheet = generateQASheet(state, a.notes)
+        }
         return ok(result)
       } catch (e) {
         return fail(e && e.message ? e.message : String(e))

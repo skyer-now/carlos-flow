@@ -2,6 +2,7 @@
 // Node ESM. 只依赖 Node 内置模块（fs），不依赖任何第三方包。
 
 import fs from 'node:fs';
+import { join, isAbsolute } from 'node:path';
 
 export const CARD_MARKER = 'FLOW_CARD:';
 
@@ -803,3 +804,48 @@ export function validateCard(card, options) {
 
   return { ok: true, reason: 'ok', findings, tier };
 }
+
+/**
+ * 自动探测项目技术栈对应的验证命令 (Auto-Verify)
+ * 扫描指定目录（默认 cwd 或 git root），返回最适宜的测试命令字符串，无法探测时返回 null
+ */
+export function detectProjectTestCommand(targetCwd = null) {
+  const root = targetCwd || process.cwd();
+  try {
+    // 1. Node.js 生态检测 (package.json)
+    const pkgPath = join(root, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        const scripts = pkg.scripts || {};
+        if (scripts.test && !scripts.test.includes('no test specified')) {
+          return 'npm test';
+        }
+        if (scripts['test:all']) return 'npm run test:all';
+        if (scripts['test:e2e']) return 'npm run test:e2e';
+        if (scripts.jest) return 'npx jest';
+        if (scripts.vitest) return 'npx vitest run';
+      } catch { /* 忽略解析错误 */ }
+    }
+
+    // 2. Python 生态检测
+    if (fs.existsSync(join(root, 'pytest.ini')) || fs.existsSync(join(root, 'setup.cfg')) || fs.existsSync(join(root, 'pyproject.toml')) || fs.existsSync(join(root, 'tests'))) {
+      return 'pytest';
+    }
+
+    // 3. Rust 生态检测
+    if (fs.existsSync(join(root, 'Cargo.toml'))) {
+      return 'cargo test';
+    }
+
+    // 4. Go 生态检测
+    if (fs.existsSync(join(root, 'go.mod'))) {
+      return 'go test ./...';
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
