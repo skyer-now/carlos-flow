@@ -132,6 +132,22 @@ function setupWizard() {
   };
   for (const key of ['goal', 'scope', 'acceptance']) $('#draft-' + key).oninput = () => { $('#draft-state').textContent = '草稿已修改，尚未发送；不会写任务卡或批准扩大范围。'; };
   $('#wizard-refresh').onclick = displayRequest;
+  
+  // 移动端大按钮快捷响应
+  if ($('#mobile-approve-btn')) {
+    $('#mobile-approve-btn').onclick = () => {
+      const stage = $('#wizard-stage').textContent || '当前阶段';
+      navigator.clipboard?.writeText?.(`确认并继续（${stage}）`);
+      $('#wizard-confirm').textContent = '已复制指引词到剪贴板，请回对话框粘贴发送。';
+    };
+  }
+  if ($('#mobile-revert-btn')) {
+    $('#mobile-revert-btn').onclick = () => {
+      navigator.clipboard?.writeText?.('恢复重来');
+      $('#wizard-confirm').textContent = '已复制“恢复重来”到剪贴板，请回对话框发送以执行一键回滚。';
+    };
+  }
+
   displayRequest();
 }
 // 在任何配置读取或保存事件注册之前分支，非法任务查询也不退回设置。

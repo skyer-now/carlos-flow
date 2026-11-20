@@ -1,5 +1,60 @@
 <!doctype html>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>
+  :root {
+    --text-primary: #1f2328;
+    --text-secondary: #656d76;
+    --border-default: #d0d7de;
+    --surface: #ffffff;
+    --surface-subtle: #f6f8fa;
+    --primary: #0969da;
+    --success: #1a7f37;
+    --danger: #cf222e;
+    --warning: #9a6700;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --text-primary: #e6edf3;
+      --text-secondary: #7d8590;
+      --border-default: #30363d;
+      --surface: #0d1117;
+      --surface-subtle: #161b22;
+      --primary: #2f81f7;
+      --success: #3fb950;
+      --danger: #f85149;
+      --warning: #d29922;
+    }
+  }
+  body {
+    margin: 0;
+    padding: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    background: var(--surface);
+    box-sizing: border-box;
+  }
+  /* 移动端响应式优化 (< 600px) */
+  @media (max-width: 600px) {
+    body { padding: 10px; font-size: 14px; }
+    .mobile-fold { margin-top: 8px; }
+    .mobile-big-btn {
+      width: 100%;
+      min-height: 44px;
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .mobile-two-btn-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+  }
+</style>
 <body style="margin:0;padding:12px;font-size:13px;line-height:1.6">
   <section id="settings-shell" hidden>
   <div style="margin-bottom:10px">
@@ -62,6 +117,12 @@
     </div>
     <button id="wizard-refresh" style="padding:8px 12px;background:var(--surface,#fff);color:inherit;border:1px solid var(--border-default,#ddd);border-radius:6px">查看最近采样</button>
     <p id="wizard-refresh-note">刷新只请求展示缓存。获取新状态需要原助手发起新的工具调用，不是后台实时轮询。</p>
+
+    <!-- 移动端专属单手双大按钮流转卡 -->
+    <div id="mobile-action-card" class="mobile-two-btn-row">
+      <button id="mobile-approve-btn" class="mobile-big-btn" style="padding:10px 16px;border-radius:8px;border:none;background:var(--primary,#0969da);color:#fff;cursor:pointer">👉 复制下一步操作指引</button>
+      <button id="mobile-revert-btn" class="mobile-big-btn" style="padding:10px 16px;border-radius:8px;border:1px solid var(--border-default,#ddd);background:transparent;color:inherit;cursor:pointer">🛑 遇到问题申请回滚 (恢复重来)</button>
+    </div>
   </section>
   <script src="/settings.js"></script>
 </body>

@@ -1,3 +1,8 @@
+## [2.20.0] - 2026-11-20
+
+- **快照存储 CAS 去重与指针化还原 (TASK-201~204)**：实现派发前快照 SHA-256 哈希指针去重，同一文件重复派发自动引用已存 Blob，去重率大幅提升，100% 逐字节保真还原。
+- **移动端响应式折叠与单手流转 (TASK-301~302)**：`settings.html` 接入 `< 600px` 移动端视口适配，长篇终端输出折叠，常驻大触控区“复制下一步指引 / 申请回滚”，单手 1 秒完成流转。
+
 ## [2.19.0] - 2026-11-20
 
 - **Auto-Verify 验证命令自推断**：实现 `detectProjectTestCommand`，自动识别 Node.js (package.json scripts.test/vitest/jest)、Python (pytest)、Rust (cargo test)、Go (go test)，开卡未填 `verify.cmd` 时自动装配，消灭配置门槛。
