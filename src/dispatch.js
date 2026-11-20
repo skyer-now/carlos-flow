@@ -97,6 +97,37 @@ const AXIS_PROMPTS = {
 
 import { PROMPT_PROFILES } from './profiles.js'
 
+/**
+ * 根据 scope 文件类型推断事前最佳实践指南 (Proactive Guidelines)
+ */
+export function inferProactiveGuidelines(scope = []) {
+  const list = Array.isArray(scope) ? scope.map((s) => String(s).toLowerCase()) : []
+  if (list.length === 0) return ''
+  const tips = []
+
+  // 1. API 接口 / Controller 相关
+  if (list.some((f) => f.includes('api') || f.includes('route') || f.includes('controller') || f.includes('server') || f.includes('handler'))) {
+    tips.push('• 接口安全：入参必须强类型校验，返回必须脱敏敏感字段，严格防范越界与空注入。')
+  }
+
+  // 2. 数据存储 / 状态 / 事务相关
+  if (list.some((f) => f.includes('db') || f.includes('state') || f.includes('storage') || f.includes('lock') || f.includes('store') || f.includes('sql'))) {
+    tips.push('• 存储与状态：并发写入必须加锁互斥，读写操作保证原子性与状态可回滚，禁止写死绝对路径。')
+  }
+
+  // 3. 工具链 / 跨平台 / CLI 相关
+  if (list.some((f) => f.includes('cli') || f.includes('bridge') || f.includes('bin') || f.includes('script') || f.includes('spawn') || f.includes('process'))) {
+    tips.push('• 跨平台健壮性：路径统一使用正斜杠或 path.join，子进程必须指定 windowsHide: true，杜绝控制台黑窗弹窗。')
+  }
+
+  // 4. 前端 / UI / 页面相关
+  if (list.some((f) => f.includes('ui') || f.includes('html') || f.includes('css') || f.includes('view') || f.includes('page') || f.includes('component'))) {
+    tips.push('• 界面体验：长文本输出默认折叠，移动端适配 <600px 响应式大触控区，关键报错转换为通俗人话。')
+  }
+
+  return tips.length > 0 ? 'proactive guidelines (事前代码规范建议):\n' + tips.join('\n') : ''
+}
+
 // role ∈ "executor" | "auditor"
 // options ∈ { axis?: "standards"|"spec", profile?: string }
 export function buildContractPrompt(role, card, extra, options = {}) {
@@ -169,6 +200,14 @@ export function buildContractPrompt(role, card, extra, options = {}) {
   let prompt = [objective, outputFormat, toolGuidance, taskBoundaries].join(
     '\n',
   )
+
+  // 事前代码规范注入：若是 executor 执行者，根据 scope 自动注入针对性编码最佳实践
+  if (isExecutor && card && Array.isArray(card.scope) && card.scope.length > 0) {
+    const guidelines = inferProactiveGuidelines(card.scope)
+    if (guidelines) {
+      prompt += '\n\n' + guidelines
+    }
+  }
 
   // 轴模式：附上该轴的基线清单（Standards 轴的坏味道基线）。
   // 清单必须内联进 prompt —— 审计 subagent 跑在**目标仓库**里，

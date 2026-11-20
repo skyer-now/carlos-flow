@@ -1,3 +1,21 @@
+# Carlos Flow v2.21.0 发布说明
+
+## 核心新特性
+
+### 1. P0 事前代码规范注入 (inferProactiveGuidelines)
+- 从“事后挑刺”进阶为“事前指路”：
+  - 改 API/Controller → 自动注入接口安全与参数强校验规范；
+  - 改状态/存储/DB → 自动注入并发加锁互斥与原子事务规范；
+  - 改 CLI/脚本/Bridge → 自动注入跨平台正斜杠与 `windowsHide: true` 防黑窗规范；
+  - 改 UI/页面 → 自动注入长文本折叠与移动端单手流转规范。
+
+### 2. P1 标准 MCP Resources & Prompts 扩展
+- 对齐官方 MCP 协议标准：
+  - **Resources**：暴露 `carlos://state/current` 与 `carlos://rules/standards`，支持只读资源常驻挂载；
+  - **Prompts**：注册 `carlos-start-task` 标准开卡交互模板，大幅降低大模型工具调用轮次与 Token 消耗。
+
+---
+
 # Carlos Flow v2.20.0 发布说明
 
 ## 核心新特性

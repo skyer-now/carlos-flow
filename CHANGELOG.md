@@ -1,3 +1,8 @@
+## [2.21.0] - 2026-11-20
+
+- **P0 事前代码规范注入 (inferProactiveGuidelines)**：在 `flow_claim(executor)` 派发时，根据 scope 文件类型自动注入对应的最佳实践（API 接口安全校验、存储并发互斥事务、跨平台路径与 windowsHide、移动端 UI 体验规范），从源头引导 AI 一次性写对代码。
+- **P1 标准 MCP Resources & Prompts 扩展**：`mcp-stdio.mjs` 扩展支持 `resources/list` / `resources/read`（只读状态与 18 项坏味道基线资源）以及 `prompts/list` / `prompts/get`（`carlos-start-task` 开卡引导模板），深度对齐官方生态标准并降低 Token 消耗。
+
 ## [2.20.0] - 2026-11-20
 
 - **快照存储 CAS 去重与指针化还原 (TASK-201~204)**：实现派发前快照 SHA-256 哈希指针去重，同一文件重复派发自动引用已存 Blob，去重率大幅提升，100% 逐字节保真还原。

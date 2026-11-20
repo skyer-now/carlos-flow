@@ -80,11 +80,78 @@ export class StdioServer {
         this.reply(id, { tools: this.tools });
         return;
       case "resources/list":
-        this.reply(id, { resources: [] });
+        this.reply(id, {
+          resources: [
+            {
+              uri: "carlos://state/current",
+              name: "当前任务卡与门禁状态",
+              mimeType: "application/json",
+              description: "当前会话的任务目标、修改范围、验收标准与向导步骤摘要"
+            },
+            {
+              uri: "carlos://rules/standards",
+              name: "18项代码规范与坏味道基线",
+              mimeType: "text/plain",
+              description: "Carlos 工作流内置的 18 项 Fowler 代码规范与坏味道排查标准"
+            }
+          ]
+        });
         return;
+      case "resources/read": {
+        const uri = message.params && message.params.uri;
+        if (uri === "carlos://rules/standards") {
+          this.reply(id, {
+            contents: [
+              {
+                uri,
+                mimeType: "text/plain",
+                text: "Carlos 18项代码坏味道基线：1.Duplicated Code 2.Long Method 3.Long Parameter List 4.Large Class 5.Data Clumps 6.Primitive Obsession 7.Feature Envy 8.Message Chains 9.Middle Man 10.Divergent Change 11.Shotgun Surgery 12.Speculative Generality 13.Temporary Field 14.Refused Bequest 15.Data Class 16.Lazy Class 17.Comments 18.Dead Code"
+              }
+            ]
+          });
+        } else {
+          this.reply(id, {
+            contents: [
+              {
+                uri: uri || "carlos://state/current",
+                mimeType: "application/json",
+                text: JSON.stringify({ note: "请通过 flow_status 工具获取实时会话状态" })
+              }
+            ]
+          });
+        }
+        return;
+      }
       case "prompts/list":
-        this.reply(id, { prompts: [] });
+        this.reply(id, {
+          prompts: [
+            {
+              name: "carlos-start-task",
+              description: "启动 Carlos 结构化开卡向导与安全守护",
+              arguments: [
+                { name: "goal", description: "本次任务的具体修改目标", required: true },
+                { name: "scope", description: "只准修改的文件列表", required: false }
+              ]
+            }
+          ]
+        });
         return;
+      case "prompts/get": {
+        const pName = message.params && message.params.name;
+        this.reply(id, {
+          description: "Carlos 任务引导 Prompt",
+          messages: [
+            {
+              role: "user",
+              content: {
+                type: "text",
+                text: `走门禁：请帮我执行任务，目标：${(message.params && message.params.arguments && message.params.arguments.goal) || '代码重构'}。请在修改前留痕并遵循机械门禁边界。`
+              }
+            }
+          ]
+        });
+        return;
+      }
       case "tools/call": {
         const params = message.params || {};
         const name = params.name;
