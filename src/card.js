@@ -806,6 +806,43 @@ export function validateCard(card, options) {
 }
 
 /**
+ * 校验多 Agent 细粒度权限网格 (Agent Mesh & Granular Scope)
+ * agents: { [agentName: string]: { allowed_scope: string[], read_only?: boolean } }
+ */
+export function validateAgentMesh(agents, globalScope = []) {
+  if (!agents || typeof agents !== 'object' || Array.isArray(agents)) {
+    return { ok: true, agents: {} };
+  }
+  const normalized = {};
+  const globalSet = new Set(Array.isArray(globalScope) ? globalScope.map(String) : []);
+
+  for (const [name, cfg] of Object.entries(agents)) {
+    if (!name || typeof name !== 'string') continue;
+    if (!cfg || typeof cfg !== 'object') continue;
+    const allowed = Array.isArray(cfg.allowed_scope) ? cfg.allowed_scope.map(String) : [];
+    
+    // 子 Agent 的 allowed_scope 不能越出全局任务卡的 globalScope（若 globalScope 非空）
+    if (globalSet.size > 0) {
+      for (const p of allowed) {
+        if (!globalSet.has(p) && !Array.from(globalSet).some(g => p.startsWith(g.endsWith('/') ? g : g + '/'))) {
+          return {
+            ok: false,
+            reason: `子 Agent [${name}] 的 allowed_scope 路径 [${p}] 越出任务卡全局 scope 范围`
+          };
+        }
+      }
+    }
+
+    normalized[name] = {
+      allowed_scope: allowed,
+      read_only: cfg.read_only === true
+    };
+  }
+
+  return { ok: true, agents: normalized };
+}
+
+/**
  * 自动探测项目技术栈对应的验证命令 (Auto-Verify)
  * 扫描指定目录（默认 cwd 或 git root），返回最适宜的测试命令字符串，无法探测时返回 null
  */

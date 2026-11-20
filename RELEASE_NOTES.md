@@ -1,3 +1,17 @@
+# Carlos Flow v2.22.0 发布说明
+
+## 核心新特性
+
+### 1. P2 本地错误自愈知识库 (Failure Memory)
+- 自动持久化历史开发过程中的避坑经验；
+- 在派发执行者（`flow_claim`）时，自动结合上下文注入历史避坑规则，避免在同一项目中重复犯错。
+
+### 2. P3 多 Agent 细粒度权限网格 (validateAgentMesh)
+- 任务卡全面支持 `agents` 权限网格字段；
+- 支持为不同的子 Agent 划分专属的 `allowed_scope`，在派发合同（Prompt）与运行时检测中严格执行权限隔离，为团队化多 Agent 协同打下坚实底座。
+
+---
+
 # Carlos Flow v2.21.0 发布说明
 
 ## 核心新特性

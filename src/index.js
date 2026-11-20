@@ -20,7 +20,7 @@ import { createServer, connect } from 'node:net'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { serveStdio } from './mcp-stdio.mjs'
 import { PROTOCOL, loadProjectSensitiveConfig } from './protocol.js'
-import { parseCard, validateCard, validateNewFiles, riskTier, isSensitive, pathKey, checkNewFilesBoundary, detectProjectTestCommand } from './card.js'
+import { parseCard, validateCard, validateNewFiles, riskTier, isSensitive, pathKey, checkNewFilesBoundary, detectProjectTestCommand, validateAgentMesh } from './card.js'
 import { deriveWizardStatus, generateQASheet } from '../ui/narrator.js'
 import { storageOverview } from './storage.js'
 import {
@@ -1143,6 +1143,15 @@ const TOOLS = [
           confirmed: a.confirmed === true || card.confirmed === true,
           // new_files 的仓库边界由 card.js 的 validateNewFiles 统一判定（不再各写一份）
           repoRoot: scopeRoot,
+        }
+
+        // 多 Agent 网格校验
+        if (a.agents && typeof a.agents === 'object') {
+          const meshCheck = validateAgentMesh(a.agents, card.scope)
+          if (!meshCheck.ok) {
+            return fail(meshCheck.reason)
+          }
+          card.agents = meshCheck.agents
         }
 
         const tier = riskTier(card.scope)

@@ -1,3 +1,8 @@
+## [2.22.0] - 2026-11-20
+
+- **P2 本地错误自愈知识库 (Failure Memory)**：实现 `loadFailureMemory` 与 `saveFailureMemory`，将历史踩坑经验持久化并在派发执行者时自动注入，形成项目专属记忆外挂，越用越聪明。
+- **P3 多 Agent 细粒度权限网格 (validateAgentMesh)**：任务卡全面支持 `agents: { [agent]: { allowed_scope } }` 细粒度权限划分，为多 Agent 并发协作建立专属边界隔离。
+
 ## [2.21.0] - 2026-11-20
 
 - **P0 事前代码规范注入 (inferProactiveGuidelines)**：在 `flow_claim(executor)` 派发时，根据 scope 文件类型自动注入对应的最佳实践（API 接口安全校验、存储并发互斥事务、跨平台路径与 windowsHide、移动端 UI 体验规范），从源头引导 AI 一次性写对代码。

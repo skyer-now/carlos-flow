@@ -98,31 +98,70 @@ const AXIS_PROMPTS = {
 import { PROMPT_PROFILES } from './profiles.js'
 
 /**
+ * 本地错误自愈知识库 (Failure Memory & Self-Healing Guidelines)
+ * 记录历史项目中踩过的坑与规则，避免重复犯错
+ */
+const KNOWLEDGE_PATH = path.join(os.homedir(), '.carlos-flow', 'failure-memory.json')
+
+export function loadFailureMemory() {
+  try {
+    if (fs.existsSync(KNOWLEDGE_PATH)) {
+      return JSON.parse(fs.readFileSync(KNOWLEDGE_PATH, 'utf8'))
+    }
+  } catch {}
+  return { rules: [] }
+}
+
+export function saveFailureMemory(item) {
+  try {
+    const mem = loadFailureMemory()
+    const text = typeof item === 'string' ? item : item.rule
+    if (!text || mem.rules.some((r) => r.text === text)) return
+    mem.rules.push({
+      text,
+      tag: item.tag || 'general',
+      added_at: new Date().toISOString()
+    })
+    fs.mkdirSync(path.dirname(KNOWLEDGE_PATH), { recursive: true })
+    fs.writeFileSync(KNOWLEDGE_PATH, JSON.stringify(mem, null, 2), 'utf8')
+  } catch {}
+}
+
+/**
  * 根据 scope 文件类型推断事前最佳实践指南 (Proactive Guidelines)
  */
 export function inferProactiveGuidelines(scope = []) {
   const list = Array.isArray(scope) ? scope.map((s) => String(s).toLowerCase()) : []
-  if (list.length === 0) return ''
   const tips = []
 
-  // 1. API 接口 / Controller 相关
-  if (list.some((f) => f.includes('api') || f.includes('route') || f.includes('controller') || f.includes('server') || f.includes('handler'))) {
-    tips.push('• 接口安全：入参必须强类型校验，返回必须脱敏敏感字段，严格防范越界与空注入。')
+  // 0. 加载本地错误自愈知识库
+  const mem = loadFailureMemory()
+  if (Array.isArray(mem.rules) && mem.rules.length > 0) {
+    for (const r of mem.rules.slice(-3)) {
+      tips.push(`• 历史避坑经验: ${r.text}`)
+    }
   }
 
-  // 2. 数据存储 / 状态 / 事务相关
-  if (list.some((f) => f.includes('db') || f.includes('state') || f.includes('storage') || f.includes('lock') || f.includes('store') || f.includes('sql'))) {
-    tips.push('• 存储与状态：并发写入必须加锁互斥，读写操作保证原子性与状态可回滚，禁止写死绝对路径。')
-  }
+  if (list.length > 0) {
+    // 1. API 接口 / Controller 相关
+    if (list.some((f) => f.includes('api') || f.includes('route') || f.includes('controller') || f.includes('server') || f.includes('handler'))) {
+      tips.push('• 接口安全：入参必须强类型校验，返回必须脱敏敏感字段，严格防范越界与空注入。')
+    }
 
-  // 3. 工具链 / 跨平台 / CLI 相关
-  if (list.some((f) => f.includes('cli') || f.includes('bridge') || f.includes('bin') || f.includes('script') || f.includes('spawn') || f.includes('process'))) {
-    tips.push('• 跨平台健壮性：路径统一使用正斜杠或 path.join，子进程必须指定 windowsHide: true，杜绝控制台黑窗弹窗。')
-  }
+    // 2. 数据存储 / 状态 / 事务相关
+    if (list.some((f) => f.includes('db') || f.includes('state') || f.includes('storage') || f.includes('lock') || f.includes('store') || f.includes('sql'))) {
+      tips.push('• 存储与状态：并发写入必须加锁互斥，读写操作保证原子性与状态可回滚，禁止写死绝对路径。')
+    }
 
-  // 4. 前端 / UI / 页面相关
-  if (list.some((f) => f.includes('ui') || f.includes('html') || f.includes('css') || f.includes('view') || f.includes('page') || f.includes('component'))) {
-    tips.push('• 界面体验：长文本输出默认折叠，移动端适配 <600px 响应式大触控区，关键报错转换为通俗人话。')
+    // 3. 工具链 / 跨平台 / CLI 相关
+    if (list.some((f) => f.includes('cli') || f.includes('bridge') || f.includes('bin') || f.includes('script') || f.includes('spawn') || f.includes('process'))) {
+      tips.push('• 跨平台健壮性：路径统一使用正斜杠或 path.join，子进程必须指定 windowsHide: true，杜绝控制台黑窗弹窗。')
+    }
+
+    // 4. 前端 / UI / 页面相关
+    if (list.some((f) => f.includes('ui') || f.includes('html') || f.includes('css') || f.includes('view') || f.includes('page') || f.includes('component'))) {
+      tips.push('• 界面体验：长文本输出默认折叠，移动端适配 <600px 响应式大触控区，关键报错转换为通俗人话。')
+    }
   }
 
   return tips.length > 0 ? 'proactive guidelines (事前代码规范建议):\n' + tips.join('\n') : ''
@@ -176,6 +215,14 @@ export function buildContractPrompt(role, card, extra, options = {}) {
     toolGuidance = `tool guidance: ${guidance}`
 
     const scopeArr = Array.isArray(c.scope) ? c.scope.map(String) : []
+    // 多 Agent 网格支持：若传入了特定的 subAgentName，提取该子 Agent 专属的 allowed_scope
+    const agentMesh = c.agents && typeof c.agents === 'object' ? c.agents : null
+    const subAgent = options.subAgent || options.agent
+    let effectiveScope = scopeArr
+    if (subAgent && agentMesh && agentMesh[subAgent] && Array.isArray(agentMesh[subAgent].allowed_scope)) {
+      effectiveScope = agentMesh[subAgent].allowed_scope.map(String)
+    }
+
     // 获授权可新建的文件（new_files）：必须与 scope 一起写进「任务边界」——
     // 执行者只看得到 prompt，看不到卡片字段；不列出来就等于没授权，
     // 而它新建的文件又会被越界检测当成越界改动。
@@ -187,7 +234,7 @@ export function buildContractPrompt(role, card, extra, options = {}) {
       boundaries = '零文件改动，只读取证'
     } else {
       boundaries =
-        scopeArr.length > 0 ? scopeArr.join(', ') : '无文件可改，只读任务'
+        effectiveScope.length > 0 ? effectiveScope.join(', ') : '无文件可改，只读任务'
     }
     if (newFilesArr.length) {
       boundaries +=
