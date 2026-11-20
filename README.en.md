@@ -95,6 +95,7 @@ A: Simply reply with **"Cancel gate"** to release the session immediately, or **
 
 ## 📚 Documentation
 
+* [v2.22.0 Release Overview & Evolution Guide](./docs/RELEASE_v2.22.0.md) — Comprehensive guide, architectural shifts, and tool mapping
 * [Smart Trigger Guide](./TRIGGER_GUIDE.md) — Scoring, side-effect triage, and dual-threshold decisions
 * [Migration Guide](./MIGRATION.md) — Upgrading smoothly from older versions
 * [Changelog](./CHANGELOG.md) — Detailed version release notes
