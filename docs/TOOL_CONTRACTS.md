@@ -59,10 +59,10 @@ settings.html/js 共享壳：有 Host session 查询即任务展示分支，非�
 
 main 原callId交卷前只供一张三按钮卡：「查看变化」「重新检查」「暂不继续」。KV仅24条白名单展示记录、整体LWW；不含cmd、路径、diff、点击token，不能充当CAS权威。查看明确是检测时摘要、非实时；查看/暂缓零Node/Agent。暂缓只收起，不取消或撤已提交retry。重新检查仅消费真实callback userActionToken，`agent.run(mode=continue)` 回原会话，提示新工具调用携带expected，不能复用旧callId发执行RPC。并发KV可导致多Agent回合，永久claim仍最多一次spawn；capability/receipt身份不等于Host auth。
 
-UI验证为VM运行真实main、仅模拟Host边界；后端用真实文件/子进程/marker。没有安装或手机桌面真人点击验收，不宣称实际UI E2E。Host依据0.1.139/9ffef649…匹配证据，不以latest代替；最低宿主版本以 ghost.json 为准；2.17.0 的保守支持基线为 0.1.139，不宣称是相关能力的首次引入版本。原型阶段曾保留含义未明的 1.0.2，该记录不再代表当前清单；不新增 background 能力。
+UI验证为VM运行真实main、仅模拟Host边界；后端用真实文件/子进程/marker。没有安装或手机桌面真人点击验收，不宣称实际UI E2E。Host依据0.1.139/9ffef649…匹配证据，不以latest代替；最低宿主版本以 ghost.json 为准；v2.18.x 的保守支持基线为 0.1.139，不宣称是相关能力的首次引入版本。原型阶段曾保留含义未明的 1.0.2，该记录不再代表当前清单；不新增 background 能力。
 
-> 适用版本：v2.11.3
-> 生成时间：2026-11-14
+> 适用版本：v2.18.1
+> 生成时间：2026-11-20
 > 数据来源：直接读 `src/index.js`、`src/state.js`、`src/dispatch.js`、`test/*.mjs`，不采信二手描述
 
 ---
