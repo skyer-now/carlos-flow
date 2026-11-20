@@ -1,3 +1,13 @@
+# Carlos Flow v2.23.0 发布说明
+
+## 核心新特性
+
+### 1. 状态增量变更机制 (Delta Patching)
+- 在 `src/state.js` 引入 `applyDeltaPatch` 与 `commitState` 增强；
+- 支持直接传入增量 patch 对象进行原子更新，支持深浅合并，大幅消除多 Agent 高频读写时的全量序列化 IO 放大与并发竞争。
+
+---
+
 # Carlos Flow v2.22.0 发布说明
 
 ## 核心新特性

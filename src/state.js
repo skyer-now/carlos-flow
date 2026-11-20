@@ -654,19 +654,44 @@ export async function withStateLock(sid, fn, opts = {}) {
 }
 
 /**
- * 「读最新状态 → 合并 → 写」的短临界区封装。
+ * 状态增量变更 (Delta Patching)
+ * 对 state 对象进行原子补丁更新，支持字段级的深浅合并，避免并发全量重写
+ */
+export function applyDeltaPatch(state, patch = {}) {
+  if (!state || typeof state !== 'object' || !patch || typeof patch !== 'object') {
+    return state
+  }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue
+    if (value !== null && typeof value === 'object' && !Array.isArray(value) && typeof state[key] === 'object' && state[key] !== null && !Array.isArray(state[key])) {
+      state[key] = { ...state[key], ...value }
+    } else {
+      state[key] = value
+    }
+  }
+  return state
+}
+
+/**
+ * 「读最新状态 → 增量补丁/合并 → 写」的短临界区封装。
  *
  * 为什么需要它：flow_run_verify / flow_falsify 的读-改-写窗口横跨整个命令执行期
  * （最长 120s×2），期间别的进程可能提交了新的任务卡或写了别的字段。
  * 正确做法是**命令在锁外跑**，跑完再用这个函数在短锁内重新读最新状态、只合并自己那份结果。
  */
-export async function commitState(sid, mutate, opts = {}) {
+export async function commitState(sid, mutateOrPatch, opts = {}) {
   return withStateLock(
     sid,
     () => {
       const state = loadState(sid)
       const before = opts.skipUnchanged ? JSON.stringify(state) : null
-      const ret = mutate(state)
+      let ret
+      if (typeof mutateOrPatch === 'function') {
+        ret = mutateOrPatch(state)
+      } else if (mutateOrPatch && typeof mutateOrPatch === 'object') {
+        applyDeltaPatch(state, mutateOrPatch)
+        ret = state
+      }
       if (!opts.skipUnchanged || JSON.stringify(state) !== before)
         saveState(sid, state)
       return ret
