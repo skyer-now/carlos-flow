@@ -1020,8 +1020,10 @@ const TOOLS = [
             verify: asObject(a.verify),
             confirmed: a.confirmed === true,
           }
-          // Auto-Verify: 若未显式传入 verify.cmd，自动尝试推断当前项目的测试命令
-          if (!card.verify || !card.verify.cmd) {
+          // Auto-Verify: 若未显式传入 verify.cmd，且调用方显式提供了非空 scope 时，才推断测试命令
+          // （防止在空 scope 或未初始化的普通卡上提前填入 verify.cmd 导致 activation_pending 丢失 verify.cmd 校验项）
+          const hasExplicitScope = Array.isArray(a.scope) && a.scope.length > 0
+          if (!a.activation && hasExplicitScope && (!card.verify || !card.verify.cmd)) {
             const detectedCmd = detectProjectTestCommand(scopeRoot || execDir);
             if (detectedCmd) {
               card.verify = { ...(card.verify || {}), cmd: detectedCmd, autoInferred: true };
