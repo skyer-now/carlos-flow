@@ -1,5 +1,23 @@
 # Carlos 工作流 (Carlos-Flow)
 
+## 任务内向导（电脑端）
+
+在当前对话让助手调用 `start_wizard`，即可请求打开“任务向导”页并采样真实状态。无卡时先说明目标，不创建或覆盖已有任务卡。助手按目标→范围验收→执行→真实检查与负对照→独立审查→完成或处理问题逐步协调；用户不必填写会话编号、命令或技术参数。
+
+页面只展示白名单摘要，七步不靠按钮次数推进。“查看最近采样”只请求展示缓存，注明采样时间与非实时；获取新状态需要原助手当前工具调用。页面不能批准或执行命令。继续时回原对话点原生“确认并继续”卡；真实点击票请求原助手续接，不改变原权限，不扩大范围、免检或自动 PASS。受理不等于执行完成。
+
+页面可填写目标、范围、验收的内存草稿，草稿不是业务卡或授权。“交给确认卡讨论”只发未可信展示提案；请回原对话单击现有原生意图卡。助手在新活跃调用 resume 消费一个意图，协调后本回合 prepare 下一阶段卡，不需用户催技术调用。普通 call_tool 完全保留原SID/cwd/聚合合同，不读写向导KV；旧 requested 不锁未来工具。原生确认按 callId/SID/目录/当前卡代/nonce/到期核对，未知不重放；KV LWW不是CAS/exactly-once。页面关闭草稿丢失，真实 Host 连续交接尚待验收，不把VM通过称完整闭环。
+
+任务页与设置页共用包内壳，Host 的 session 查询只作展示分支；任务页不读取或保存配置。原 pro/guide 模式和局部验证失效三按钮保留。仅做 Node/VM 行为验证；真实 Host 启动、批准、点击、重开与成功/拒绝全链尚待验收，已知 Host 子进程超时不因这些测试通过而消失。
+
+## 验证失效向导（受限）
+
+Cindy 中只有 PASS 裁定实际发现验证后代码指纹变化时，才显示「查看变化 / 重新检查 / 暂不继续」。查看是检测时摘要而非实时差异；查看与收起仅用展示 KV，不调用 Node 或 Agent。收起不取消验证，也不撤回已经提交的重新检查。
+
+重新检查消费真实点击票，请原会话 Agent 沿既有权限发起新工具调用，不复用旧调用授权。可选 `expected.caseKey` 绑定不可变 offer；同一旧验证代永久 claim 最多启动一次，超时、重启或未知结果不自动重放，不自动 PASS 或 falsify。不带 expected 的普通 CLI 验证照旧可用。
+
+每会话最多128个 case（offer+预留 claim 共256文件），永久保留且不自动清理；满额只关闭向导领取。Windows 不承诺目录项掉电持久，POSIX fsync 成功不是硬件掉电 exactly-once；人工删除/回滚 receipt 目录不在防重放保证内。未宣称手机/桌面已安装点击端到端通过。
+
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/skyer-now/carlos-flow)
 [![Version](https://img.shields.io/badge/version-2.14.0-blue)](https://www.npmjs.com/package/carlos-flow)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)

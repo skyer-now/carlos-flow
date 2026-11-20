@@ -1,3 +1,39 @@
+# Carlos Flow v2.17.0 发布说明（候选态）
+
+## 当前状态与验收范围
+
+2026-11-19：新功能候选版本为 **2.17.0**，不默认按 patch 发布。当前**未进行手机真实安装、Host 安装或 npm 发布**，不得宣布 UI passed。最终版本的完整回归、新完整变异验证、干净安装及发布闭环尚待实际记录确认；本次元数据检查不替代它们。
+
+本卡只修改 package.json、package-lock.json、ghost.json、TRIGGER_GUIDE.md、CHANGELOG.md、RELEASE_NOTES.md。生产业务母本为 r5，清单 SHA-256 为 `51eb47909f81b3c1372ff8bfcac88b916996dab5bcbb3089c62fee5393f7168d`；其余 109 文件须保持原字节，另留本版 115 文件冻结清单与差异。父正式指纹卡已经 PASS / 3 WARN：verify 0、meaningful 14、before 1 / after 0、restore 4 clean。restore4 不包含追加的 test/audit-chain.mjs，不能扩大为五文件还原证据。
+
+## 功能与兼容声明
+
+- 沿用已验收的向导，以及 card、agent、sessionContext 权限；没有新增权限或扩展常驻进程，Node 生命周期仍为 on-demand。
+- ghost.json 的 minCindyVersion 由错误的 1.0.2 修正为 **0.1.139**：这是保守支持基线，不宣称是相关能力的首个版本，也不表示手机点击、权限、重启、原位升级已经验收。
+- 已实测生产修复包含：Git 大输出/截断不再产生假成功指纹；未跟踪文件累计内容读取受预算约束；读取、metadata、close 错误拒绝产出可信 hash；POSIX 无法无损解码的路径 fail-closed；Git root 只去掉记录 LF，保留目录名自身 CR，不会误指向相邻仓库。
+- 指纹绑定真实工作区输入，并与卡片身份、HEAD、当前验证命令及真实 scope 门禁共同使用，不能把哈希当作无条件授权；空 scope 仍 fail-closed，白名单之外的真实改动不能靠忽略截断结果放行。
+
+## 不扩大执行与存储保证
+
+- 永久 claim 是对应执行身份**至多一次 spawn 尝试**的防重机制；claim 可能先落盘、随后未跑 spawn 就被消耗。不承诺至少一次 spawn、不保证任务完成，不是 exactly-once。卡片中的“至少一次”误字不能作为交付承诺。
+- 多 Agent 的 KV 更新仍是 **LWW（后写覆盖）**，不提供跨 Agent 的事务合并或不丢更新保证。
+- ignore 路径仍存在**详细 stderr 丢失**的可诊断性限制，不宣称所有错误输出都完整保留。
+- 5 秒是相应读取阶段的超时边界，不是 Git、指纹、命令、回收组成的总工作流绝对时限；不可中断 OS I/O、进程回收和调度可能延长实际返回。
+
+## 既有实测与最终版本待验分栏
+
+r5 业务母本已有独立 test:all 退出 0（341.348 秒）、CAS 80/0、audit 31/0 与指纹边界证据。r5 的 package 22/22 使用 `--local`，明确**跳过 npm install**，不是干净安装或 Host 验收。以上属于版本元数据修改前的 r5，不能标为 2.17.0 新运行。外部 version-proof 只核版本身份，不是行为负对照；本卡宏验证结果以外部原始日志为准。
+
+2.17.0 最终冻结后的完整 full/all、完整 mutation、真实临时 npm 安装及 Host/手机验收仍待后续执行。旧 r3 mutation 即使仍运行，也不能作为本版本发布证据，更不能默认视作新失败的根因。
+
+## 历史失败与 WARN 保留
+
+所有历史 FAIL / INFRA、首轮环境路径失败、DrvFS 非法字节 INFRA、Git init race、旧同源负控局限、M12 mutation INVALID、r4 restore 窗口身份冲突，以及资源容量超过原 75MB 预算的记录均保留。后批准预算不抹去先前超额事实；生产修复已实测与最终版本待验必须分开。父正式 3 WARN、维护风险和宿主覆盖边界不因版本同步而消失，不删旧标签、不移动失败标签，也不把旧 full/all/mutation 当作 2.17.0 验证。
+
+以下旧版说明按原文完整保留，仅用于历史追溯，其中“当前”“本候选”等均指旧版当时状态，不覆盖上面的 2.17.0 候选状态。
+
+---
+
 # Carlos Flow v2.16.3 发布说明
 
 ## 发布状态

@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { parseTools } from '../scripts/check-no-dead-handler.mjs'
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync, statSync, mkdirSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +71,21 @@ try {
   const tgz = run("npm", ["pack", "--pack-destination", tmp]).trim().split("\n").pop();
   const tarball = join(tmp, tgz.replace(/^.*\//, ""));
   check(`tarball 产出：${path2(tarball)}`, existsSync(tarball), tarball);
+  console.log('TARBALL_SHA256 ' + createHash('sha256').update(readFileSync(tarball)).digest('hex'));
+  let evidence;
+  if (process.env.CARLOS_PACKAGE_EVIDENCE_DIR) {
+    evidence = resolve(process.env.CARLOS_PACKAGE_EVIDENCE_DIR);
+    if (evidence.startsWith(ROOT)) throw new Error('包级证据目录必须在源码副本之外');
+    mkdirSync(evidence, { recursive: true });
+    copyFileSync(tarball, join(evidence, 'runtime-package.tgz'));
+    writeFileSync(join(evidence, 'tar-sha256.txt'), createHash('sha256').update(readFileSync(tarball)).digest('hex'));
+  }
+  // GNU tar 将 Windows 盘符当远程主机；在归档目录用相对名，跨平台一致。
+  const tarEntries = new Set(run('tar', ['-tzf', tarball.slice(tmp.length + 1)], { cwd: tmp }).split(/\r?\n/).filter(Boolean));
+  if (evidence) writeFileSync(join(evidence, 'tar-entries.json'), JSON.stringify([...tarEntries].sort(), null, 2));
+  for (const resource of ['ui/narrator.js', 'settings.html', 'settings.js']) {
+    check(`真实 tarball 含运行资源 ${resource}`, tarEntries.has('package/' + resource));
+  }
 
   // ---- 2. 装到临时目录（干净环境） ----
   if (!LOCAL_ONLY) {
@@ -105,12 +120,46 @@ try {
     "templates/cursor/mcp.json", "templates/cline/mcp.json", "templates/vscode/mcp.json",
     "templates/claude/claude_desktop_config.json",
     "README.md", "README.zh.md", "README.en.md", "TRIGGER_GUIDE.md", "MIGRATION.md",
-    "CHANGELOG.md", "LICENSE",
+    "CHANGELOG.md", "LICENSE", "ui/narrator.js", "settings.html", "settings.js",
   ];
   for (const f of MUST) {
     if (!existsSync(join(pkgRoot, f))) check(`包内含 ${f}`, false);
   }
   check(`包内 ${MUST.length} 个关键文件齐备`, MUST.every((f) => existsSync(join(pkgRoot, f))));
+  for (const resource of ['ui/narrator.js', 'settings.html', 'settings.js']) {
+    check(`安装资源与源码逐字节一致 ${resource}`, existsSync(join(pkgRoot, resource)) &&
+      createHash('sha256').update(readFileSync(join(pkgRoot, resource))).digest('hex') === createHash('sha256').update(readFileSync(join(ROOT, resource))).digest('hex'));
+  }
+  const packagedGhost = JSON.parse(readFileSync(join(pkgRoot, 'ghost.json'), 'utf8'));
+  check('运行包明确声明固定哈希子入口权限', packagedGhost.node?.childSpawn === true && JSON.stringify(packagedGhost.node.entries) === JSON.stringify(['src/state.js']))
+  const hashOutput = execFileSync(process.execPath, [join(pkgRoot, 'src/state.js'), '--hash-child'], {
+    env: { ...process.env, ...isolatedEnv }, cwd: pkgRoot, windowsHide: true, timeout: 10000, maxBuffer: 65536,
+    input: JSON.stringify({ diff: '包内固定入口', files: [], gitRoot: pkgRoot, flowHomeAbs: isolatedEnv.CARLOS_FLOW_HOME }), encoding: 'utf8',
+  })
+  check('真实包内固定入口正常退出且复用内容算法', JSON.parse(hashOutput).diff_sha256 === createHash('sha256').update('包内固定入口').digest('hex'))
+  let pageClosure = true;
+  for (const html of [packagedGhost.settingsHtml, packagedGhost.taskView?.html].filter(Boolean)) {
+    if (!existsSync(join(pkgRoot, html))) { pageClosure = false; continue; }
+    for (const ref of readFileSync(join(pkgRoot, html), 'utf8').matchAll(/<script\s+src=["']([^"']+)["']/g)) {
+      const target = ref[1].replace(/^\//, '');
+      if (target.includes('..') || !existsSync(join(pkgRoot, target)) || !tarEntries.has('package/' + target)) pageClosure = false;
+    }
+  }
+  check('真实运行包内 taskView/settings 页面脚本引用完整', pageClosure);
+  const visited = new Set(); let moduleClosure = true;
+  function verifyRuntimeClosure(file) {
+    if (visited.has(file)) return;
+    visited.add(file);
+    if (!existsSync(join(pkgRoot, file)) || !tarEntries.has('package/' + file)) { moduleClosure = false; return; }
+    for (const ref of readFileSync(join(pkgRoot, file), 'utf8').matchAll(/(?:\bfrom\s*|\bimport\s*\(|\brequire\s*\(|\bimport\s+)["'](\.[^"']+)["']/g)) {
+      const target = resolve(dirname(join(pkgRoot, file)), ref[1]);
+      if (!target.startsWith(resolve(pkgRoot) + pathSeparator)) { moduleClosure = false; continue; }
+      verifyRuntimeClosure(target.slice(resolve(pkgRoot).length + 1).replace(/\\/g, '/'));
+    }
+  }
+  const pathSeparator = process.platform === 'win32' ? '\\' : '/';
+  for (const entry of ['src/index.js', 'client/carlos.js', 'bridge/mcp-bridge.js', 'plugins/carlos-flow-trigger.js', 'settings.js', 'ui/narrator.js']) verifyRuntimeClosure(entry);
+  check(`真实运行包本地依赖 closure 完整（${visited.size} 文件）`, moduleClosure);
 
   // ---- 4. bin 入口有 shebang（否则全局命令不可用） ----
   console.log("▶ ④ bin 入口");
@@ -125,8 +174,10 @@ try {
   const ghostTools = (ghost.tools || []).map((t) => t.name);
   // 两种合法形态（详见 docs/TOOL_CONTRACTS.md §1.3）：
   //   A. 直接声明：ghost.json 逐条列出全部 flow_*（宿主上限 16 项）
-  //   B. 两段式目录：只声明 list_tools / call_tool，目录在 main.js，必须**恰好覆盖**全部操作
-  const twoLevel = ghostTools.length === 2 && ghostTools.includes("list_tools") && ghostTools.includes("call_tool");
+  //   B. 两元工具或附唯一 start_wizard；后端类目仍恰好覆盖全部操作。
+  const twoLevel = (ghostTools.length === 2 || ghostTools.length === 3) &&
+    new Set(ghostTools).size === ghostTools.length && ghostTools.includes('list_tools') && ghostTools.includes('call_tool') &&
+    ghostTools.every((name) => ['list_tools', 'call_tool', 'start_wizard'].includes(name));
   if (twoLevel) {
     const mainSrc = readFileSync(join(pkgRoot, "main.js"), "utf8");
     const members = [...mainSrc.matchAll(/members:\s*\[([^\]]*)\]/gs)]

@@ -10,6 +10,7 @@
 //   外加 resources/prompts 的空列表应答（宿主做能力探测时会问）。
 // 传输形态：逐行 JSON-RPC 2.0（MCP stdio 规范），stdout 只写协议消息，日志走 stderr。
 import readline from "node:readline";
+import { captureHashContext } from './state.js'
 
 // 声明的协议版本：客户端请求里的版本若在支持列表内就回声，否则回最新的。
 const SUPPORTED_PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -47,7 +48,7 @@ export class StdioServer {
     }
   }
 
-  async handle(message) {
+  async handle(message, runtime) {
     const method = message && message.method;
     const id = message && message.id;
     if (typeof method !== "string") return; // 客户端回来的响应（本服务端不发反向请求）：忽略
@@ -90,7 +91,13 @@ export class StdioServer {
         const args = params.arguments === undefined || params.arguments === null ? {} : params.arguments;
         let result;
         try {
-          result = await this.callTool(name, args);
+          // 关联位置而非 Host 授权；只转交白名单，不接纳 arguments 内的自报上下文。
+          const c = params.carlosContext
+          const context = c && typeof c === 'object' ? {
+            session_id: c.session_id, workdir: c.workdir,
+            workdir_is_local: c.workdir_is_local, workdir_is_read_only: c.workdir_is_read_only,
+          } : undefined
+          result = await this.callTool(name, args, context, runtime)
         } catch (e) {
           // 工具内部抛错 → 按 MCP 约定以「工具结果 + isError」返回，
           // 而不是 JSON-RPC 协议错误（后者会让宿主把整个会话当故障）。
@@ -110,27 +117,48 @@ export class StdioServer {
   }
 
   async start() {
-    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-    for await (const line of rl) {
-      const text = line.trim();
-      if (!text) continue;
-      let message = null;
-      try {
-        message = JSON.parse(text);
-      } catch {
-        // 非法 JSON：没有 id 可回，记 stderr 后继续（不要因一条脏行整进程退出）
-        this.log("收到无法解析的 JSON-RPC 行，已忽略");
-        continue;
-      }
-      // 不串行等待：flow_run_verify 这类调用可能跑上百秒，
-      // 期间其它请求（如 ping）必须还能得到响应。
-      const p = this.handle(message)
-        .catch((e) => this.log("处理消息失败：" + (e && e.message ? e.message : e)))
-        .finally(() => this.pending.delete(p));
-      this.pending.add(p);
+    const input = process.stdin
+    const rl = readline.createInterface({ input, crlfDelay: Infinity })
+    let accepting = true
+    let transportError
+    let closeInput
+    const stop = () => {
+      if (!transportError) transportError = new Error('MCP输入传输失败，已等待在途操作收尾。')
+      accepting = false
+      rl.close()
+      closeInput?.()
     }
-    // stdin 关闭（宿主退出）：等手上的请求收尾再返回
-    await Promise.allSettled([...this.pending]);
+    // readline转发与输入流本身的error都收敛，关闭事件不能越过已接收操作的finally。
+    rl.on('error', stop)
+    input.on('error', stop)
+    try {
+      await new Promise(resolve => {
+        closeInput = resolve
+        rl.on('line', line => {
+          if (!accepting) return
+          const text = line.trim()
+          if (!text) return
+          let message
+          try { message = JSON.parse(text) } catch {
+            this.log('收到无法解析的 JSON-RPC 行，已忽略')
+            return
+          }
+          // 在同步line回调内捕获，绝不借JSON中的rpcId/function/signal补身份。
+          const runtime = message?.method === 'tools/call' ? captureHashContext() : undefined
+          const p = this.handle(message, runtime)
+            .catch(e => this.log('处理消息失败：' + (e && e.message ? e.message : e)))
+            .finally(() => this.pending.delete(p))
+          this.pending.add(p)
+        })
+        rl.on('close', () => { accepting = false; resolve() })
+      })
+      // 同步收行回调返回后pending已登记；正常EOF与传输故障均先等全部收尾。
+      await Promise.allSettled([...this.pending])
+      if (transportError) throw transportError
+    } finally {
+      input.off('error', stop)
+      rl.off('error', stop)
+    }
   }
 }
 

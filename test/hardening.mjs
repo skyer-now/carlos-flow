@@ -234,10 +234,26 @@ try {
     fs.writeFileSync(
       entry,
       `import fs from 'node:fs';
-const fault=${JSON.stringify(fault)};const stateFault=${JSON.stringify(stateFault)};const write=fs.writeSync;
-fs.writeSync=function(fd,b,...args){if(Buffer.isBuffer(b)&&b.toString().includes('scope_append_prepared')&&fs.existsSync(fault))throw new Error('isolated append audit fault');return write.call(this,fd,b,...args)};
-const writeFile=fs.writeFileSync,rename=fs.renameSync;
-fs.writeFileSync=function(file,...args){if(String(file).endsWith('state.json.tmp')&&fs.existsSync(stateFault)&&fs.readFileSync(stateFault,'utf8')==='write')throw new Error('isolated state write fault');return writeFile.call(this,file,...args)};
+const fault=${JSON.stringify(fault)}
+const stateFault=${JSON.stringify(stateFault)}
+const write=fs.writeSync
+const open=fs.openSync
+const close=fs.closeSync
+const rename=fs.renameSync
+const stateTemps=new Set()
+fs.openSync=function(file,...args){
+  const fd=open.call(this,file,...args)
+  if(/state[.]json[.]tmp-[0-9]+-[a-f0-9]+$/.test(String(file)))stateTemps.add(fd)
+  return fd
+}
+fs.closeSync=function(fd,...args){
+  try{return close.call(this,fd,...args)}finally{stateTemps.delete(fd)}
+}
+fs.writeSync=function(fd,b,...args){
+  if(stateTemps.has(fd)&&fs.existsSync(stateFault)&&fs.readFileSync(stateFault,'utf8')==='write')throw new Error('isolated state write fault')
+  if(Buffer.isBuffer(b)&&b.toString().includes('scope_append_prepared')&&fs.existsSync(fault))throw new Error('isolated append audit fault')
+  return write.call(this,fd,b,...args)
+}
 fs.renameSync=function(from,to,...args){if(String(to).endsWith('state.json')&&fs.existsSync(stateFault)&&fs.readFileSync(stateFault,'utf8')==='rename')throw new Error('isolated state rename fault');return rename.call(this,from,to,...args)};
 await import(${JSON.stringify(new URL('../src/index.js', import.meta.url).href)});`,
     )
@@ -317,10 +333,7 @@ await import(${JSON.stringify(new URL('../src/index.js', import.meta.url).href)}
         )
         assert.ok(events.at(-1).card_ts > oldCardTs)
         fs.unlinkSync(stateFault)
-        // rename 故障留下的临时状态不是已提交卡；只清理本测试注入的临时文件。
-        fs.rmSync(path.join(state.RUNS_DIR, sid, 'state.json.tmp'), {
-          force: true,
-        })
+        // 保存失败也由 saveState 清理本次唯一 temp；不得残留或改动已提交 target。
         assert.deepEqual(metadata(), beforeFiles)
       }
       check(

@@ -1,5 +1,66 @@
 # Carlos Flow 工具契约文档
 
+## PhaseB候选：固定哈希子入口与Host请求能力
+
+此为未安装候选适配，不声明当前安装版0.1.139具备新接口；不虚设尚未发布的最低Host版本。`node.entries=['src/state.js']`及`node.childSpawn=true`是实际权限扩展，待后续安装批准与真实Desktop验收。三public工具、21后端操作、guide/pro及expected永久领取语义不变。
+
+MCP在同步收行内调用真实Host `bindLaunch()` 捕获请求专用闭包，作为独立内部参数传递，JSON arguments/carlosContext/rpcId/signal不能供给此能力。无binding、收行scope丢失或getter异常的Host采样不可用，不回退Electron execPath或spawnEntry。普通Node CLI保持旧同步API及原环境兼容，不冒称其为Host白名单。
+
+同步与异步指纹共享全部Git采样及哈希结果校验，Host仅改执行边界为 `launch('src/state.js',['--hash-child'],{deadlineMs:5000})`。收到句柄即取completion并监听输出，再分64KiB块write/end，不等待不存在的drain。输出总预算64KiB，合法JSON不是完成证明；须候选05的direct completion真实exited/code0且stdout end，才消费结果。cleanup_unknown不可用，不等待未来exit翻回成功；期限及清理未知由Host新completion收敛，不本地race丢弃生命周期。候选05源码绑定SHA `729ef31531b3b37c9c226fcf7a862252457e9953f416f42b672741514597ac54`；类型/单元/真实Host链通过是父提供的独立证据，不替代安装版Desktop验收。
+
+所有长采样在锁外：status采样后重读卡与完整验证身份，变化时使用最新卡但采样不可用；run_verify普通/expected均在短锁核完整卡及旧last_verify；falsify完成finally还原后才采样，短锁核卡/验证/负对照身份，冲突拒绝旧证据覆盖；verdict短锁比对完整判定状态快照，不因同卡axes/role/bypass等变化拼接PASS，也不自动重试。状态仅局部合并，旧恢复算法不改。输出错误仍单次受控退出1，无原始路径/环境错误回传。
+
+
+## Phase7：原生 callback GET 未知闭环
+
+原生wizard callback先核本实例当前nonce/callId/SID绑定，再消费；invalid/crossSID事件不能消费真实nonce、隐藏真实卡或撤销别任务资格。随后KV GET的网络、非ok、JSON解析失败在callback内收敛；仅最后仍绑定当前issued对象时置unavailable、向对应SID广播不可用并隐藏原卡。消费不回滚，不新增Node/Agent，不自动重放；不会暴露原始错误。Agent异常继续按unknown处理，非一律unavailable；普通工具与原STALE callback不受此分支影响。
+
+## Phase6：异步后单次领取与确认资格展示
+
+resume 的最后一次状态/代摘要 await 完成后，同一同步段重新核对签发对象 identity、当前nonce绑定、SID/目录、callId/expected代/intent、requested/resumed及原始有效期；核当前采样阶段对应意图一致后立即置消费，再 await 持久保存。双请求即使都在等待前通过，最后同步门只允许一个接受。保存失败/unknown保留已消费，不回滚重放；不影响普通call_tool。时间是该次采样与领取时观察，不是页面实时监控；后端/跨实例CAS与硬件exactly-once不在此保证。
+
+主逻辑展示 confirmation 固定枚举 unavailable/pending/requested/consumed/expired/unknown。只有当前本实例签发、未消费、期限内的当前nonce与已确认offer才可展示pending；callback/resume变化只广播展示，不额外读Node。GET/PUT失败无资格，页面优先不可用，不引导点击不存在的卡。缓存重开只显示“上次意图/当前资格未知”，永不把缓存当当前可点击证明；原生Agent请求未知保持fail-closed，不重放。
+
+草稿只是未可信讨论提案；bootstrap读点击时现有草稿，不保证此前看到的字节就是批准的snapshot，也不是quote/范围授权。Agent下一prepare协议仍待真实Host连续交互验收。labels/reasons重复保持已记录StdWARN，不为去重eval或增加桥。
+
+## Phase4：任务页、单次意图与普通工具隔离
+
+本节取代 Phase2 的全会话向导锁设计。普通 `call_tool` 保持原参数合同，不自动补 SID、不限制 cwd、不读写向导 KV、不发布 wizard；历史 SID、audit 不传 SID 聚合、原 cwd 等价写法均照旧。原 expected STALE 验证边界保留。
+
+`start_wizard` 独立 public 支持 action=open/prepare/resume，缺省 open；intent 是 clarify/confirm-scope/execute/check/review/finish 固定枚举。resume 只接四字段 expected={callId,generation,nonce,intent}，不进入后端参数。open/prepare 在当前 Host 本机可写上下文只读采样，供准确阶段意图卡；无卡不建卡或覆盖。
+
+主逻辑只从真实工具响应取 wizard 白名单，并再次转固定中文/数量/时间摘要；原始 card 仅在主逻辑为任务、目录与卡代计算 SHA256，不广播或存其原文。KV fullWizard 最多8条白名单展示记录（callId、sid、代摘要、单次nonce、过期、requested、summary）；不存点击票、命令、目录、diff。BroadcastChannel 与 /wake 只有展示作用，页面查询参数不是可信工具上下文；普通页面意图永不触发 Node/Agent。只当前 Agent 工具调用重新采样，页面打开/重开/“查看最近采样”请求缓存并说明非实时，不后台轮询。
+
+原生卡只确认一个明确协调意图，不授权未来全部工具。callback 本实例先占 nonce、核签发内存与持久 row/callId/sid/代/到期，再持久 requested 后使用 Host 真 userActionToken Agent continue；票不保存。新活跃 start_wizard resume 核 expected、Host SID/目录、当前真卡代、时效及单次消费，返回协调意图与标注未可信的草稿；KV 损坏/未知/重启不能重建资格，不回退执行。消费后普通业务工具不加 SID 锁，合法无卡→讨论→正常建卡可继续，旧 resume 仍拒。
+
+任务页目标/范围/验收草稿只在页和逻辑展示内存，长度各1000、三键白名单，无任意工具/目录/命令转发，不写 config、业务卡或 quote。按钮零 Node/Agent，只交未可信提案。用户使用 open 已生成的原生“读取草稿并澄清目标”卡启动交接，不必每步催 prepare；Agent 续接先 resume、协调一个动作或提问，然后本活跃回合自动 prepare 下一适用意图卡。prepare 卡 HTML转义展示待讨论草稿；草稿不是范围授权。这个连续回合协议仅 VM 验证，真实 Host 能否连续执行、采集页面草稿和供下一卡仍需桌面验证，不能宣称完整体验闭环。
+
+普通工具不碰缓存。向导展示逐行跳过坏缓存，GET/PUT失败以 warning保留真实采样、不伪生成确认资格；绑定 resume/callback 所需记录异常则 fail-closed。KV LWW不是CAS/exactly-once，回调无新Node授权只能核最近观察；resume 才在新活跃调用读取当前卡代。不复活旧callId、不扩大权限、不免检、自动PASS或重放未知结果。
+
+**限制必须保留**：原生回调没有新 Agent 工具调用的 Node 授权，不能借旧 callId读当前状态，因此未被新采样观察到的外部换卡可能先请求原助手只读确认，拒绝落在后续活跃工具调用的代检查。检查与后续业务调用之间不是后端原子CAS；现有后端自己的卡CAS/权限仍负责执行边界。本阶段不声称跨这两个读写窗口的原子代锁或任意旧writer防护。要求“回调时绝对最新代、所有业务写入原子绑定旧确认”仍需后端正式契约与范围审查，不能把KV当该能力。
+
+settings.html/js 共享壳：有 Host session 查询即任务展示分支，非法/远程展示查询也不退回配置；分支在配置load/save事件注册前。无session仍原/config设置逻辑，不改变配置数据来源。包内 `/settings.js` 路径由匹配 0.1.139 ghostFiles.ts/ghostPageHandler.ts 供静态文件（固定commit及Git blob核对），不是猜 /file URL。页面用 Host 明暗主题变量，无新增网络/background/childSpawn权限或模式。
+
+`test/cindy-dispatch.mjs` 保留原32条回归，新增真实main VM与真实Node目录/无卡状态、Host拒绝/点击单元桩、单次续接、新活跃代拒绝、任务页零配置与设置读写、缓存重开等断言。票、页签、权限的Host桩不是实际桌面点击/批准验收；Phase1完成正例矩阵也不是独立全业务链。真实桌面成功与拒绝全链以及已知Host hash_child超时仍待验证。
+
+## 增量：验证失效向导与永久领取
+
+只有 `flow_verdict(verdict=PASS)` 的真实 fingerprint STALE 分支返回 `isError:true` 与 `structuredContent.code=VERIFY_STALE`；关键词不是触发依据。满足当前本地、非只读会话位置条件时，后端在既有短锁内首次发行 offer。未确认发行时仍拒绝 PASS，只保留普通手动验证指引。
+
+`caseKey=SHA256(物理session身份,card_ts,完整规范化card,完整规范化last_verify)`，包括旧验证 ts/cmd/cwd/output/fingerprint；当前工作区 fingerprint 不参与代号。物理session身份由RUNS和session的dev/ino以BigInt读取、精确转十进制字符串后哈希；分区、caseKey、offer.sid绑定和完成CAS统一用此身份，不按process.platform lower路径或sid。ino为0、类型未知或无法读取即fail-closed。receipt入口在任何转换前拒绝预存在的session符号链接/junction，普通CLI与r2状态锁的别名行为不变；不是把链接绕过口头排除出威胁模型。每代一个不可变 `<caseKey>.offer.json`，同代反复 STALE 不换 ID、不延长首次10分钟有效期。使用 canonical RUNS 的同级 `verify-receipts/<物理session身份摘要>/`，继承 r2 物理布局约束，并仅对receipt进一步拒绝session路径链接。offer/claim 不属于 state reset 字段，新卡不能删除旧历史；不新增 ledger、epoch、verifyRunId、boot资格或后台服务。
+
+`flow_run_verify.expected` 为可选对象 `{caseKey}`。不带 expected 的旧 CLI/cwd 行为不变；提供后空值、未知字段、过期、跨会话、卡或原验证变化、cmd/canonical cwd 变化均拒绝，绝不 fallback。main 剥 Agent 自报内部字段，只由 Host 顶层重铸 session_context 取四字段关联。stdio metadata 不是 Host 授权，原 Agent 新工具调用仍受原权限；Node 原生权限不是沙箱。
+
+领取在短锁内重新读 state/offer，核绑定并冻结 cmd/cwd，然后真实 `wx` 创建 `<caseKey>.claim`，write → file fsync → close → 支持的目录 fsync。claim 存在即永久消耗，空/partial/坏文件也阻断；永不删除、移动或修复 claim。缺失/损坏 offer 的 expected 请求只拒绝，不借领取路径重建。领取不需写 state 投影，权威来自永久文件存在；锁释放也必须确认后才在锁外 spawn。任一领取/同步/关闭/锁退出异常均不 spawn，不自动重试；open失败若未留下文件不能假称已有持久 tombstone。
+
+完成仅在卡与完整旧 last_verify 身份仍一致时合并新验证；换卡不停止已经启动的旧命令，但旧结果不能覆盖新卡或后来验证。超时、取消、断线、重启及完成写入 unknown 不删除 claim、不重新执行、不自动 PASS/falsify。broker取消不增加业务取消协议。
+
+每会话最多128代；offer发行预留相应claim槽，共最多256文件，不做bounded淘汰/自动GC。满额/未知目录只关闭向导，不禁止普通验证。人工删除/目录回滚、混跑不遵守协议的writer、任意外部文件替换及硬件掉电丢记录不在保证内。Windows只做file fsync、不冒充目录项耐久；POSIX目录同步返回成功也不是硬件掉电exactly-once。
+
+main 原callId交卷前只供一张三按钮卡：「查看变化」「重新检查」「暂不继续」。KV仅24条白名单展示记录、整体LWW；不含cmd、路径、diff、点击token，不能充当CAS权威。查看明确是检测时摘要、非实时；查看/暂缓零Node/Agent。暂缓只收起，不取消或撤已提交retry。重新检查仅消费真实callback userActionToken，`agent.run(mode=continue)` 回原会话，提示新工具调用携带expected，不能复用旧callId发执行RPC。并发KV可导致多Agent回合，永久claim仍最多一次spawn；capability/receipt身份不等于Host auth。
+
+UI验证为VM运行真实main、仅模拟Host边界；后端用真实文件/子进程/marker。没有安装或手机桌面真人点击验收，不宣称实际UI E2E。Host依据0.1.139/9ffef649…匹配证据，不以latest代替；最低宿主版本以 ghost.json 为准；2.17.0 的保守支持基线为 0.1.139，不宣称是相关能力的首次引入版本。原型阶段曾保留含义未明的 1.0.2，该记录不再代表当前清单；不新增 background 能力。
+
 > 适用版本：v2.11.3
 > 生成时间：2026-11-14
 > 数据来源：直接读 `src/index.js`、`src/state.js`、`src/dispatch.js`、`test/*.mjs`，不采信二手描述
@@ -90,7 +151,7 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
    ├─ flow_audit_submit           提交单轴：写 audit_axes[axis] + audit_axes_ts
    │
    └─ flow_verdict                ★ 核心闸门
-         └─ 9 组判断 / 15 个 return 点（顺序固定，不可调换）：
+         └─ 9 组判断 / 17 个 return 点（顺序固定，不可调换）：
               【无条件 · 2 组】不管什么裁定都要过
               1. 有卡
               2. 占位卡已补齐（activation_pending 为空）
@@ -102,15 +163,18 @@ node test/count-tool-calls.mjs   # 每个工具：真调用总次数
               7. role 必须是 auditor（claimed_role === "auditor"）
               8. 负对照通过（verdict === "meaningful" + 证据哈希一致）
               9. 双轴齐且无 FAIL（两轴 card_ts 与当前卡一致）
+              【前置否决闸 · 仅 PASS】8e 既有负对照结论可作废
+              （作废失败时状态写不进「已作废」，由状态目录里的持久标记作证；
+                标记也写不进去时由进程内硬拒名单兜底）
 ```
 
 > **门禁顺序是有意的**：先证实验证有效（4/5）→ 再证改动合规（6/7）→ 再证测试有判别力（8）→ 再证审查到位（9）。
 > 若调换顺序，「未验证」这类更基础的问题会被「双轴未齐」的错误信息掩盖，调用方拿到不可操作的下一步。
 >
-> **注释编号已对齐（2026-11-17 修）**：`src/index.js` 里的注释统一写成
+> **注释编号口径**：`src/index.js` 里的注释统一写成
 > `门禁 N/9（无条件|仅 PASS）：...`，与本表的 9 组一一对应。
-> 历史遗留的「之二 / 之三 / 之五 / 之四 / 之四 / 之五 / 之六」（「之四」「之五」各出现两次、
-> 且缺「之一」）会造成「读注释理解出的顺序 ≠ 代码真实顺序」，已全部替换。
+> 编号必须连续、且与本节表格一一对应（否则「读注释理解出的顺序 ≠ 代码真实顺序」，
+> 使用者会按错的那道闸排查问题）。
 > 改动这 9 组时，**注释编号与本节表格必须同时改**。
 
 ---
@@ -123,7 +187,7 @@ Cindy 对插件 `tools` 声明有**硬上限 16 项**，本插件有 21 个操�
 
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 清单 | `ghost.json` | `kind: chip`，只声明 `list_tools` / `call_tool` 两个元工具；`node.protocol = mcp-stdio`，`node.entry = src/index.js` |
+| 清单 | `ghost.json` | `kind: chip`，声明 `list_tools` / `call_tool` 两个元工具，可附唯一 `start_wizard` 启动器；`node.protocol = mcp-stdio`，`node.entry = src/index.js` |
 | 分发 | `main.js` | 类目表（5 类）+ 每类 RULES；向随包 MCP 服务端取 `tools/list`（说明与参数 schema 的**唯一真源**），再按 name 转发 `tools/call` |
 | 能力 | `src/index.js` | 21 个 `flow_*` 操作的实现 |
 
@@ -161,7 +225,7 @@ main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 →
 | 字段 | 类型 | 写入者 | 读取者 | 作用 |
 |---|---|---|---|---|
 | `schemaVersion` | number | migrate() | loadState | 迁移版本号，旧状态按版本逐步升级 |
-| `card` | object\|null | submit_requirement, trigger_check | 几乎所有工具 | 任务卡（goal/quote/scope/acceptance/verify…） |
+| `card` | object\|null | submit_requirement, trigger_check | 几乎所有工具 | 任务卡（goal/quote/scope/new_files/acceptance/verify…） |
 | `card_ts` | number | submit_requirement, trigger_check | verdict, status, audit_submit | 卡片时间戳，**审计轴绑定它防跨卡拼接** |
 | `tier` | string | submit_requirement, trigger_check | claim, verdict, status | 风险档：read_only / single_file / cross_module / sensitive |
 | `dispatch_count` | number | dispatch, submit_requirement(重置) | claim, dispatch, verdict | 已派发次数，上限 5 |
@@ -291,6 +355,89 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 - `activation_pending` 由**当前卡片内容幂等派生**，不依赖上一轮传递
 - 两条入口（结构化参数 / `cardText`）口径必须一致，否则 `cardText` 路径可绕开闸门
 
+#### 新增：新文件授权（`new_files`）
+
+「派发时尚不存在的新文件」**不走 `scope`**，走独立字段 `card.new_files`（仓库根相对路径数组）。
+
+**为什么分开**：`scope` 的语义是「只准改这些**已存在**的文件」，存在性校验一字未改；
+新文件在派发时**本来就不存在**，硬塞进 `scope` 只会把存在性校验变成谎言，
+或者被迫放宽成「scope 可以不存在」——那会让「scope 越宽 = 授权越宽」的老路重开。
+所以新文件走单独的字段、单独的授权说明、单独的拒绝条件。
+
+| 入参 | 卡片字段 | 含义 |
+|---|---|---|
+| `newFiles` | `card.new_files` | 获授权可新建的文件路径（相对仓库根，派发时尚不存在） |
+| `newFilesReason` | `card.new_files_reason`（cardText 入口） | 新文件授权的**用户授权说明**（必填且非空） |
+| — | `card.new_files_reasons` | **逐文件**的授权说明（`{路径: 说明}`）；追加授权时旧文件的说明不被覆盖 |
+
+**拒绝条件（任一不满足即返回 `ok:false`，且不落卡）**
+
+| 条件 | 拒绝原因 |
+|---|---|
+| `confirmed !== true` | 新文件授权需要用户明确确认 |
+| `newFilesReason` 缺失 / 为空 | 新文件授权必须提供非空授权说明 |
+| **授权说明无法在用户原话中定位** | 与 `quote` 同级锚定：自述 `confirmed` 不算数，说明必须真的出现在用户说过的话里 |
+| `newFiles` 不是非空数组 | 新文件授权必须是非空路径数组 |
+| 数组元素不是非空字符串 | 新文件授权包含无效路径 |
+| 绝对路径，或解析后越出仓库根（`..` 逃逸 / 指向仓库外） | 必须是仓库内相对路径 |
+| **父目录是符号链接 / junction 且指向仓库外** | 真实路径落在仓库之外（否则文件会写到仓库外） |
+| **真实路径解析失败**（权限不足 / 特殊文件系统） | 按保守口径拒绝 |
+| 路径已存在且是**目录** | 目录请放入 `scope` |
+| 路径已存在且是**普通文件** | 已存在文件请放入 `scope` |
+| 路径已存在且是**符号链接** | 拒绝经链接写到别处 |
+| **父目录不存在** | 本轮只授权文件，不授权新建目录 |
+| 与 `scope` 里的路径重复 | 同一路径只留一处授权 |
+| **授权列表内部出现重复路径**（`'a.txt'` 与 `'./a.txt'`、`'a/b.txt'` 与 `'a\b.txt'`） | 同一路径只留一条授权：重复授权会让「授权了几条」与「快照覆盖了哪些文件」对不上 |
+| `scope` 为空 | 空 `scope` 按 fail-closed 处理，不允许授权新文件 |
+| `cardText` 的 `new_files` 与参数 `newFiles` 同时给且内容不同 | 冲突：不得静默丢弃其中一份授权依据 |
+| `cardText` 的 `new_files_reason` 与参数 `newFilesReason` 同时给且内容不同 | 冲突：不得静默丢弃其中一份授权说明 |
+
+**唯一实现**
+
+规则本体**只有一份**：`src/card.js` 的 `validateNewFiles(raw, scope, root, options)`。
+提交入口（`flow_submit_requirement` 的结构化参数 / `cardText` 两条入口）与
+`appendScope` 分支都调用它；卡片层复核（`validateCard`）也调用同一份。
+规则一旦有多份副本就会漂移，而漂移的后果是**门禁口径自相矛盾**
+（落卡时判在仓库内、执行时判在仓库外），所以规则只允许存在一份。
+
+- 路径比较口径统一：全仓**只有一把**平台感知的路径键（`src/card.js` 的 `pathKey`）——
+  `win32` 下大小写不敏感（文件系统本身就是大小写不敏感的），
+  其它平台（POSIX）**敏感**（大小写不同的就是两个不同文件，折叠大小写会把真越界当成授权内）。
+  授权校验、越界检测（`src/dispatch.js` 的 `enforceScope`）、`scope` 追加层共用它，
+  三处不得各写一份。
+  同一把 `pathKey` 也被 `src/dispatch.js` 的 `enforceScope` 复用 ——
+  授权写法与落盘写法大小写不同时（授权 `Docs/Guide.md`、落盘 `docs/guide.md`），
+  在 `win32` 上已授权的新文件不会被误判成越界；在 POSIX 上它们本就是两个文件，
+  落盘的那个必须判越界。
+- **仓库内判定按真实路径**：父目录是符号链接 / junction 且指向仓库外时拒绝授权
+  （词法比较看不出这一点：`<root>/link/new.txt` 看着在仓库内，真实落点却在仓库外）。
+  真实路径解析失败（权限不足 / 特殊文件系统）按保守口径拒绝。
+- **真实路径解析只有一份**：卡片层（授权边界）与还原层（`flow_falsify` 写回/删除前的
+  边界闸）调用同一个 `src/card.js` 的 `realTargetPath` —— 两份实现一旦漂移，
+  就会出现「落卡时判定在仓库内、执行/还原时判定在仓库外」的自相矛盾。
+- **派发时再核一次**：`flow_dispatch` 对已登记的 `new_files` 重做一次真实路径边界复核
+  （与落卡同口径，解析失败按保守口径拒绝）并拒绝派发。
+  理由：授权与执行之间可能隔很久，期间授权路径的父目录可能被换成指向仓库外的
+  符号链接 / junction —— 落卡时安全，执行时文件已经写到仓库外了。
+- 卡片层校验**不依赖可选参数**：卡片含 `new_files` 但校验上下文里没有仓库根时，
+  按保守口径**拒绝**（无法判定「是否落在仓库内」= 不能默默放宽范围）。
+- 触发器落卡路径（`flow_trigger_check` 自动激活）与提交路径**口径一致**：
+  同样补上仓库根，同样用 `validateNewFiles` 校新文件授权。
+
+**通过后的语义**
+- 派发快照把 `new_files` 一并纳入：派发时不存在 → 快照记 `created:true`
+- 派发后的范围校验**允许集 = `scope` + `new_files`**：已登记的新文件被创建后不得判越界
+- 还原时 `created:true` 的条目按「删除该文件」处理（只删普通文件，见 `flow_falsify`）
+- 派发合同的「任务边界」必须**列出获授权的新文件**：执行者只看得到 prompt，
+  看不到卡片字段 —— 不列出来就等于没授权
+- `appendScope` 分支同样可追加新文件授权（仍需 `confirmed=true` + `newFilesReason`，
+  且说明同样要在用户原话中可定位），追加后既有派发次数、快照、角色与证据保持不变
+- **逐文件保留授权依据**：每个获授权新文件各自记一条说明（`card.new_files_reasons`）。
+  追加授权时旧文件的说明**不得被新说明覆盖** —— 覆盖等于抹掉历史授权依据。
+  `card.new_files_reason` 保留首次授权的说明作为汇总字段。
+- `appendScope` 追加新文件后**必须补记快照**（`created:true`）：否则负对照的
+  「改动前态」删不掉它 → 负对照退化成 `vacuous`（空测试）
+
 ---
 
 #### `flow_claim`
@@ -324,6 +471,22 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 **关键约束**
 - `run=false`（默认）只返回 prompt，由主 Agent 自行派子 Agent；`run=true` 也只写 prompt 文件 + 返回路径，**不直接起子进程**
 - 快照只覆盖 `card.scope` 内文件 —— 这是负对照的已知局限（scope 外依赖只是近似还原）
+- 快照同时覆盖 `card.new_files`（获授权可新建的文件）：派发时它们不存在 → 记 `created:true`，
+  还原时按「删除该文件」处理
+- 派发前对已登记的 `card.new_files` **重做一次真实路径边界复核**（与落卡同口径）：
+  授权与执行之间可能隔很久，期间授权路径的父目录可能被换成指向仓库外的
+  符号链接 / junction —— 落卡时安全，执行时文件已经写到仓库外了。
+  复核不通过（真实路径落在仓库外 / 解析失败）→ **拒绝派发**并给出原因
+- **复核的根 = 卡片登记的项目根**（`card.env.project`），不是派发时 cwd 的仓库根：
+  拿新根复核等于「换个基准重新判一次」，原本越出卡片项目根的授权路径会被放行
+- **派发目录必须落在卡片项目根之内**：不一致（派发到别的仓库/目录）→
+  **拒绝派发**并说明两个根分别是什么；卡片未登记项目根且有待复核的新文件 → 同样拒绝派发
+  （无从判定边界 = 不能默认放行）。未传 `cwd` 时派发基准回落到卡片项目根
+  （卡片已经定义了「这次工作在哪个项目」，没传 cwd 不等于「换个项目」）
+- 派发合同 prompt 的「任务边界」必须列出**获授权的新文件**（`scope` + `new_files`）：
+  执行者只看得到 prompt，看不到卡片字段
+- 派发时记录的改动基线（`dispatch_baseline`）必须包含**未跟踪文件**：
+  `git diff --name-only` 只含已跟踪文件，旧实现因此看不见「新建文件」
 
 ---
 
@@ -338,6 +501,12 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 
 **关键约束**
 - 工作目录优先级：**显式 cwd > 卡片提交时的 `card.env.project` > `process.cwd()`**
+- Git 指纹的 HEAD / diff / 未跟踪列表命令均限时 5 秒、缓冲上限 8 MiB；必须无 error、status 为 0 且无 signal 才能消费全文。超时、超限、非零或 null status 返回 `git_command_failed`（含 phase），不生成 hash，不把错误当空输出或非 Git。
+- 只有 Git 明确确认 `not_a_git_repo`，且 cwd 祖先发现路径没有 `.git` 元数据或未知 IO/链接时，才保留非 Git 项目兼容。损坏 `.git`、明确 Git 环境路径、未知故障（包括缺失 Git、损坏仓库、无有效 HEAD）一律 fail-closed。`flow_run_verify` / `flow_falsify` 的命令即使成功，指纹失败也不形成有效验证证据：保存 `last_verify.ok=false` 及失败指纹并返回错误，命令原始 exitCode 与还原回执仍保留。
+- `flow_status` 不将旧或当前失败指纹标成 pass；`flow_verdict(PASS)` 拒绝未知失败。Git 指纹必须有合法 HEAD 与 64 位 SHA256；双方完整指纹的 HEAD 或 diff hash 真的变化才产生 `VERIFY_STALE` 与向导入口。旧字段缺失/畸形不产生向导，缺失旧指纹仅在当前明确非 Git 时保留旧项目兼容。
+- 未跟踪列表用 NUL 分隔、保留原始字节并严格 UTF8 roundtrip；不支持的非法字节路径显式失败，不映射成 U+FFFD 后读取另一文件。HEAD/diff/未跟踪采集统一真实 Git root，仅剥离 Git 记录末尾 LF，不 trim 或删除路径自身的 CR；异常协议明确失败，不误选相邻库。验证命令的 cwd 仍保持原选择；子目录调用也绑定父/兄弟未跟踪依赖。
+- 未跟踪 metadata/content/close/hash 全部在短命受信 Node 子进程中运行，固定 `node -e` 入口，仅通过 stdin JSON 传路径，不用 shell 拼接。父从启动开始设 5 秒 timeout，超时 SIGKILL 并同步等待该无后继进程退出；不是 Promise.race 遗留任务。最终出口也检查读取 deadline。不可中断的 OS 内核 IO/进程回收仍可能延长实际返回，不宣称硬件绝对 5 秒。
+- 读取以 64 KiB 块流式 hash 全文，未跟踪内容累计上限 8 MiB；输入 JSON 另限 8 MiB，输出/诊断总缓冲限 64 KiB，不把 Node 运行时 RSS 声称为 64 KiB。读取/关闭/类型/读取期间变化等失败显式返回不可用，不将错误文本或空输出当 hash，也不把诊断中的路径/环境秘密回传。超过 1 MiB 的文件不能仅 hash 大小；同尺寸内容变化须可检出。小文件保留原路径分隔符＋原内容 SHA256 算法，大文件旧大小摘要与新全文摘要不兼容，需重新验证。
   （MCP server 是常驻进程，它的 cwd 是启动时的目录，可能是几个月前的旧仓库）
 - `verify.cmd` 为空时直接拒绝（没有可核验依据）
 
@@ -361,12 +530,64 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 | `meaningful` | 改动前失败 + 改动后通过 | ✅ 可以 |
 | `vacuous` | 改动前就通过（空测试） | ❌ 拒绝 |
 | `not_passing` | 改动后仍失败（改动本身有问题） | ❌ 拒绝 |
+| `restore_failed` | 最终还原不完整（工作区没回到进入负对照时的状态） | ❌ 拒绝 |
 | `inconclusive` | 其他 | ❌ 拒绝 |
 
 **关键约束**
 - 需要派发快照（`manifest.jsonl`），没派发过直接拒绝
 - 先把"改动后"状态备份到临时目录，`finally` 里一定还原 —— 即使 verify 命令本身改文件，也不会把工作区留在改动前状态
 - **还原是可核验的**（v2.14.0）：进入临界区前写 `negative_control/<ts>/journal.json`；`finally` 里还原后逐文件比对内容摘要，结果写回 `restore{ok, checked, mismatched}`，失败时**保留备份目录**并写 stderr 告警
+- **还原失败关闭**：删除/还原失败一律**记账并如实报告**，不得吞错后继续、
+  更不得对外宣称「已还原」。具体：
+  - 删除/还原失败一律**记账并如实报告**，负对照返回 `ok:false`（`verdict=restore_failed`），
+    **不拿半还原状态当「改动前态」去跑对照**；
+  - **范围边界**：只允许对任务卡登记项目（仓库根）内的路径执行还原，越界路径拒绝并记账；
+  - **只删普通文件**：目标是目录（含非空目录）或符号链接时失败关闭，不递归删除、不跟随符号链接；
+  - **事务记录**：每次还原动作与结果追加到 `journal.json` 的 `restore_log`，
+    失败时目录保留（证据不删），下次调用可据此恢复；
+  - 负对照语义不变：还原到改动前态 → 验证必须失败；还原到改动后态 → 验证必须通过
+- **还原只有一份实现**：边界判定、只删普通文件、失败记账、
+  结果结构全部收敛到 `dispatch.js` 的 `restoreEntries()`；四个调用点
+  （manifest 还原 / 崩溃恢复 / 还原当前态 / 还原记录态）都调用它。
+  多份实现必然漂移 —— 写回分支一旦漏了 `lstat` 防护，就会顺着符号链接把
+  **仓库外**的文件改掉，而删除分支有，口径不一致 = 门禁有洞
+- **写回分支与删除分支口径一致**：还原前统一过三道闸：
+  ① 范围边界按 **realpath 解析后的真实路径**判定（路径里只要有符号链接/junction，
+  真实路径就落到别处 → 越界）；
+  ② 目标本身不能是符号链接（`lstat` 不跟随链接）；
+  ③ 目标沿途的**父目录**不能是符号链接/junction；
+  任一不满足 → 拒绝执行、记账、失败关闭，**仓库外的真实文件一个字节都不会被改动**
+- **最终 journal 写盘失败必须如实报告**：`journal.json` 是崩溃恢复的
+  唯一依据，写不下去就如实标记 `restore.journal_write_failed=true` 并**失败关闭**
+  （不静默忽略），备份目录保留
+- **负对照失败即作废既有结论**：本次负对照失败（还原失败关闭等）时，
+  立即清空 `last_falsify` —— 否则上一轮的 `meaningful` 旧结论会被沿用，
+  坏掉的负对照照样能放行 PASS；`last_falsify` 同时记录 `card_ts`，
+  裁定时校验证据属于**当前卡**（旧卡结论不得冒充新卡）
+- **负对照抛异常同样作废既有结论**：负对照**抛异常**
+  （参数非法、工作区不可读等）与「返回失败」是同一类后果 ——
+  本次没拿到有效结论就不能留旧结论。异常路径同样清空 `last_falsify`，
+  否则旧 `meaningful` 结论会继续支撑 PASS
+- **作废失败必须失败关闭**：作废（写状态清空 `last_falsify`）本身失败
+  （状态锁损坏 / 超时）时，旧结论会继续支撑 PASS —— 而作废失败的原因往往
+  正是状态存储坏了，**没有地方能写下「旧结论已作废」**。
+  因此作废失败会另外落一个**不依赖状态锁**的持久标记
+  （`<CARLOS_FLOW_HOME>/gate-state/runs/<session>/falsify_invalidation_failed.json`），
+  裁定闸（门禁 8e）看到标记一律拒 PASS；作废成功或负对照成功写入新结论时标记被撤销。
+  防线分三层（由弱到强）：① 状态写入成功 → 旧结论真被清空；
+  ② 状态写入失败但标记写得进去 → 标记作证，跨进程拒 PASS；
+  ③ 状态与标记**都写不进去** → 落进程内硬拒名单（本进程内一律拒 PASS），
+  此时存储不可写，跨进程持久化在物理上不可能 —— 宁可拒，也不能让旧结论冒充新证据。
+  标记写入失败必须**如实报告**（不得当作已作废、也不得声称已标记）
+- **标记清除失败必须如实报告**：旧的「不可 PASS」标记撤不掉时（权限/占用等），
+  不能静默吞掉 —— 它会一直挡着 PASS，而用户重跑负对照也清不掉。
+  负对照成功但清除失败时，返回值与 `note` 里必须写明「标记清除失败」
+- **还原不完整不得支撑 PASS**：最终还原失败项
+  ① 置 `restore.ok=false`；② 负对照结论降级为 `restore_failed`（不得仍是 `meaningful`）。
+  裁定闸门另外独立核一次 `restore.ok` —— 还原没核对通过就不给 PASS
+- **还原范围根不得缺省放行**：`restoreEntries()` 的
+  `options.root` 是**必填**边界根；缺了时每一项都按「拒绝」记账并返回 `ok:false`
+  （缺省即跳过边界判定 = fail-open，能把仓库外的文件改掉/删掉）
 - **崩溃可恢复**（v2.14.0）：上一次被强杀（日志停在 `pending`）时，本次调用先按日志把工作区救回来，并在返回值 `recovered{dirs, files, unresolved}` 里如实报告
 - **局限**：快照只覆盖 scope 内文件，scope 外依赖被改时结论仅供参考
 
@@ -421,7 +642,7 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 
 **审计事件**：`decision/verdict_denied`、`decision/scope_violation`、`finding/verdict_overwrite`、`resolution/verdict`
 
-**9 组判断 / 15 个 return 点（顺序固定，不可调换）**
+**9 组判断 / 17 个 return 点（顺序固定，不可调换）**
 
 前 2 组**无条件适用**（任何裁定都要过）；第 3 组起**仅 PASS 适用**（DIRECTION / LOCAL 是返工意见，不构成「完成」）。
 
@@ -434,23 +655,36 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 | 4b | 仅 PASS | 验证跑过 | 无 `last_verify` |
 | 4c | 仅 PASS | 验证通过 | `last_verify.ok !== true` |
 | 4d | 仅 PASS | 命令对得上 | `last_verify.cmd` ≠ 当前卡 `verify.cmd` |
-| 5 | 仅 PASS | 验证结果未过期 | fingerprint 变化（A1 门） |
+| 5 | 仅 PASS | 验证结果未过期 | fingerprint 变化（A1 门）；旧或当前 Git 指纹读取失败也拒绝，但不是 STALE 向导 |
 | 6 | 仅 PASS | 无越界改动 | `当前 diff - dispatch_baseline ⊄ scope` |
 | 7 | 仅 PASS | role 是 auditor | `claimed_role !== "auditor"` |
 | 8a | 仅 PASS | 负对照已做 | 无 `last_falsify` |
 | 8b | 仅 PASS | 负对照通过 | `verdict !== "meaningful"` |
-| 8c | 仅 PASS | 负对照证据一致 | `last_verify.output_hash !== last_falsify.after.hash` |
+| 8c | 仅 PASS | 负对照还原核对通过 | `last_falsify.restore.ok === false` |
+| 8d | 仅 PASS | 负对照证据一致 | `last_verify.output_hash !== last_falsify.after.hash` |
+| 8e | 仅 PASS | 既有负对照结论**可作废** | 作废失败标记存在（`falsify_invalidation_failed.json`） |
 | 9a | 仅 PASS | 双轴已齐 | 两轴 `card_ts` 与当前卡不一致 |
 | 9b | 仅 PASS | 双轴无 FAIL | `standards` 或 `spec` 判 FAIL |
 
-> **编号说明**：`4a~4d`、`8a~8c`、`9a~9b` 在代码里是独立的 `return fail` 点（共 15 个），
-> 本表按语义归为 9 组。统计数据时请以 15 个判断点为准。
+> **编号说明**：`4a~4d`、`8a~8e`、`9a~9b` 在代码里是独立的 `return fail` 点（共 17 个），
+> 本表按语义归为 9 组。统计数据时请以 17 个判断点为准。
+>
+> **8e 是前置否决闸**：它在其它组之前求值（标记存在 = 旧负对照结论不可信，
+> 任何 PASS 都不该落），但语义上属于第 8 组（负对照）。
+> 放在前面是因为它给出的下一步最具体（先修状态存储，再重做负对照）。
 
 **WARN 汇总**：两轴判 WARN 的结论会随裁定一起返回（`warn_count` / `warn_findings`），上限 20 条，防止 WARN 通胀成噪音。
 
 **关键约束**
 - 第 1~2 组**无条件**；第 3 组起**仅 PASS**。`DIRECTION` / `LOCAL` 是"有问题"的裁定，不构成"完成"，允许在未派发时先记录返工意见
 - 越界判定用**增量**：`当前 diff - 派发基线`，避免误伤用户自己原有的未提交改动
+- **还原不完整不得支撑 PASS**：负对照的最终还原没核对通过
+  （`last_falsify.restore.ok === false`）时，即使 `verdict` 写着 `meaningful` 也拒 PASS ——
+  工作区没回到进入负对照时的状态，「改动后」那一态就不是我们以为的那一态
+- **作废失败不得支撑 PASS**：负对照失败/异常时要作废上一轮的 `last_falsify`；
+  作废这一步失败（状态锁损坏 / 超时）时，旧结论会继续支撑 PASS ——
+  而作废失败的原因往往正是状态存储坏了，状态里写不进「已作废」。
+  因此作废失败会落一个不依赖状态锁的持久标记，门禁 8e 看到标记一律拒 PASS
 
 ---
 
@@ -472,10 +706,23 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 | 字段 | 含义 |
 |---|---|
 | `verify_passed` | 真实验证是否通过（boolean，不破坏下游） |
-| `verify_state` | 四态：`not_run` / `fail` / `stale` / `pass` |
+| `verify_state` | 四态：`not_run` / `fail` / `stale` / `pass`；Git 指纹读取失败为 `fail`，不得报 `pass` |
 | `axes_ready` | 两轴都有结论 + `card_ts` 一致 + 无 FAIL |
 | `warn_count` / `warn_findings` | 与 `flow_verdict` 同一份派生口径 |
 | `unreviewed` | 有卡但无裁定 |
+| `wizard` | 本次只读安全向导摘要；不等于原 `completed_ok` 或 `verified` |
+
+**Phase1 安全向导投影**
+
+`ui/narrator.js` 的 `deriveWizardStatus(state, observation)` 是纯函数，保留原 `narrate` 导出，顶层无 DOM、Host 或文件依赖。`flow_status` 只调用一次已有权威 `verifyState`，将同次 `verify_state`、`verify_passed`、指纹可用性和采样时间传给投影，不在 UI 模块重算工作区指纹。原返回字段、schema 与非 Git 兼容口径不变；向导在无可用指纹时保守停在检查，不能借兼容绿灯宣称完整完成。
+
+摘要白名单仅为 `stage/stage_label/status/completed_ok/goal/scope_count/reason/next_responsible/sampled_at/warning_count`。目标只显示“已记录目标/尚未记录目标”，不回传任意目标原文；范围只给数量。命令、路径、原始错误、输出、diff、审查原文与秘密不进入摘要。采样时间是本次工具调用观察，不宣称页面实时；缺观察时纯投影返回未知。现有 flow_status 原字段不是这个脱敏白名单，页面不得直接广播整个工具结果。
+
+阶段由真实卡及证据派生：无卡启动，缺目标停目标，范围/验收/命令或占位待补项停范围；没有验证证据时执行状态待确认，派发次数不是执行完成。验证必须绑定当前 `card_ts`、命令与时间，真实 `ok`、退出码、输出哈希及本次权威采样均有效，才检查负对照。负对照须有当前命令/时间、改动前真实非零退出、改动后成功及匹配哈希，并明确还原核对成功。现有负对照无独立卡代，使用其时间、命令与当前验证输出哈希关联；显式旧卡代拒绝，缺失/空证据/超时不算有效。
+
+审查须两轴当前卡代、时间不早于验证、有证据且结论属于 PASS/WARN；FAIL 阻塞，WARN 以计数保留。最终完成还要求真实 `completed_ok`、auditor PASS、派发记录及不早于验证和双轴的最终裁定时间。审计待确认、还原失败、陈旧任务、免检均阻塞。自报步骤、缓存、`verified`、executor 自批与未知结果不参与推进。投影是状态存储内的保守一致性摘要，不证明文件未被外部伪造，也不代替后端裁定、审计链核验或 Host 授权。
+
+验证：`test/verify-ui.mjs` 保留原 narrator 风格断言，新增完整正负矩阵及真实 stdio `flow_status` fixture（无卡、占位卡、非 Git 指纹不可用），逐字节确认工具不写 fixture 状态。真实 Host 页面、启动工具、确认卡及点击续接属于后续 Phase2，Phase1 不声称完整桌面向导验收。
 
 > **注意**：`verify_passed` 与 `verified` 语义不同。`verified` 只表示"是否已有裁定"，不代表验证通过。
 
@@ -492,8 +739,23 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 
 **行为**
 - 传 `paths` → 检查调用方给的清单
-- 不传 `paths` → 自动跑 `git diff --name-only` 取当前实际改动
+- 不传 `paths` → 自动跑 `git diff --name-only`（已跟踪文件的改动）
+  **+ `git ls-files --others --exclude-standard`（未跟踪的新文件）** 取当前实际改动
 - 空 `scope` → **fail-closed**（所有改动都算越界），不是 fail-open
+- 允许集 = `card.scope` + `card.new_files`（获授权可新建的文件被创建后不得误报）
+- **未跟踪的新文件同样纳入越界判定**：`git diff --name-only`
+  只含已跟踪文件，只看它会完全看不见「新建了一个没授权的文件」——
+  越界检测漏了最大的一类。尊重 `.gitignore`（被忽略的文件不算改动）；
+  `CARLOS_FLOW_HOME` 若落在仓库内，其状态文件不计入改动（避免自我误报）
+- **自动模式做基线相减**：不传 `paths` 时，
+  「当前改动 − 派发时基线」= 本次执行**引入**的改动，只有它参与越界判定。
+  不做相减 → 派发**之前**就存在的未跟踪文件会被报成越界
+  （与裁定路径的口径不一致：裁定做了相减，自查没做，自查说没问题、裁定说有问题）。
+  传了 `paths` → 按调用方给的清单逐项判（调用方自己指定要查什么，不做相减）
+- **路径键与卡片层同一把**：允许集比对用 `card.js` 的 `pathKey`
+  （平台感知：`win32` 折叠大小写、其它平台敏感）—— 授权写法与落盘写法大小写不同时，
+  在 `win32` 上已授权的新文件不得被误判成越界；在 POSIX 上大小写不同本就是两个文件，
+  落盘的那个必须判越界。路径键**不得**无条件小写（那会在 POSIX 上把真越界当成授权内）
 
 ---
 
@@ -708,11 +970,23 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 | 维度 | 行为 |
 |---|---|
 | 排他性 | `openSync(lockFile, "wx")`（O_CREAT\|O_EXCL）—— 原子排他，M12 变异体守着这条 |
-| 持有者标识 | 拿到锁后把 pid 写入锁文件（只用于诊断与死锁回收，不参与排他判定） |
-| 陈旧回收 | ① 锁内 pid 已死（`ESRCH`）→ 立即回收；② 老式空锁按 `mtime > staleMs`（默认 30s）回收；`EPERM` 视为活着，绝不误删 |
-| 重试 | 指数退避（5ms 起、×1.6、上限 120ms）+ 0~30% 抖动 —— 固定 15ms 会让多进程「同步醒来」反复撞锁 |
+| 持有者标识 | 同一 wx fd 写入 PID＋随机 nonce 后关闭；完整内容用于身份核验，兼容旧纯 PID 的死亡判定 |
+| 陈旧回收 | 仅严格有效 PID 且 ESRCH 才回收；活 PID、EPERM、空锁、坏锁和未知持有者即使超龄也不抢占。staleMs 不再授予年龄回收权 |
+| 转换互斥 | 独立异步 bakery gate 覆盖创建、死 PID 回收、身份核验、rename 核验/重试与释放；不跨业务 fn。死槽仅忽略不删除，未知槽拒绝。RUNS_DIR 与 session 目录先 realpath，实际 IO 保留其大小写；仅 Windows gate key 小写归一。session 必须是物理 RUNS_DIR 的直接子目录，relative 与父目录 dev/ino 双重校验，在转换前拒绝逃逸的 session junction/符号链接及非直接子目录；不支持两个不同 RUNS 根通过外部 session 链接共享锁的布局 |
+| 释放 | 完整 owner 身份相符才 rename 到唯一 retired 路径；只清理自身 retired。错误有 phase，业务首因与释放/槽清理错误用 AggregateError 同时保留 |
+| 重试 | gate 与业务锁等待均异步且有界；释放使用独立预算。非竞争 IO 错误传播，不无限 continue |
 | 超时 | fail-closed：`timeoutMs`（默认 5s）内拿不到锁就报错，**绝不无锁写状态**，错误里点明持有者 pid |
 | 测试 | `test/state-lock.mjs`（11 条断言）、`test/concurrency-e2e.mjs`（跨进程回归） |
+
+### 4.6 状态保存确认与部署边界
+
+`saveState` 使用同目录唯一 wx temp，顺序为完整 write → 文件 fsync → close → rename → 支持平台的目录同步。POSIX 同步祖先目录链以覆盖新建目录项；Windows Node 不执行不受支持的目录 fsync，因此只确认文件同步及原子替换，不承诺掉电目录项耐久或硬件 exactly-once。
+
+创建成功但 owner 写入/close 失败时，在原 gate 内用 fstat 与当前文件的 dev/ino/birthtime 身份核对后私有 retire 补偿；不能证明身份则保留 fail-closed 并显式报未确认。取得 owner 后、业务回调前若自身槽清理失败，只有仍能证明持有原 gate 才补偿 owner，保留槽清理错误；永久 IO 可能留下阻断槽，不能声称完全恢复或越过它执行。目录 fsync 与 close 同时失败按发生顺序聚合，不以 close 覆盖同步首因。
+
+错误提供 `phase` 与 `commitStatus`：rename 前失败为 not-committed，rename 本身异常或其后失败为 unknown；这只是本次保存的提交观测，不是业务重放许可。失败不回滚或删除 target；close/temp 清理错误也显式聚合，不能假称已存或没存。本阶段不实现 receipt 或命令执行去重。
+
+新旧 writer 混跑不受新 gate 全面保护：旧实现仍可能按年龄删除活 owner，或无身份 unlink。未来严格执行能力部署前须使共享 CARLOS_FLOW_HOME 的 writer 全部采用新协议；本补丁不扫描、停止或清理用户进程/业务状态，也不声称 Node 是 OS 沙箱。未知旧空锁须人工核验，不再自动抢占；`test/state-lock.mjs` 旧 4a/4b 因此是安全契约修订，其余旧断言保留。
 
 ---
 
@@ -761,8 +1035,9 @@ npm run test:all            # 全量测试（含 sensitive / lock / falsify）
 | 局限 | 影响 | 缓解 |
 |---|---|---|
 | `flow_falsify` 快照只覆盖 `card.scope` 内文件 | scope 外依赖被改时，"改动前"状态只是近似 | 文档如实标注，结论仅供参考 |
+| 越界判定已包含未跟踪文件 | `git diff --name-only` 只含已跟踪文件；越界判定另外跑 `git ls-files --others --exclude-standard`，自动模式能看见新建的未跟踪文件 | 尊重 `.gitignore`；仓库内若放了 `CARLOS_FLOW_HOME`，其状态文件不计入改动 |
 | 审计流水 99.8% 是测试生成 | 无法用使用频率证明工具价值 | 靠代码路径 + 设计意图 + 测试覆盖三重证据判断 |
-| 非 git 目录时 fingerprint 不可用 | A1 门 fail-open（算 pass） | `flow_status` 如实标注 `fingerprint: "unavailable"` |
+| 非 git 目录时 fingerprint 不可用 | 仅 Git 明确确认 `not_a_git_repo` 时 A1 门 fail-open（算 pass） | `flow_status` 如实标注 `fingerprint: "unavailable"` |
 | `flow_audit_guard` 与 `flow_verdict` 逻辑重复 | 28 行冗余 | 保留为便利入口，删除收益≈0 |
 | `write_files` / `task_id` 未被判定使用 | 预留字段 | 记录在此，避免误以为它们参与门禁 |
 

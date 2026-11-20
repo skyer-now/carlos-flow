@@ -257,6 +257,7 @@ async function retirementChecks(source) {
     let closedObserved = false
     let spawnCount = 0
     let cleanupHits = 0
+    let retiredPath
     let receipt
     let failure
     let signalError
@@ -302,13 +303,27 @@ async function retirementChecks(source) {
       wait(ready)
       observed = true
     }
+    fs.renameSync = (a, b, ...args) => {
+      const result = rename(a, b, ...args)
+      if (
+        !old && String(a) === lock &&
+        path.dirname(String(b)) === s.AUDIT_DIR &&
+        path.basename(String(b)).startsWith(`.append-lock.retired-${process.pid}-`)
+      ) {
+        retiredPath = String(b)
+        // 后继启动屏障属于 fixture；在私有 cleanup 的 500ms 预算开始前完成。
+        // 共享锁已真实移走，后继可发布；清理仍逐次核验其 owner 不变。
+        if (mode === 'cleanup-retry') barrier()
+      }
+      return result
+    }
     fs.unlinkSync = (file, ...args) => {
       const result = unlink(file, ...args)
       if (old && String(file) === path.join(lock, 'owner.json')) barrier()
       return result
     }
     fs.rmSync = (file, ...args) => {
-      if (!old && String(file).includes('.retired-')) {
+      if (!old && String(file) === retiredPath) {
         barrier()
         if (mode === 'barrier-failure') throw new Error('注入屏障清理异常')
         const owner = fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')
@@ -366,6 +381,11 @@ async function retirementChecks(source) {
     if (mode === 'exception') assert.match(failure.message, /屏障主体异常/)
     else assert.equal(failure, undefined)
     assert.equal(receipt.persisted, !old && mode !== 'barrier-failure', JSON.stringify(receipt))
+    if (mode === 'cleanup-retry') {
+      assert.ok(retiredPath, '必须捕获本次真实 retired 路径')
+      assert.equal(cleanupHits, 2, '瞬时冲突后必须恰好再次执行私有清理')
+      assert.equal(fs.existsSync(retiredPath), false, '私有 retired 必须已实际移除')
+    }
     if (mode === 'barrier-failure') assert.match(receipt.error, /屏障清理异常/)
     if (old) assert.match(receipt.error, /ENOTEMPTY|EEXIST/)
     assert.equal(s.verifyAuditChain().ok, true)
@@ -780,12 +800,79 @@ const reliable = runInChild(
     assert.ok(failed.audit_pending);
   } finally { await client.close(); fs.rmSync(lock,{recursive:true}); }
   // 真子进程在持有 reaper 槽位且即将移动死主锁时退出。
-  fs.mkdirSync(lock); fs.writeFileSync(path.join(lock,'owner.json'),JSON.stringify({pid:dead}));
-  const reapCrash=spawnSync(process.execPath,['--input-type=module','-e',
-    "import fs from 'node:fs';const rn=fs.renameSync;fs.renameSync=(a,b,...c)=>{if(String(b).includes('.dead-'))process.exit(73);return rn(a,b,...c)};const s=await import('./src/state.js');s.audit('run','crash-in-reap');"
-  ],{env:process.env,encoding:'utf8'});
-  assert.equal(reapCrash.status,73);
-  assert.equal(s.audit('run','retry-after-reaper-death').persisted,true);
+  async function runOwnedNode(code) {
+    return new Promise((resolve) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code], {
+        env: process.env,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let stdout = ''
+      let stderr = ''
+      let bytes = 0
+      let error = ''
+      let overflow = false
+      let timedOut = false
+      const timer = setTimeout(() => {
+        timedOut = true
+        child.kill()
+      }, 15000)
+      const collect = (stream, append) => stream.on('data', (chunk) => {
+        const remaining = Math.max(0, 65536 - bytes)
+        bytes += chunk.length
+        append(chunk.subarray(0, remaining).toString())
+        if (bytes > 65536) {
+          overflow = true
+          child.kill()
+        }
+      })
+      collect(child.stdout, (text) => { stdout += text })
+      collect(child.stderr, (text) => { stderr += text })
+      child.on('error', (e) => { error = e.message })
+      child.on('close', (status, signal) => {
+        clearTimeout(timer)
+        resolve({ pid: child.pid, status, signal, error, overflow, timedOut, stdout, stderr })
+      })
+    })
+  }
+  async function reapCrashMain() {
+    const fs = (await import('node:fs')).default
+    const path = await import('node:path')
+    const assert = (await import('node:assert/strict')).default
+    const s = await import('./src/state.js')
+    const fresh = await runOwnedNode('')
+    console.error(JSON.stringify({ stage: 'fresh-close', ...fresh }))
+    assert.equal(fresh.error, '', JSON.stringify(fresh))
+    assert.equal(fresh.overflow, false, JSON.stringify(fresh))
+    assert.equal(fresh.timedOut, false, JSON.stringify(fresh))
+    assert.equal(fresh.signal, null, JSON.stringify(fresh))
+    assert.equal(fresh.status, 0, JSON.stringify(fresh))
+    let deadCode = ''
+    try { process.kill(fresh.pid, 0) } catch (e) { deadCode = e.code }
+    console.error(JSON.stringify({ stage: 'fresh-dead', pid: fresh.pid, code: deadCode }))
+    assert.equal(deadCode, 'ESRCH')
+    const lock = path.join(s.AUDIT_DIR, '.append-lock')
+    fs.mkdirSync(lock)
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: fresh.pid }))
+    const rename = fs.renameSync
+    fs.renameSync = (from, to, ...args) => {
+      if (String(from) === lock && String(to).startsWith(lock + '.dead-')) process.exit(73)
+      return rename(from, to, ...args)
+    }
+    const receipt = s.audit('run', 'crash-in-reap')
+    console.error(JSON.stringify({ persisted: receipt.persisted, error: receipt.error }))
+  }
+  const reapCrash = await runOwnedNode(
+    'const { spawn } = await import(' + JSON.stringify('node:child_process') + ')\\n' +
+    runOwnedNode.toString() + '\\n(' + reapCrashMain.toString() + ')()',
+  )
+  const reapDetail = JSON.stringify(reapCrash)
+  assert.equal(reapCrash.error, '', reapDetail)
+  assert.equal(reapCrash.overflow, false, reapDetail)
+  assert.equal(reapCrash.timedOut, false, reapDetail)
+  assert.equal(reapCrash.signal, null, reapDetail)
+  assert.equal(reapCrash.status, 73, reapDetail)
+  assert.equal(s.audit('run', 'retry-after-reaper-death').persisted, true, reapDetail)
   // 活回收者和未知回收者均不得抢占。
   const reapDir=lock+'.reapers';
   const activeSlot=path.join(reapDir,'active-test.json');
@@ -800,11 +887,20 @@ const reliable = runInChild(
   fs.unlinkSync(activeSlot);
   assert.equal(s.audit('run','retry-after-reaper-unblock').persisted,true);
   const finalSid='audit-final-pass-failure';
+  const finalWork=path.join(process.env.CARLOS_FLOW_HOME,'final-work');
+  fs.mkdirSync(finalWork);
+  const fixtureGit=(args)=>{
+    const result=spawnSync('git',args,{cwd:finalWork,encoding:'utf8',windowsHide:true});
+    assert.equal(result.status,0,result.stderr);
+  };
+  fixtureGit(['init','-q']);
+  fs.writeFileSync(path.join(finalWork,'tracked.txt'),'真实审计门禁基线');
+  fixtureGit(['add','tracked.txt']);
+  fixtureGit(['-c','user.name=审计测试','-c','user.email=owned@example.invalid','-c','commit.gpgsign=false','commit','-qm','真实审计门禁基线']);
   const ts=Date.now();
   const cmd='node -e "process.exit(0)"';
   s.saveState(finalSid,{...s.defaultState(),card:{goal:'final pass failure',scope:[],verify:{cmd}},card_ts:ts,
     dispatch_count:1,claimed_role:'auditor',completed_ok:true,verdict:'PASS',
-    last_verify:{ok:true,cmd,card_ts:ts,ts:ts+1,cwd:process.env.CARLOS_FLOW_HOME},
     last_falsify:{verdict:'meaningful'},
     audit_axes:{standards:{verdict:'PASS',card_ts:ts},spec:{verdict:'PASS',card_ts:ts}}});
   const fault=path.join(process.env.CARLOS_FLOW_HOME,'inject-final');
@@ -818,10 +914,17 @@ const reliable = runInChild(
     'fs.writeSync=function(fd,b,...a){if(Buffer.isBuffer(b)&&b.toString().includes(\\\'"type":"resolution"\\\')&&b.toString().includes(\\\'"kind":"verdict"\\\')&&fs.existsSync(fault)){fs.writeFileSync(hit,"final-stage");throw new Error("injected final resolution append");}return original.call(this,fd,b,...a)};',
     'await import('+JSON.stringify(${JSON.stringify(pathToFileURL(join(ROOT, 'src', 'index.js')).href)})+');'
   ].join('\\n'));
-  const finalClient=startMcpClient({entry,cwd:process.env.CARLOS_FLOW_HOME,env:{...process.env}});
+  const finalClient=startMcpClient({entry,cwd:finalWork,env:{...process.env}});
   try {
     await finalClient.initialize();
-    const args={sessionId:finalSid,verdict:'PASS',role:'auditor',cwd:process.env.CARLOS_FLOW_HOME};
+    const verified=await finalClient.request('tools/call',{name:'flow_run_verify',arguments:{sessionId:finalSid,cwd:finalWork}},20000);
+    assert.equal(JSON.parse(verified.result.content[0].text).ok,true,JSON.stringify(verified));
+    const evidence=s.loadState(finalSid).last_verify;
+    assert.equal(evidence.card_ts,ts);
+    assert.equal(evidence.fingerprint.ok,true);
+    assert.match(evidence.fingerprint.head,/^[a-f0-9]{40,64}$/);
+    assert.match(evidence.fingerprint.diff_sha256,/^[a-f0-9]{64}$/);
+    const args={sessionId:finalSid,verdict:'PASS',role:'auditor',cwd:finalWork};
     const failed=await finalClient.request('tools/call',{name:'flow_verdict',arguments:args},20000);
     assert.ok(fs.existsSync(hit),'必须实际抵达最终 resolution 追加，不能以前置拒绝冒充');
     assert.ok(JSON.stringify(failed).includes('injected final resolution append'));

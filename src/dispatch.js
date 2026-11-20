@@ -9,7 +9,12 @@ import {
   sanitizeId,
   retryOwnReaperOperation,
   cleanupOwnReaperFiles,
+  loadState,
 } from './state.js'
+// 路径键与真实路径解析与卡片层共用同一份（src/card.js）：
+//   · pathKey —— win32 折叠大小写、其它平台敏感，授权写法与落盘写法必须同口径；
+//   · realTargetPath —— 唯一一份「这条路径真实落在哪里」的解析。
+import { pathKey, realTargetPath } from './card.js'
 
 export const MAX_DISPATCH = 5
 
@@ -140,12 +145,23 @@ export function buildContractPrompt(role, card, extra, options = {}) {
     toolGuidance = `tool guidance: ${guidance}`
 
     const scopeArr = Array.isArray(c.scope) ? c.scope.map(String) : []
+    // 获授权可新建的文件（new_files）：必须与 scope 一起写进「任务边界」——
+    // 执行者只看得到 prompt，看不到卡片字段；不列出来就等于没授权，
+    // 而它新建的文件又会被越界检测当成越界改动。
+    const newFilesArr = Array.isArray(c.new_files)
+      ? c.new_files.map(String).filter((p) => p.trim() !== '')
+      : []
     let boundaries
     if (isAuditor) {
       boundaries = '零文件改动，只读取证'
     } else {
       boundaries =
         scopeArr.length > 0 ? scopeArr.join(', ') : '无文件可改，只读任务'
+    }
+    if (newFilesArr.length) {
+      boundaries +=
+        (isAuditor ? '；获授权新建文件（只读核对，不得改动）：' : '；获授权新建文件：') +
+        newFilesArr.join(', ')
     }
     taskBoundaries = `task boundaries: ${boundaries}`
   }
@@ -1041,27 +1057,295 @@ export function computeOutputHash(exitCode, stdout, stderr) {
 }
 
 // 用快照 manifest 还原「派发时（改动前）」的工作区状态。
-function restoreFromManifest(entries) {
-  for (const e of entries) {
-    if (!e || !e.orig) continue
-    try {
-      if (e.created === true) {
-        // 派发时该文件不存在 → 删除当前文件
-        try {
-          fs.unlinkSync(e.orig)
-        } catch {}
-      } else if (e.backup) {
-        fs.mkdirSync(path.dirname(e.orig), { recursive: true })
-        fs.copyFileSync(e.backup, e.orig)
-      }
-    } catch (err) {
-      try {
-        process.stderr.write(
-          `[flow-falsify] 还原失败 ${e.orig}: ${err && err.message ? err.message : err}\n`,
-        )
-      } catch {}
+//
+// ---- 还原的口径：失败关闭 + 范围边界 + 事务记录 --------------------------
+//
+// 还原（把工作区恢复成派发时的状态）必须同时满足四条：
+//   · **失败关闭**：任何一步删除/还原失败都被记账并如实报告；
+//     不得吞错后继续、更不得对外宣称「已还原」——
+//     半还原状态被当成「改动前态」去跑负对照，结论一律不成立；
+//   · **范围边界**：只允许对任务卡登记项目（仓库根）内的路径执行还原，越界即拒；
+//   · **只删普通文件**：目标是目录（含非空目录）或符号链接时拒绝，
+//     不递归删除、不跟随符号链接去删别处内容；
+//   · **事务记录**：每次动作与结果都写进 negative_control/<ts>/journal.json
+//     （复用仓库既有的 journal 约定，不另造并行机制）。
+//
+// 边界判定、只删普通文件、失败记账、结果结构**只有一份实现**（restoreEntries），
+// 四个调用点（manifest 还原 / 崩溃恢复 / 还原当前态 / 还原记录态）都调用它：
+// 多份实现必然漂移 —— 写回分支一旦漏了符号链接防护，就会顺着符号链接把
+// **仓库外**的文件改掉，而删除分支有；两份口径不一致 = 门禁有洞。
+
+function isInsideRoot(root, target) {
+  if (!root) return true
+  const r = path.resolve(root)
+  const t = path.resolve(target)
+  if (r === t) return false
+  const rel = path.relative(r, t)
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel)
+}
+
+// realpath（解析符号链接 / junction）；失败返回 null。
+function realpathOrNull(p) {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return null
+  }
+}
+
+// 两个路径是否指向同一个位置（win32 下大小写不敏感）。
+function samePath(a, b) {
+  if (!a || !b) return false
+  return path.relative(path.resolve(a), path.resolve(b)) === ''
+}
+
+// 还原前的安全判定：**返回 null 表示可以执行**，否则返回拒绝原因。
+//
+// 三道闸（写回分支与删除分支**同一套**）：
+//   ① 范围边界：目标必须落在任务卡登记项目（仓库根）内 —— 按 **realpath 解析后的
+//      真实路径**判定（路径里只要有符号链接/junction，真实路径就会落到别处）；
+//   ② 目标本身不能是符号链接：lstat 不跟随链接，删链接 ≠ 删链接指向的文件；
+//   ③ 目标路径沿途的**父目录**不能是符号链接 / junction：否则写回会顺着链接
+//      把仓库外（或别处）的文件改掉 —— 写回分支同样必须过这道闸。
+function restoreGuard(root, target) {
+  const abs = path.resolve(target)
+  // 边界根是**必填**：缺了就无法判定「是否在登记项目范围内」。
+  // 缺省放行 = fail-open（会把仓库外的文件改掉/删掉），所以缺根即拒绝。
+  if (!root) {
+    return {
+      result: 'rejected',
+      error: '缺少还原范围根（无法判定边界），拒绝还原',
     }
   }
+  const rootAbs = path.resolve(root)
+  if (!isInsideRoot(rootAbs, abs))
+    return {
+      result: 'out_of_scope',
+      error: '路径不在任务卡登记的项目范围内，拒绝还原',
+    }
+  // 真实路径判定：仓库根解析后的真实位置 vs 目标解析后的真实位置
+  const rootReal = realpathOrNull(rootAbs) || rootAbs
+  const rel = path.relative(rootAbs, abs)
+  const expected = path.join(rootReal, rel)
+  // 真实路径解析只有一份（src/card.js 的 realTargetPath）：
+  // 解析不出来就证明不了目标落在仓库内 —— 按保守口径拒绝。
+  const actual = realTargetPath(abs)
+  if (actual.error) {
+    return {
+      result: 'rejected',
+      error:
+        '目标路径无法解析真实路径（按保守口径拒绝）：' +
+        actual.error,
+    }
+  }
+  if (!samePath(expected, actual.path)) {
+    return {
+      result: 'rejected',
+      error:
+        '目标路径经过符号链接或 junction（真实路径 ' +
+        actual.path +
+        '），拒绝还原',
+    }
+  }
+  // 目标本身：lstat（不跟随链接）
+  let st = null
+  try {
+    st = fs.lstatSync(abs)
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') {
+      return {
+        result: 'rejected',
+        error: '目标路径无法读取：' + String((err && err.message) || err),
+      }
+    }
+  }
+  if (st && st.isSymbolicLink()) {
+    return {
+      result: 'rejected',
+      error: '目标是符号链接，拒绝跟随链接还原',
+    }
+  }
+  return null
+}
+
+// 还原条目：mode = 'delete'（删除普通文件）| 'write'（从备份写回）。
+//
+// options.root 是**必填**（边界根）：缺了时每一项都按「拒绝」记账，
+// 返回 ok:false —— 绝不因为「没给根」就跳过边界判定（fail-open）。
+//
+// 导出理由：它是负对照还原的**唯一一份实现**，外部调用方（回归测试）需要
+// 直接验证「缺根即拒绝」这个安全默认值。
+export function restoreEntries(items, options = {}) {
+  const root = options.root ? path.resolve(options.root) : null
+  const actions = []
+  const failures = []
+  const record = (a) => {
+    actions.push(a)
+    if (typeof options.onAction === 'function') {
+      try {
+        options.onAction(a)
+      } catch {
+        /* 记账失败不覆盖原始动作结果 */
+      }
+    }
+  }
+  for (const item of items) {
+    if (!item || typeof item.orig !== 'string' || !item.orig) continue
+    const ts = new Date().toISOString()
+    const orig = item.orig
+    const mode = item.mode === 'write' ? 'write' : 'delete'
+    // ① 边界与链接闸（两个分支同一套口径）
+    const guard = restoreGuard(root, orig)
+    if (guard) {
+      const a = {
+        ts,
+        orig,
+        action: mode,
+        result: guard.result,
+        error: guard.error,
+      }
+      record(a)
+      failures.push(a)
+      continue
+    }
+    if (mode === 'delete') {
+      // ② 派发时该文件不存在 → 删除当前文件。
+      let st = null
+      try {
+        st = fs.lstatSync(orig)
+      } catch (err) {
+        if (err && err.code === 'ENOENT') {
+          record({ ts, orig, action: 'delete', result: 'absent' })
+          continue
+        }
+        const a = {
+          ts,
+          orig,
+          action: 'delete',
+          result: 'failed',
+          error: String((err && err.message) || err),
+        }
+        record(a)
+        failures.push(a)
+        continue
+      }
+      // ③ 只删普通文件：目录 / 符号链接 / 其它一律失败关闭。
+      //    lstat 不跟随符号链接 —— 不会顺着链接去删别处的内容。
+      if (!st.isFile()) {
+        const a = {
+          ts,
+          orig,
+          action: 'delete',
+          result: 'rejected',
+          error: st.isDirectory()
+            ? '目标是目录，拒绝递归删除'
+            : '目标不是普通文件（可能是符号链接），拒绝删除',
+        }
+        record(a)
+        failures.push(a)
+        continue
+      }
+      try {
+        fs.unlinkSync(orig)
+        record({ ts, orig, action: 'delete', result: 'deleted' })
+      } catch (err) {
+        const a = {
+          ts,
+          orig,
+          action: 'delete',
+          result: 'failed',
+          error: String((err && err.message) || err),
+        }
+        record(a)
+        failures.push(a)
+      }
+      continue
+    }
+    // ④ 写回分支：从备份把内容写回原位。
+    const source = item.source
+    if (!source) {
+      const a = {
+        ts,
+        orig,
+        action: 'restore',
+        result: 'failed',
+        error: '缺少备份内容，无法还原',
+      }
+      record(a)
+      failures.push(a)
+      continue
+    }
+    try {
+      fs.mkdirSync(path.dirname(orig), { recursive: true })
+      fs.copyFileSync(source, orig)
+      record({ ts, orig, action: 'restore', result: 'restored' })
+    } catch (err) {
+      const a = {
+        ts,
+        orig,
+        action: 'restore',
+        result: 'failed',
+        error: String((err && err.message) || err),
+      }
+      record(a)
+      failures.push(a)
+    }
+  }
+  return { ok: failures.length === 0, actions, failures }
+}
+
+// 还原的边界根：优先取任务卡登记的项目目录，再取它的 git 仓库根；
+// 都没有时用调用方给的 cwd。边界根取仓库根而不是项目子目录，
+// 否则「cwd 是仓库子目录」的卡片会把 scope 里的文件误判成越界。
+export function resolveRestoreRoot(sid, cwd) {
+  let base = ''
+  try {
+    const st = loadState(sid)
+    const project = st && st.card && st.card.env && st.card.env.project
+    if (typeof project === 'string' && project.trim()) base = project
+  } catch {
+    /* 读不到卡片就用 cwd */
+  }
+  if (!base) base = cwd || process.cwd()
+  let repo = ''
+  try {
+    const proc = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: base,
+      encoding: 'utf8',
+      timeout: 5000,
+      windowsHide: true,
+      shell: false,
+    })
+    if (proc.status === 0 && typeof proc.stdout === 'string')
+      repo = proc.stdout.trim()
+  } catch {
+    /* git 不可用：退回项目目录本身 */
+  }
+  return repo || path.resolve(base)
+}
+
+// 派发快照（manifest）→ 还原条目。
+// created:true = 派发时该文件不存在 → 还原时删除它；
+// 有 backup    = 派发时该文件存在   → 还原时把备份写回原位。
+function manifestRestoreItems(entries) {
+  const items = []
+  for (const e of entries || []) {
+    if (!e || !e.orig) continue
+    if (e.created === true) {
+      items.push({ orig: e.orig, mode: 'delete' })
+      continue
+    }
+    if (e.backup) {
+      items.push({ orig: e.orig, mode: 'write', source: e.backup })
+    }
+  }
+  return items
+}
+
+// 还原「派发时（改动前）」的工作区状态。
+// 边界判定 / 只删普通文件 / 失败记账 / 结果结构都在 restoreEntries 里（**唯一一份**）。
+function restoreFromManifest(entries, options = {}) {
+  return restoreEntries(manifestRestoreItems(entries), options)
 }
 
 // ---------------------------------------------------------------------------
@@ -1166,7 +1450,7 @@ function writeAfterState(sid, records) {
 // ---------------------------------------------------------------------------
 //
 // 背景（为什么需要这两个函数）：负对照的本质是**在真实工作区里临时把文件改回旧内容**，
-// 跑一次验证，再把文件写回来。旧实现只有 try/finally 的「意图保证」：
+// 跑一次验证，再把文件写回来。只靠 try/finally 只能保证「意图」，不能保证结果：
 //   · 进程被强杀 / 断电 → finally 不执行 → 工作区停在「改动前」状态，
 //     用户的改动看起来凭空消失（最坏情况：把已修好的验证脚本回滚成坏的）；
 //   · finally 里某次 copyFileSync 失败（文件被占用、权限不足）→ 只写一行 stderr，
@@ -1209,30 +1493,40 @@ export function recoverInterruptedNegativeControl(sid) {
       continue
     }
     out.dirs++
+    // 还原边界：只允许恢复任务卡登记项目（仓库根）内的路径。
+    const restoreBoundary = resolveRestoreRoot(sid, journal.cwd)
+    // 还原条目 → 交给**唯一一份**的还原实现（边界判定 / 只删普通文件 / 失败记账）。
+    const items = []
     for (const e of Array.isArray(journal.saved) ? journal.saved : []) {
       if (!e || typeof e.orig !== 'string') continue
-      try {
-        if (e.existed === true && e.savedPath) {
-          fs.mkdirSync(path.dirname(e.orig), { recursive: true })
-          fs.copyFileSync(e.savedPath, e.orig)
-          out.files++
-        } else if (e.existed !== true) {
-          try {
-            fs.unlinkSync(e.orig)
-          } catch {}
-          out.files++
-        } else {
-          // 进入时有文件但备份丢了：无法还原，如实记账
-          out.unresolved.push(e.orig)
-        }
-      } catch (err) {
-        out.unresolved.push(e.orig)
-        try {
-          process.stderr.write(
-            `[flow-falsify] 恢复中断的负对照失败 ${e.orig}: ${err && err.message ? err.message : err}\n`,
-          )
-        } catch {}
+      if (e.existed === true && e.savedPath) {
+        items.push({ orig: e.orig, mode: 'write', source: e.savedPath })
+        continue
       }
+      if (e.existed !== true) {
+        // 进入时不存在 → 现在应该不存在（只删普通文件）。
+        items.push({ orig: e.orig, mode: 'delete' })
+        continue
+      }
+      // 进入时有文件但备份丢了：无法还原，如实记账
+      out.unresolved.push(e.orig)
+    }
+    const rec = restoreEntries(items, { root: restoreBoundary })
+    for (const a of rec.actions) {
+      if (
+        a.result === 'restored' ||
+        a.result === 'deleted' ||
+        a.result === 'absent'
+      ) {
+        out.files++
+        continue
+      }
+      out.unresolved.push(a.orig)
+      try {
+        process.stderr.write(
+          `[flow-falsify] 恢复中断的负对照失败 ${a.orig}: ${a.error || a.result}\n`,
+        )
+      } catch {}
     }
     try {
       fs.writeFileSync(
@@ -1240,7 +1534,8 @@ export function recoverInterruptedNegativeControl(sid) {
         JSON.stringify(
           {
             ...journal,
-            status: 'restored',
+            status: out.unresolved.length ? 'restore_failed' : 'restored',
+            unresolved: out.unresolved,
             recoveredAt: new Date().toISOString(),
           },
           null,
@@ -1248,7 +1543,8 @@ export function recoverInterruptedNegativeControl(sid) {
         ),
         'utf8',
       )
-      fs.rmSync(dir, { recursive: true, force: true })
+      // 有未解决的条目 → **保留目录**（证据不删），让下一次还能接着恢复。
+      if (!out.unresolved.length) fs.rmSync(dir, { recursive: true, force: true })
     } catch {}
   }
   return out
@@ -1399,54 +1695,70 @@ export async function runNegativeControl(sid, cmd, cwd, options = {}) {
   }
 
   // 还原「改动后」状态（无论后续发生什么）
+  // 失败必须被记账并如实返回（不再 catch{} 吞掉后继续宣称还原成功）。
   const restoreCurrent = () => {
+    const failures = []
+    // 还原条目 → 交给**唯一一份**的还原实现（与删除分支同一套边界与链接闸）。
+    const items = []
     for (const s of saved) {
-      try {
-        if (s.existed && s.savedPath) {
-          fs.mkdirSync(path.dirname(s.orig), { recursive: true })
-          fs.copyFileSync(s.savedPath, s.orig)
-        } else if (!s.existed) {
-          // 当前状态里该文件不存在（executor 删了它）→ 保持删除
-          try {
-            fs.unlinkSync(s.orig)
-          } catch {}
-        }
-      } catch (err) {
-        try {
-          process.stderr.write(
-            `[flow-falsify] 还原当前文件失败 ${s.orig}: ${err && err.message ? err.message : err}\n`,
-          )
-        } catch {}
+      if (s.existed && s.savedPath) {
+        items.push({ orig: s.orig, mode: 'write', source: s.savedPath })
+        continue
       }
+      if (!s.existed) {
+        // 当前状态里该文件不存在（executor 删了它）→ 保持删除
+        items.push({ orig: s.orig, mode: 'delete' })
+        continue
+      }
+      // 进入时存在但备份没抓到：无法还原，如实记账（不静默跳过）
+      failures.push({ orig: s.orig, error: '缺少进入负对照时的备份，无法还原' })
     }
+    const rec = restoreEntries(items, { root: restoreRoot })
+    for (const f of rec.failures) {
+      failures.push({ orig: f.orig, error: f.error || f.result })
+      try {
+        process.stderr.write(
+          `[flow-falsify] 还原当前文件失败 ${f.orig}: ${f.error || f.result}` + String.fromCharCode(10),
+        )
+      } catch {}
+    }
+    return failures
   }
 
   // 还原「显式记录的改动后态」
   const restoreRecorded = () => {
+    // 与还原当前态走**同一份**实现（边界判定 / 只删普通文件 / 失败记账）。
+    const items = []
     for (const r of recorded) {
       if (!r || !r.orig) continue
-      try {
-        if (r.absent === true) {
-          try {
-            fs.unlinkSync(r.orig)
-          } catch {}
-        } else if (r.backup) {
-          fs.mkdirSync(path.dirname(r.orig), { recursive: true })
-          fs.copyFileSync(r.backup, r.orig)
-        }
-      } catch (err) {
-        try {
-          process.stderr.write(
-            `[flow-falsify] 还原记录的改动后态失败 ${r.orig}: ${err && err.message ? err.message : err}\n`,
-          )
-        } catch {}
+      if (r.absent === true) {
+        items.push({ orig: r.orig, mode: 'delete' })
+        continue
+      }
+      if (r.backup) {
+        items.push({ orig: r.orig, mode: 'write', source: r.backup })
       }
     }
+    const rec = restoreEntries(items, { root: restoreRoot })
+    const failures = rec.failures.map((f) => ({
+      orig: f.orig,
+      error: f.error || f.result,
+    }))
+    for (const f of failures) {
+      try {
+        process.stderr.write(
+          `[flow-falsify] 还原记录的改动后态失败 ${f.orig}: ${f.error}` + String.fromCharCode(10),
+        )
+      } catch {}
+    }
+    return failures
   }
 
   // ---- 进入「会改动工作区」的临界区之前，先把还原所需信息落盘 ----
   // 这一步是崩溃恢复的唯一依据：进程被强杀时，下次调用靠它把工作区还原回去。
   const journalFile = path.join(tmpDir, 'journal.json')
+  // 还原事务记录：每次动作与结果都追加到这里（复用仓库既有的 journal 约定）。
+  const restoreLog = []
   const writeJournal = (status, extra) => {
     try {
       fs.writeFileSync(
@@ -1462,6 +1774,7 @@ export async function runNegativeControl(sid, cmd, cwd, options = {}) {
               savedPath: x.savedPath,
               existed: x.existed,
             })),
+            restore_log: restoreLog,
             ...(extra || {}),
           },
           null,
@@ -1469,15 +1782,24 @@ export async function runNegativeControl(sid, cmd, cwd, options = {}) {
         ),
         'utf8',
       )
+      return true
     } catch (e) {
       try {
         process.stderr.write(
           `[flow-falsify] 写还原日志失败: ${e && e.message ? e.message : e}\n`,
         )
       } catch {}
+      return false
     }
   }
-  writeJournal('pending')
+  // 事务记录写不下去 = 无法保证崩溃可恢复 → 失败关闭，不许静默继续。
+  if (!writeJournal('pending'))
+    return {
+      ok: false,
+      error: formatError(
+        '无法写入负对照还原日志（journal.json），为保证崩溃可恢复，本次负对照拒绝执行。',
+      ),
+    }
 
   // ---- 把选定的「改动后态」显式落盘记录（让下次负对照能按记录还原，而不是靠隐含前提） ----
   try {
@@ -1522,24 +1844,93 @@ export async function runNegativeControl(sid, cmd, cwd, options = {}) {
   let before = null
   let after = null
   let restoreReport = { ok: true, checked: 0, mismatched: [], unreadable: [] }
+  let preRestore = null
+  let restoreFailure = null
+  // 还原边界：只允许动任务卡登记项目（仓库根）内的路径。
+  const restoreRoot = resolveRestoreRoot(sid, cwd)
   try {
     // 1. 还原「改动前」（派发快照）—— 必须失败
-    restoreFromManifest(entries)
+    //    失败关闭：还原失败就如实报告，**不拿半还原状态去跑对照**。
+    preRestore = restoreFromManifest(entries, {
+      root: restoreRoot,
+      onAction: (a) => {
+        restoreLog.push(a)
+        writeJournal('restoring', { restore_log: restoreLog })
+      },
+    })
+    if (!preRestore.ok) {
+      const detail = preRestore.failures
+        .map((f) => f.orig + '（' + (f.error || f.result) + '）')
+        .join('；')
+      restoreFailure = new Error(
+        '还原改动前态失败：' + detail + '。工作区未回到派发时的状态，' +
+          '负对照结论不可信，本次负对照失败关闭。',
+      )
+      throw restoreFailure
+    }
     before = await runVerifyCommand(cmd, cwd, options)
     // 2. 显式还原「改动后」态再跑第二次 —— 必须通过
-    if (afterSource === 'recorded') restoreRecorded()
-    else restoreCurrent()
+    //    还原失败同样失败关闭：拿不到「改动后态」就跑第二次对照 = 结论不可信。
+    const afterFailures =
+      afterSource === 'recorded' ? restoreRecorded() : restoreCurrent()
+    if (afterFailures && afterFailures.length) {
+      restoreFailure = new Error(
+        '还原改动后态失败：' +
+          afterFailures
+            .map((f) => f.orig + '（' + (f.error || '未知错误') + '）')
+            .join('；'),
+      )
+      throw restoreFailure
+    }
     after = await runVerifyCommand(cmd, cwd, options)
+  } catch (err) {
+    if (!restoreFailure) restoreFailure = err
+    try {
+      process.stderr.write(
+        `[flow-falsify] 负对照中止: ${(err && err.message) || err}\n`,
+      )
+    } catch {
+      /* ignore */
+    }
   } finally {
     // 无论如何都把工作区还原成进入负对照时的样子。
     // 还原后必须**核对摘要**：只靠 try/finally 是意图保证，
     // 一次失败的文件写回会让用户改动静默消失，而调用方还以为一切正常。
-    restoreCurrent()
+    const finalFailures = restoreCurrent()
     restoreReport = verifyRestoredState(saved, currentDigests)
-    writeJournal(restoreReport.ok ? 'restored' : 'restore_failed', {
-      restore: restoreReport,
-      finishedAt: new Date().toISOString(),
-    })
+    if (finalFailures && finalFailures.length) {
+      restoreReport.errors = finalFailures
+      // 还原动作失败 = 工作区没能回到进入负对照时的状态：
+      // restore.ok 必须置 false（否则调用方会以为还原干净了）。
+      restoreReport.ok = false
+    }
+    // 最终 journal 写盘失败必须**如实报告**（不得静默忽略）：
+    // journal.json 是崩溃恢复的唯一依据，写不下去 = 下次调用救不回工作区。
+    const journalWritten = writeJournal(
+      restoreReport.ok && !(preRestore && !preRestore.ok)
+        ? 'restored'
+        : 'restore_failed',
+      {
+        restore: restoreReport,
+        restore_log: restoreLog,
+        pre_restore: preRestore
+          ? { ok: preRestore.ok, failures: preRestore.failures }
+          : null,
+        finishedAt: new Date().toISOString(),
+      },
+    )
+    if (!journalWritten) {
+      restoreReport.ok = false
+      restoreReport.journal_write_failed = true
+      restoreReport.journal_error = '最终还原日志（journal.json）写入失败'
+      try {
+        process.stderr.write(
+          '[flow-falsify] ⚠️ 最终还原日志写入失败：崩溃恢复依据缺失，工作区状态无法核验\n',
+        )
+      } catch {
+        /* ignore */
+      }
+    }
     if (!restoreReport.ok) {
       try {
         process.stderr.write(
@@ -1552,6 +1943,60 @@ export async function runNegativeControl(sid, cmd, cwd, options = {}) {
       } catch {
         /* ignore */
       }
+    }
+  }
+
+  // 失败关闭：还原失败 → 如实报告失败，绝不宣称「已还原」。
+  if (restoreFailure) {
+    return {
+      ok: false,
+      verdict: 'restore_failed',
+      error: formatError(
+        '负对照失败（还原失败关闭）：' + (restoreFailure.message || restoreFailure),
+      ),
+      reason:
+        '还原改动前态失败，负对照未执行 —— 工作区未回到派发时的状态，' +
+        '不能拿它当「改动前态」跑对照。',
+      restore: {
+        ok: false,
+        checked: restoreReport.checked,
+        mismatched: restoreReport.mismatched,
+        unreadable: restoreReport.unreadable,
+        failures: preRestore ? preRestore.failures : [],
+      },
+      pre_restore: preRestore
+        ? { ok: preRestore.ok, failures: preRestore.failures }
+        : null,
+      recovered: {
+        dirs: recovered.dirs,
+        files: recovered.files,
+        unresolved: recovered.unresolved,
+      },
+    }
+  }
+
+  // 最终 journal 写盘失败 → 失败关闭：崩溃恢复依据缺失，结论不可信。
+  if (restoreReport.journal_write_failed) {
+    return {
+      ok: false,
+      verdict: 'restore_failed',
+      error: formatError(
+        '负对照失败（还原失败关闭）：' +
+          (restoreReport.journal_error || '最终还原日志写入失败') +
+          '。工作区已尝试还原，但崩溃恢复依据缺失，本次负对照结论不可信。',
+      ),
+      reason:
+        '最终还原日志（journal.json）写入失败，负对照的崩溃恢复依据缺失 —— ' +
+        '不能把它当成有效的判别力证据。',
+      restore: restoreReport,
+      pre_restore: preRestore
+        ? { ok: preRestore.ok, failures: preRestore.failures }
+        : null,
+      recovered: {
+        dirs: recovered.dirs,
+        files: recovered.files,
+        unresolved: recovered.unresolved,
+      },
     }
   }
 
@@ -1627,10 +2072,28 @@ export async function runNegativeControl(sid, cmd, cwd, options = {}) {
       stateNote
   }
 
+  // 还原不完整 → 结论不可信：不能记为 meaningful。
+  //
+  // 「改动前失败 + 改动后通过」只说明命令有区分度；如果工作区**没能完整回到**
+  // 进入负对照时的状态（文件没写回 / 写回后摘要不一致），那「改动后」这一态
+  // 根本不是我们以为的那一态，结论就不成立 —— 按保守口径降级。
+  if (!restoreReport.ok) {
+    verdict = 'restore_failed'
+    reason =
+      '工作区还原未通过核对（' +
+      ((restoreReport.mismatched || []).join(', ') ||
+        (restoreReport.errors || [])
+          .map((e) => e.orig + '（' + (e.error || e.result) + '）')
+          .join('；') ||
+        '未知原因') +
+      '）—— 结论不可信，不能记为 meaningful' +
+      stateNote
+  }
+
   // 清理临时目录：**只有还原被核对通过时才删**。
   // 还原失败时保留备份与日志 —— 下一次 flow_falsify 会先用它把工作区救回来，
   // 删掉就等于把用户改动的唯一副本扔了。
-  if (restoreReport.ok) {
+  if (restoreReport.ok && !(preRestore && !preRestore.ok)) {
     try {
       fs.rmSync(tmpDir, {
         recursive: true,
@@ -1748,6 +2211,46 @@ export function formatError(err) {
 //   · 无变更（diffFiles 为空）= 直接 ok
 //   · 自动跑 `git diff --name-only`：派发前快照 vs 当前工作区
 //   · 精确匹配 + 父目录匹配：scope 内文件及其子目录均算通过
+// 取 git 仓库根（拿不到就返回空串）。
+function gitTopLevel(cwd) {
+  try {
+    const proc = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: cwd || process.cwd(),
+      encoding: 'utf8',
+      timeout: 5000,
+      windowsHide: true,
+      shell: false,
+    })
+    if (proc.status === 0 && typeof proc.stdout === 'string')
+      return proc.stdout.trim()
+  } catch {
+    /* git 不可用 */
+  }
+  return ''
+}
+
+// 未跟踪文件里要排除的「Carlos 自己的状态目录」（若它落在仓库内）。
+// 不排除的话：状态/审计文件会被当成「未跟踪的新文件」→ 自我误报成越界。
+// 只在它**严格位于仓库根之下**时排除（等于仓库根时不排除）。
+function flowHomePrefix(cwd) {
+  const home = process.env.CARLOS_FLOW_HOME
+  if (!home) return ''
+  const top = gitTopLevel(cwd)
+  if (!top) return ''
+  const rel = path.relative(top, path.resolve(home))
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return ''
+  // 路径键用**平台感知**的那一把（card.js 的 pathKey）：
+  // win32 上大小写不敏感、其它平台敏感 —— 无条件小写会在 POSIX 上
+  // 把大小写不同的路径当成同一个，从而漏掉真正的越界文件。
+  return pathKey(path.resolve(top, rel))
+}
+
+// 返回：仓库根相对路径列表（去重）。
+//   · 已跟踪文件的改动：`git diff --name-only`（既有语义，**不变**）；
+//   · 未跟踪的新文件：`git ls-files --others --exclude-standard`
+//     （尊重 .gitignore：被忽略的文件不算改动）。
+// 只看 `git diff --name-only` 不够 —— 它**只含已跟踪文件**，
+// 于是「新建一个没授权的文件」在越界检测里完全看不见（漏了最大的一类）。
 export function enforceScope(scope, cwd, diffFiles) {
   // diffFiles 可选：外部传入的改动文件列表；不传则自动跑 `git diff --name-only`
   // cwd: 仓库根目录（用于跑 git diff）
@@ -1773,6 +2276,36 @@ export function enforceScope(scope, cwd, diffFiles) {
     } catch {
       diffFiles = []
     }
+    // 未跟踪的新文件：同样属于「本次改动」，必须纳入越界判定。
+    try {
+      const proc = spawnSync(
+        'git',
+        ['ls-files', '--others', '--exclude-standard', '--full-name'],
+        {
+          cwd: cwd || process.cwd(),
+          encoding: 'utf8',
+          timeout: 10000,
+          windowsHide: true,
+          shell: false,
+        },
+      )
+      if (proc.status === 0 && typeof proc.stdout === 'string') {
+        const top = gitTopLevel(cwd)
+        const homePrefix = flowHomePrefix(cwd)
+        for (const line of proc.stdout.split('\n')) {
+          const rel = line.trim()
+          if (!rel) continue
+          if (homePrefix && top) {
+            const abs = pathKey(path.resolve(top, rel))
+            const prefix = homePrefix.endsWith('/') ? homePrefix : homePrefix + '/'
+            if (abs.startsWith(prefix)) continue
+          }
+          if (!diffFiles.includes(rel)) diffFiles.push(rel)
+        }
+      }
+    } catch {
+      /* 未跟踪扫描失败：不影响已跟踪改动的判定 */
+    }
   }
 
   // 没有任何变更 → 无需判定
@@ -1794,19 +2327,19 @@ export function enforceScope(scope, cwd, diffFiles) {
     }
   }
 
-  const scopeSet = new Set(scope.map((p) => path.normalize(p)))
+  // 允许集比对用**与卡片层同一把路径键**（pathKey）：
+  // 分隔符统一 + win32 折叠大小写 —— 授权写法与落盘写法大小写不同时
+  // （授权 "Docs/Guide.md"、落盘 "docs/guide.md"）不得误判越界。
+  const scopeSet = new Set(scope.map((p) => pathKey(p)))
   const violations = []
 
   for (const file of diffFiles) {
-    const normalized = path.normalize(file)
+    const fileKey = pathKey(file)
     // 检查文件是否在 scope 内（精确匹配或父目录匹配）
     let allowed = false
     for (const scopePath of scopeSet) {
-      const normalizedScope = path.normalize(scopePath)
-      if (
-        normalized === normalizedScope ||
-        normalized.startsWith(normalizedScope + path.sep)
-      ) {
+      const prefix = scopePath.endsWith('/') ? scopePath : scopePath + '/'
+      if (fileKey === scopePath || fileKey.startsWith(prefix)) {
         allowed = true
         break
       }

@@ -11,6 +11,7 @@
 //   2) 端口上是 ROOT_A 的 bridge，客户端也指向 ROOT_A → 允许复用
 //
 // 跑法：node test/bridge-identity.mjs
+import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync as rf, readdirSync, existsSync, symlinkSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,17 +25,66 @@ const ROOT = resolve(HERE, "..");
 let pass = 0, fail = 0;
 const check = (n, ok, d = "") => {
   if (ok) { pass++; console.log(`  ✓ ${n}`); }
-  else { fail++; console.log(`  ✗ ${n}  ${d}`); }
+  else { fail++; console.log(`  ✗ ${n}  ${redact(d)}`); }
 };
+const redact = value => String(value).replace(/identity-test-token-[a-f0-9]+/gi, '[TOKEN]').replace(/(Bearer\s+)\S+/gi, '$1[TOKEN]');
+const diagnostics = [];
+const evidenceDir = process.env.CARLOS_BRIDGE_TEST_EVIDENCE_DIR;
+let diagnosticSecondary = null;
+const BYTE_LIMIT = 65536;
+function boundedText(value) {
+  let bytes = Buffer.from(String(value), 'utf8');
+  if (bytes.length > BYTE_LIMIT) bytes = bytes.subarray(-BYTE_LIMIT);
+  while (bytes.length && (bytes[0] & 0xc0) === 0x80) bytes = bytes.subarray(1);
+  return bytes.toString('utf8');
+}
+function secondaryFailure(stage, error) {
+  if (diagnosticSecondary) return;
+  diagnosticSecondary = { stage, code: boundedText(redact(error && (error.code || error.name) || 'UNKNOWN')).slice(0, 80) };
+  try { console.error('诊断基础设施异常（secondary，不覆盖主结果）', diagnosticSecondary.stage, diagnosticSecondary.code); } catch {}
+}
+function scrub(value, depth = 0) {
+  if (depth > 8) throw new TypeError('diagnostic schema depth');
+  if (typeof value === 'string') return boundedText(redact(value));
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.slice(0, 32).map(v => scrub(v, depth + 1));
+  if (typeof value !== 'object') throw new TypeError('diagnostic schema type');
+  const result = {};
+  for (const key of Object.keys(value).slice(0, 32)) result[key] = scrub(value[key], depth + 1);
+  return result;
+}
+function retain(name, data) {
+  let serialized;
+  try {
+    const row = scrub({ name, ...data });
+    JSON.stringify(row);
+    diagnostics.push(row);
+    if (diagnostics.length > 32) diagnostics.shift();
+    serialized = JSON.stringify(diagnostics, null, 2);
+  } catch (e) { secondaryFailure('serialize', e); return; }
+  if (evidenceDir && !diagnosticSecondary) {
+    try { mkdirSync(evidenceDir, { recursive: true }); writeFileSync(join(evidenceDir, 'bridge-identity-diagnostics.json'), serialized); }
+    catch (e) { secondaryFailure('persist', e); }
+  }
+}
+function appendOutput(owned, key, chunk) {
+  owned.raw[key] = Buffer.concat([owned.raw[key], Buffer.from(chunk)]).subarray(-BYTE_LIMIT);
+  owned[key] = boundedText(redact(owned.raw[key].toString('utf8')));
+}
 
 /** 造一个假的「仓库根」：bridge + 完整的 src（server 有多文件依赖，缺一个就起不来） */
 function makeFakeRoot(name) {
   const dir = mkdtempSync(join(tmpdir(), `carlos-root-${name}-`));
+  ownedDirectories.push(dir);
   mkdirSync(join(dir, "src"), { recursive: true });
   mkdirSync(join(dir, "bridge"), { recursive: true });
   for (const f of readdirSync(join(ROOT, "src"))) {
     writeFileSync(join(dir, "src", f), rf(join(ROOT, "src", f)));
   }
+  mkdirSync(join(dir, 'ui'), { recursive: true });
+  const narrator = rf(join(ROOT, 'ui', 'narrator.js'));
+  writeFileSync(join(dir, 'ui', 'narrator.js'), narrator);
+  check(`fixture ${name} 必需narrator与真实源码SHA一致`, createHash('sha256').update(rf(join(dir, 'ui', 'narrator.js'))).digest('hex') === createHash('sha256').update(narrator).digest('hex'));
   writeFileSync(join(dir, "bridge", "mcp-bridge.js"), rf(join(ROOT, "bridge", "mcp-bridge.js")));
   // package.json：src/index.js 是 ESM（依赖 package.json 的 "type": "module"）
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fake-root", version: "1.0.0", type: "module" }, null, 2));
@@ -68,22 +118,36 @@ console.log("\n════ Bridge 身份隔离验证 ════\n");
 const PORT = 19800 + (process.pid % 150);
 const TOKEN = "identity-test-token-0123456789abcdef";
 
+let bridgeA;
+let primaryError = null;
+const ownedDirectories = [];
+try {
 const rootA = makeFakeRoot("A");
 const rootB = makeFakeRoot("B");
 const homeA = mkdtempSync(join(tmpdir(), "carlos-homeA-"));
+ownedDirectories.push(homeA);
 const homeB = mkdtempSync(join(tmpdir(), "carlos-homeB-"));
+ownedDirectories.push(homeB);
 
 /** 起一个 bridge（指定 ROOT 与 HOME） */
 function startBridge(root, home, port) {
-  return spawn(process.execPath, [join(root, "bridge", "mcp-bridge.js"), String(port)], {
+  const child = spawn(process.execPath, [join(root, "bridge", "mcp-bridge.js"), String(port)], {
     env: {
       ...process.env,
       CARLOS_BRIDGE_TOKEN: TOKEN,
       CARLOS_FLOW_MCP_ROOT: root,
       CARLOS_FLOW_HOME: home,
     },
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
   });
+  const creation = Object.freeze({ pid: child.pid, spawnfile: child.spawnfile, spawnargs: [...child.spawnargs], createdNs: process.hrtime.bigint().toString() });
+  const owned = { child, creation, closed: false, stdout: '', stderr: '', raw: { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) } };
+  const snapshot = () => retain('direct-bridgeA', { creation, stdout: owned.stdout, stderr: owned.stderr, exitCode: child.exitCode, signalCode: child.signalCode, closed: owned.closed });
+  child.stdout.on('data', b => { try { appendOutput(owned, 'stdout', b); snapshot(); } catch (e) { secondaryFailure('stdout-consumer', e); } });
+  child.stderr.on('data', b => { try { appendOutput(owned, 'stderr', b); snapshot(); } catch (e) { secondaryFailure('stderr-consumer', e); } });
+  child.on('error', e => retain('direct-bridgeA-error', { creation, code: e.code, message: redact(e.message) }));
+  child.on('close', () => { owned.closed = true; snapshot(); });
+  return owned;
 }
 
 const healthOf = (port) => new Promise((res) => {
@@ -98,7 +162,7 @@ const healthOf = (port) => new Promise((res) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- 起 ROOT_A 的 bridge ----
-const bridgeA = startBridge(rootA, homeA, PORT);
+bridgeA = startBridge(rootA, homeA, PORT);
 await sleep(2000);
 
 const h = await healthOf(PORT);
@@ -117,10 +181,11 @@ const out1 = spawnSync(process.execPath, [join(ROOT, "client", "carlos.js"), "fl
     CARLOS_FLOW_HOME: homeB,
     CARLOS_BRIDGE_TOKEN: TOKEN,
   },
-  encoding: "utf8",
+  encoding: "utf8", windowsHide: true, maxBuffer: 65536,
   timeout: 60000,
 });
 const outB = out1.stdout || "";
+retain('client-different-root', { status: out1.status, signal: out1.signal, error: out1.error && { code: out1.error.code, message: redact(out1.error.message) }, stdout: outB.slice(-65536), stderr: (out1.stderr || '').slice(-65536) });
 const errB = out1.stderr || "";
 check("指向不同 ROOT 的客户端能正常拿到结果（未挂死）",
   out1.status === 0 && outB.includes("ok"),
@@ -142,34 +207,36 @@ const out2 = spawnSync(process.execPath, [join(ROOT, "client", "carlos.js"), "fl
     CARLOS_FLOW_HOME: homeA,
     CARLOS_BRIDGE_TOKEN: TOKEN,
   },
-  encoding: "utf8",
+  encoding: "utf8", windowsHide: true, maxBuffer: 65536,
   timeout: 60000,
 });
+retain('client-same-root', { status: out2.status, signal: out2.signal, error: out2.error && { code: out2.error.code, message: redact(out2.error.message) }, stdout: (out2.stdout || '').slice(-65536), stderr: (out2.stderr || '').slice(-65536) });
 check("指向相同 ROOT 的客户端可复用同一 bridge",
   out2.status === 0 && (out2.stdout || "").includes("has_card"),
   `status=${out2.status} stdout=${(out2.stdout || "").slice(0, 100)} stderr=${(out2.stderr || "").slice(0, 160)}`);
 
-try { bridgeA.kill(); } catch {}
-await sleep(300);
-
-// 客户端会另起 **detached** bridge（client/carlos.js 的 startBridge 用
-// detached + unref），测试进程退出后它们仍然常驻 —— 必须显式收掉。
-// 否则每跑一次测试就漏一个 bridge（历史上一度漏了 8 个，全是测试临时根目录）。
-// client 会把 PID 写到 <CARLOS_FLOW_MCP_ROOT>/bridge-<port>.pid，据此精准清理。
-for (const d of [rootA, rootB]) {
-  try {
-    for (const f of readdirSync(d)) {
-      if (!/^bridge-\d+\.pid$/.test(f)) continue;
-      const pid = parseInt(rf(join(d, f), "utf8").trim(), 10);
-      if (pid && pid !== process.pid) { try { process.kill(pid, "SIGTERM"); } catch {} }
-    }
-  } catch {}
+} catch (e) {
+  primaryError = { code: boundedText(redact(e && (e.code || e.name) || 'UNKNOWN')).slice(0, 80) };
+  try { console.error('主流程异常（primary）', primaryError.code); } catch {}
+} finally {
+// 只使用创建时持有的child对象/原生handle，不按pid工牌或端口杀陌生进程。
+const ownedA = bridgeA;
+if (ownedA && !ownedA.closed) {
+  let timer;
+  const closed = new Promise(resolve => { ownedA.child.once('close', resolve); timer = setTimeout(resolve, 1500); });
+  if (ownedA.child.exitCode === null && ownedA.child.signalCode === null && ownedA.child.pid === ownedA.creation.pid && ownedA.child.spawnfile === ownedA.creation.spawnfile && JSON.stringify(ownedA.child.spawnargs) === JSON.stringify(ownedA.creation.spawnargs)) {
+    try { ownedA.child.kill(); } catch (e) { secondaryFailure('direct-cleanup', e); }
+  }
+  await closed;
+  clearTimeout(timer);
+  if (!ownedA.closed) secondaryFailure('direct-close-timeout', { code: 'CLOSE_UNKNOWN' });
 }
-await sleep(300);
-
-for (const d of [rootA, rootB, homeA, homeB]) {
-  try { rmSync(d, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 }); } catch {}
+// client的detached子孙交测试外preassigned owned Job；保留ignore，避免短命pipe EPIPE。
+retain('cleanup-boundary', { directClosed: ownedA && ownedA.closed, primaryError, diagnosticSecondary, delegatedClientDescendants: 'external-owned-job' });
+if (!evidenceDir) for (const d of ownedDirectories) {
+  try { rmSync(d, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 }); } catch (e) { secondaryFailure('directory-cleanup', e); }
 }
-
+}
 console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
-process.exit(fail === 0 ? 0 : 1);
+if (!primaryError && !fail && diagnosticSecondary) console.error('结果分类：诊断基础设施失败，不记产品PASS');
+process.exit(primaryError || fail ? 1 : diagnosticSecondary ? 2 : 0);

@@ -147,6 +147,92 @@ try {
   try { fs.rmSync(HOME, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
+// 同步收行捕获：分帧与并发闭包隔离，不接受carlosContext里的伪能力。
+{
+  const { StdioServer } = await import('../src/mcp-stdio.mjs')
+  const { PassThrough } = await import('node:stream')
+  const input = new PassThrough()
+  const originalInput = Object.getOwnPropertyDescriptor(process, 'stdin')
+  const originalWrite = process.stdout.write
+  const replies = []
+  let active
+  globalThis.__CINDY_NODE__ = { bindLaunch: () => {
+    const captured = active
+    return captured === undefined ? undefined : () => captured
+  } }
+  Object.defineProperty(process, 'stdin', { configurable: true, value: input })
+  process.stdout.write = text => { replies.push(JSON.parse(text)); return true }
+  try {
+    const server = new StdioServer({ name: '捕获检查', version: '1', tools: [],
+      callTool: async (name, args, context, runtime) => {
+        await Promise.resolve()
+        return { captured: runtime.launch?.(), failure: runtime.failure, forged: context?.launch }
+      },
+    })
+    const done = server.start()
+    const line = id => JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: {
+      name: '检查', arguments: { rpcId: '伪造' }, carlosContext: { launch: '伪造' },
+    } }) + '\n'
+    input.write(line(1).slice(0, 20))
+    active = '请求一'
+    input.write(line(1).slice(20))
+    active = '请求二'
+    input.write(line(2))
+    active = undefined
+    input.write(line(3))
+    globalThis.__CINDY_NODE__ = { get bindLaunch() { throw new Error('不泄露原错误') } }
+    input.write(line(4))
+    input.end()
+    await done
+  } finally {
+    Object.defineProperty(process, 'stdin', originalInput)
+    process.stdout.write = originalWrite
+    delete globalThis.__CINDY_NODE__
+  }
+  check('B1 分帧同步捕获与并发闭包隔离', replies.find(r => r.id === 1)?.result.captured === '请求一' && replies.find(r => r.id === 2)?.result.captured === '请求二')
+  check('B2 丢失scope与getter异常明确失败', replies.find(r => r.id === 3)?.result.failure === 'HOST_HASH_UNSUPPORTED' && replies.find(r => r.id === 4)?.result.failure === 'HOST_HASH_CAPTURE_FAILED')
+  check('B3 JSON上下文不能转交伪能力且EOF等待全部完成', replies.length === 4 && replies.every(r => r.result.forged === undefined))
+}
+
+// 输入error必须等待已接收handler的finally，不得接收后续消息或泄露原错误。
+{
+  const { StdioServer } = await import('../src/mcp-stdio.mjs')
+  const { PassThrough } = await import('node:stream')
+  const input = new PassThrough()
+  const originalInput = Object.getOwnPropertyDescriptor(process, 'stdin')
+  const originalWrite = process.stdout.write
+  const order = []
+  let accepted = 0
+  let release
+  const barrier = new Promise(resolve => { release = resolve })
+  Object.defineProperty(process, 'stdin', { configurable: true, value: input })
+  process.stdout.write = () => true
+  try {
+    const server = new StdioServer({ name: '输入错误', version: '1', tools: [], callTool: async () => {
+      accepted++
+      try { await barrier; return {} } finally { order.push('finally') }
+    } })
+    const done = server.start().then(() => order.push('resolved'), error => {
+      order.push('rejected')
+      if (error.message.includes('秘密')) order.push('leaked')
+    })
+    const line = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: '检查' } }) + '\n'
+    input.write(line)
+    input.emit('error', new Error('秘密/原路径'))
+    input.emit('error', new Error('重复错误'))
+    input.write(line)
+    const beforeDrain = [...order]
+    release()
+    await done
+    check('R3 输入error停止新接收且先finally后reject', accepted === 1 && beforeDrain.length === 0 && order.join(',') === 'finally,rejected')
+    check('R3 pending收尾归零且输入错误监听清理', server.pending.size === 0 && input.listenerCount('error') === 0)
+  } finally {
+    input.end()
+    Object.defineProperty(process, 'stdin', originalInput)
+    process.stdout.write = originalWrite
+  }
+}
+
 console.log(`\n════ 结果: ${pass} 通过 / ${fail} 失败 ════`);
 if (fail > 0) process.exit(1);
 console.log("MCP_STDIO_OK");

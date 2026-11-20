@@ -421,7 +421,9 @@ async function pickBridgePort() {
 function startBridge(port = BRIDGE_PORT) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BRIDGE_SCRIPT, String(port)], {
-      stdio: ["ignore", "ignore", "pipe"],
+      // 后台桥接不能把日志管道留给会正常退出的启动客户端，否则后续写入会触发 EPIPE。
+      // 此处不建立常驻日志服务：桥接及其服务端的详细标准错误将被丢弃；启动失败与超时仍由客户端报告。
+      stdio: ['ignore', 'ignore', 'ignore'],
       detached: true,
       windowsHide: true,
       env: {
@@ -434,8 +436,6 @@ function startBridge(port = BRIDGE_PORT) {
       },
     });
     child.unref();
-    // stderr 管道会挂住父进程的事件循环（bridge 常驻，管道永不关闭）→ 必须 unref
-    try { child.stderr?.unref?.(); } catch {}
 
     // 写入 PID 文件（按**实际使用的端口**命名，避免多实例互相覆盖）
     try { writeFileSync(join(ROOT_ABS, `bridge-${port}.pid`), String(child.pid), "utf8"); } catch {}

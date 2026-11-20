@@ -18,6 +18,89 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// 独立固定入口子模式在原工作流测试前返回，不启动MCP或改业务状态。
+if (process.argv.includes('--fixed-hash-child-gate') || process.argv.includes('--host-hash-gate')) {
+  const assert = (await import('node:assert/strict')).default
+  const gateRoot = fs.mkdtempSync(path.join(os.tmpdir(), '固定哈希入口-'))
+  const entry = fileURLToPath(new URL('../src/state.js', import.meta.url))
+  const env = { ...process.env, CARLOS_FLOW_HOME: path.join(gateRoot, 'home') }
+  const payload = JSON.stringify({ diff: '中文😀', files: [], gitRoot: gateRoot, flowHomeAbs: env.CARLOS_FLOW_HOME })
+  const result = spawnSync(process.execPath, [entry, '--hash-child'], {
+    env, input: payload, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 64 * 1024,
+  })
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 0)
+  assert.equal(result.signal, null)
+  assert.equal(result.stderr, '')
+  const { createHash } = await import('node:crypto')
+  assert.equal(JSON.parse(result.stdout).diff_sha256, createHash('sha256').update('中文😀').digest('hex'))
+  const invalid = spawnSync(process.execPath, [entry, '--hash-child'], {
+    env, input: '{', encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 64 * 1024,
+  })
+  assert.equal(invalid.error, undefined)
+  assert.equal(invalid.status, 1)
+  assert.equal(JSON.parse(invalid.stdout).ok, false)
+  // 先确认父读取端关闭，再送EOF；失败必须等真实子进程close而非kill返回值。
+  const broken = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [entry, '--hash-child'], {
+      env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stderr = ''
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, 10000)
+    child.on('error', reject)
+    child.stdin.on('error', reject)
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString()
+      if (Buffer.byteLength(stderr) > 65536) child.kill('SIGKILL')
+    })
+    child.on('close', (code, signal) => {
+      clearTimeout(timer)
+      resolve({ code, signal, stderr, timedOut })
+    })
+    child.stdout.once('close', () => child.stdin.end(payload))
+    child.stdout.destroy()
+  })
+  assert.equal(broken.timedOut, false)
+  assert.equal(broken.signal, null)
+  assert.equal(broken.code, 1)
+  assert.equal(broken.stderr, '')
+  if (process.argv.includes('--host-hash-gate')) {
+    for (const args of [['init', '-q'], ['config', 'user.email', 'test@example.com'], ['config', 'user.name', '测试']])
+      assert.equal(spawnSync('git', args, { cwd: gateRoot, env, timeout: 5000, windowsHide: true }).status, 0)
+    fs.writeFileSync(path.join(gateRoot, '基线'), '原始')
+    for (const args of [['add', '.'], ['commit', '-qm', '基线']])
+      assert.equal(spawnSync('git', args, { cwd: gateRoot, env, timeout: 5000, windowsHide: true }).status, 0)
+    process.env.CARLOS_FLOW_HOME = env.CARLOS_FLOW_HOME
+    const state = await import('../src/state.js')
+    let launched = 0
+    globalThis.__CINDY_NODE__ = { bindLaunch: () => async (relative, args, options) => {
+      launched++
+      assert.equal(relative, 'src/state.js')
+      assert.deepEqual(args, ['--hash-child'])
+      assert.deepEqual(options, { deadlineMs: 5000 })
+      const child = spawn(process.execPath, [entry, ...args], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      const completion = new Promise(resolve => {
+        const timer = setTimeout(() => child.kill('SIGKILL'), 5000)
+        child.on('exit', (code, signal) => { clearTimeout(timer); resolve(Object.freeze({ status: 'exited', completionScope: 'direct', code, signal })) })
+      })
+      return { completion, stdout: child.stdout, stderr: child.stderr, kill: () => child.kill('SIGKILL'),
+        stdin: { write: chunk => { child.stdin.write(chunk); return true }, end: () => child.stdin.end() } }
+    } }
+    const fingerprint = await state.workspaceFingerprintAsync(gateRoot, state.captureHashContext())
+    assert.equal(fingerprint.ok, true)
+    assert.equal(launched, 1)
+    const forged = await state.workspaceFingerprintAsync(gateRoot, { launch: () => { throw new Error('伪造能力不可执行') } })
+    assert.equal(forged.ok, false)
+    globalThis.__CINDY_NODE__ = {}
+    assert.equal((await state.workspaceFingerprintAsync(gateRoot, state.captureHashContext())).ok, false)
+    delete globalThis.__CINDY_NODE__
+  }
+  fs.rmSync(gateRoot, { recursive: true })
+  console.log('固定哈希入口子模式通过，原STALE断言未改动')
+  process.exit(0)
+}
+
 const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url)) + "/..";
 const ROOT = process.env.CARLOS_FLOW_MCP_ROOT || REPO_ROOT;
 const CLIENT = [
@@ -35,7 +118,8 @@ let fail = 0;
 const results = [];
 
 function check(name, cond, detail = "") {
-  if (cond) {
+  const ok = typeof cond === 'function' ? cond() : cond
+  if (ok) {
     pass++;
     results.push(`  ✓ ${name}${detail ? "  " + detail : ""}`);
   } else {
@@ -230,6 +314,14 @@ if (submitted) {
     r = await call("flow_verdict", { sessionId: SID, verdict: "PASS", notes: "重新验证后通过", cwd: WORK });
     check("V1.2-8 重新验证后 PASS 放行（不误伤）", r.ok === true, r.ok ? "" : r.error);
   }
+}
+
+// 可选 expected 绝不静默回退；不带 expected 的旧 CLI 入口仍可正常运行。
+{
+  const denied = await call('flow_run_verify', { sessionId: SID, cwd: WORK, expected: { caseKey: '无效身份' } })
+  check('W6 无效 expected 被拒而非执行普通路径', !denied.ok)
+  const manual = await call('flow_run_verify', { sessionId: SID, cwd: WORK })
+  check('W7 普通 CLI 验证不受 receipt 闸门阻断', manual.ok)
 }
 
 console.log("");

@@ -5,6 +5,7 @@ import os from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
+import { fileURLToPath } from 'node:url'
 
 // 展开路径里的 `~`（家目录）。
 // 背景：README 让用户把 CARLOS_FLOW_HOME 写成 `~/.carlos-flow`，但此前**没有展开** ——
@@ -305,16 +306,70 @@ export function loadState(sid) {
 }
 
 export function saveState(sid, state) {
-  // 落盘脱敏：`state.card` 可能携带密钥片段（verify.cmd/token/password），
-  // 不能明文落盘。sanitizeFields 只脱敏 value，key 名保留。
-  const safeState = sanitizeFields(state ?? defaultState())
   const dir = path.join(RUNS_DIR, sanitizeId(sid))
-  fs.mkdirSync(dir, { recursive: true })
-  const tmp = path.join(dir, 'state.json.tmp')
+  const tmp = path.join(dir, `state.json.tmp-${process.pid}-${randomBytes(12).toString('hex')}`)
   const target = path.join(dir, 'state.json')
-  fs.writeFileSync(tmp, JSON.stringify(safeState, null, 2), 'utf8')
-  fs.renameSync(tmp, target)
-  return target
+  let fd
+  let phase = 'mkdir'
+  let renamed = false
+  const errors = []
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    phase = 'encode'
+    const bytes = Buffer.from(JSON.stringify(sanitizeFields(state ?? defaultState()), null, 2))
+    phase = 'open'
+    fd = fs.openSync(tmp, 'wx')
+    phase = 'write'
+    fs.writeFileSync(fd, bytes)
+    phase = 'file-fsync'
+    fs.fsyncSync(fd)
+    phase = 'close'
+    fs.closeSync(fd)
+    fd = undefined
+    phase = 'rename'
+    fs.renameSync(tmp, target)
+    renamed = true
+    phase = 'directory-sync'
+    // Windows 的 Node 目录句柄同步不可用，不冒充掉电目录项耐久保证。
+    // POSIX 同步整个祖先链，涵盖此次 mkdir 创建的目录项。
+    if (process.platform !== 'win32') {
+      for (let current = dir; ;) {
+        const directory = fs.openSync(current, 'r')
+        const directoryErrors = []
+        try { fs.fsyncSync(directory) } catch (error) { directoryErrors.push(error) } finally {
+          try { fs.closeSync(directory) } catch (error) { directoryErrors.push(error) }
+        }
+        if (directoryErrors.length) throw new AggregateError(directoryErrors, directoryErrors.map(error => error.message).join('; '), { cause: directoryErrors[0] })
+        const parent = path.dirname(current)
+        if (parent === current) break
+        current = parent
+      }
+    }
+    return target
+  } catch (cause) {
+    const error = new Error(`状态保存失败 phase=${phase}，${renamed || phase === 'rename' ? '提交未确认，勿盲重试' : '未确认提交'}: ${cause.message}`, { cause })
+    error.phase = phase
+    error.commitStatus = renamed || phase === 'rename' ? 'unknown' : 'not-committed'
+    errors.push(error)
+  } finally {
+    // 只操作本次唯一路径，绝不回滚或删除 target。
+    if (fd !== undefined) {
+      try { fs.closeSync(fd) } catch (cause) {
+        errors.push(new Error(`状态保存 phase=close-cleanup ${cause.message}`, { cause }))
+      }
+    }
+    try { fs.unlinkSync(tmp) } catch (error) {
+      if (error.code !== 'ENOENT') {
+        errors.push(new Error(`状态保存 phase=temp-cleanup ${error.message}`, { cause: error }))
+      }
+    }
+    if (errors.length) {
+      const error = new AggregateError(errors, errors.map(error => error.message).join('; '), { cause: errors[0] })
+      error.phase = errors[0].phase || 'cleanup'
+      error.commitStatus = errors[0].commitStatus || (renamed ? 'unknown' : 'not-committed')
+      throw error
+    }
+  }
 }
 
 // 跨进程排他锁。
@@ -338,102 +393,264 @@ const sleepAsync = (ms) => new Promise((r) => setTimeout(r, ms))
  *
  * ⚠️ 铁律：**锁内只做内存操作**（读最新状态 → 合并 → 写）。
  * 不要把外部命令（verify.cmd 最长 120s）包进临界区：
- * 持锁超过 staleMs（默认 30s）会被判为陈旧锁并回收，另一个进程随即拿到同一把锁
- * → 两个进程同时写 → 比不加锁更难复现的丢更新。
+ * 活 owner 不按年龄抢占，但长持锁仍会阻塞其他写入并导致等待超时。
  */
-export async function withStateLock(sid, fn, opts = {}) {
-  const dir = path.join(RUNS_DIR, sanitizeId(sid))
-  const lockFile = path.join(dir, '.state.lock')
-  const timeoutMs = Number(opts.timeoutMs) || 5000
-  const staleMs = Number(opts.staleMs) || 30000
-  const deadline = Date.now() + timeoutMs
-  let acquired = false
-  let attempt = 0
-
-  for (;;) {
+// 转换 gate 只保护锁路径转换，不覆盖业务 fn；所有等待均让出事件循环。
+async function stateTransition(lockFile, gateRoot, fn, deadline, abortOwner) {
+  // 协调元数据不属于任务证据；根与身份均由同一物理 RUNS_DIR 定位。
+  const gateKey = process.platform === 'win32' ? lockFile.toLowerCase() : lockFile
+  const dir = path.join(gateRoot, createHash('sha256').update(gateKey).digest('hex'))
+  fs.mkdirSync(dir, { recursive: true })
+  const id = `${process.pid}-${randomBytes(12).toString('hex')}`
+  const slot = path.join(dir, `${id}.json`)
+  const temp = `${slot}.tmp`
+  const errors = []
+  let result
+  let gateHeld = false
+  let publishedText
+  let compensationAttempted = false
+  const compensate = async () => {
+    if (!gateHeld || !abortOwner || compensationAttempted) return
+    compensationAttempted = true
     try {
-      fs.mkdirSync(dir, { recursive: true })
-      // wx = O_CREAT|O_EXCL，文件已存在则抛 EEXIST —— 原子排他
-      const fd = fs.openSync(lockFile, 'wx')
-      fs.closeSync(fd)
-      // 把持有者 pid 写进锁文件：**排他性仍完全由 O_CREAT|O_EXCL 保证**，
-      // 写内容只发生在拿到锁之后，用途有两个：
-      //   ① 诊断 —— 锁超时时能说清「是哪个进程占着」；
-      //   ② 即时回收 —— 持有者崩了（ESRCH）可以立刻回收，不必干等满 staleMs。
+      if (fs.readFileSync(slot, 'utf8') !== publishedText) throw new Error('自身 gate 身份不再可确认')
+      await abortOwner()
+    } catch (cause) {
+      errors.push(new Error(`状态转换 phase=owner-compensation 未确认: ${cause.message}`, { cause }))
+    }
+  }
+  const publish = async value => {
+    const text = JSON.stringify(value)
+    fs.writeFileSync(temp, text, { flag: 'wx' })
+    const until = Math.min(deadline, Date.now() + 500)
+    for (;;) {
       try {
-        fs.writeFileSync(lockFile, String(process.pid), 'utf8')
-      } catch {
-        /* 内容非必需 */
-      }
-      acquired = true
-      break
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e
-      // 陈旧锁（持有者已崩溃）→ 回收。两道判定：
-      //   ① 锁文件里记录的 pid 已不是活进程（ESRCH）→ 立即回收；
-      //   ② 老版本锁文件没有 pid，或 pid 不可解析 → 只能按 mtime 超过 staleMs 判陈旧。
-      // EPERM 表示「进程存在但无权发信号」→ 按活着处理，绝不误删别人的锁。
-      try {
-        const st = fs.statSync(lockFile)
-        let holderDead = false
-        let holderPid = 0
+        fs.renameSync(temp, slot)
+        publishedText = text
+        return
+      } catch (error) {
+        // 仅本次独占槽；Windows 读句柄短暂占用时允许有界异步重试。
+        if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || Date.now() >= until) throw error
         try {
-          holderPid = parseInt(fs.readFileSync(lockFile, 'utf8').trim(), 10)
-          if (
-            Number.isInteger(holderPid) &&
-            holderPid > 0 &&
-            holderPid !== process.pid
-          ) {
-            try {
-              process.kill(holderPid, 0)
-            } catch (err) {
-              if (err && err.code === 'ESRCH') holderDead = true
+          if (fs.readFileSync(temp, 'utf8') !== text) throw new Error('状态槽发布身份改变')
+        } catch (verifyError) {
+          throw new AggregateError([error, verifyError], '状态转换 phase=gate-publish 未确认')
+        }
+        await sleepAsync(5)
+      }
+    }
+  }
+  const peers = async () => {
+    const out = []
+    for (const name of fs.readdirSync(dir).filter(name => name.endsWith('.json'))) {
+      let value
+      const until = Math.min(deadline, Date.now() + 500)
+      for (;;) {
+        try {
+          value = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'))
+          break
+        } catch (error) {
+          if (error.code === 'ENOENT') break
+          if (['EPERM', 'EACCES', 'EBUSY'].includes(error.code) && Date.now() < until) {
+            await sleepAsync(5)
+            continue
+          }
+          throw new Error('状态转换 phase=gate-read 未知槽，拒绝抢占', { cause: error })
+        }
+      }
+      if (value === undefined) continue
+      if (!Number.isSafeInteger(value.pid) || value.pid <= 0 ||
+          !Number.isSafeInteger(value.ticket) || value.ticket < 0 ||
+          typeof value.choosing !== 'boolean' || !name.startsWith(`${value.pid}-`))
+        throw new Error('状态转换 phase=gate-read 无效槽，拒绝抢占')
+      if (!statePidDead(value.pid)) out.push({ ...value, id: name.slice(0, -5) })
+    }
+    return out
+  }
+  try {
+    await publish({ pid: process.pid, ticket: 0, choosing: true })
+    const ticket = Math.max(0, ...(await peers()).map(peer => peer.ticket)) + 1
+    if (!Number.isSafeInteger(ticket)) throw new Error('状态转换 ticket 溢出')
+    await publish({ pid: process.pid, ticket, choosing: false })
+    for (;;) {
+      const blocked = (await peers()).some(peer => peer.id !== id &&
+        (peer.choosing || peer.ticket < ticket || (peer.ticket === ticket && peer.id < id)))
+      if (!blocked) {
+        gateHeld = true
+        result = await fn()
+        break
+      }
+      if (Date.now() >= deadline) throw new Error('状态转换 phase=gate-wait 超时，未抢占')
+      await sleepAsync(5)
+    }
+  } catch (error) { errors.push(error) } finally {
+    if (errors.length) await compensate()
+    // 先清唯一 temp，最后撤销槽；清理失败时仍保有 gate 才能补偿 owner。
+    for (const file of [temp, slot]) {
+      const until = Date.now() + 500
+      for (;;) {
+        try {
+          fs.unlinkSync(file)
+          break
+        } catch (error) {
+          if (error.code === 'ENOENT') break
+          const beforeCompensation = errors.length
+          await compensate()
+          const compensationFailed = errors.length > beforeCompensation
+          const cleanupError = new Error(`状态转换 phase=gate-cleanup ${error.message}`, { cause: error })
+          if (compensationFailed) errors.splice(beforeCompensation, 0, cleanupError)
+          if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || Date.now() >= until) {
+            if (!compensationFailed) errors.push(cleanupError)
+            break
+          }
+          await sleepAsync(10)
+        }
+      }
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '), { cause: errors[0] })
+  return result
+}
+
+function statePidDead(pid) {
+  let holderDead = false
+  try { process.kill(pid, 0) } catch (err) {
+    if (err && err.code === 'ESRCH') holderDead = true
+    else if (err.code !== 'EPERM') throw err
+  }
+  return holderDead
+}
+
+function stateOwnerPid(text) {
+  const match = /^([1-9][0-9]*)(?:\n[a-f0-9]{24})?$/.exec(text)
+  const pid = match ? Number(match[1]) : 0
+  return Number.isSafeInteger(pid) ? pid : 0
+}
+
+// 调用方始终持有转换 gate；rename 报错后先核身份，禁止盲重试共享路径。
+async function retireStateOwner(lockFile, ownText, phase) {
+  const retired = `${lockFile}.${phase}-${process.pid}-${randomBytes(12).toString('hex')}`
+  const until = Date.now() + 500
+  for (;;) {
+    if (fs.readFileSync(lockFile, 'utf8') !== ownText)
+      throw new Error(`状态锁 phase=${phase} owner 身份改变`)
+    try {
+      fs.renameSync(lockFile, retired)
+      break
+    } catch (error) {
+      let stillOwn = false
+      try { stillOwn = fs.readFileSync(lockFile, 'utf8') === ownText } catch (readError) {
+        if (readError.code !== 'ENOENT') throw new AggregateError([error, readError], `状态锁 phase=${phase} 核验失败`)
+      }
+      if (!stillOwn || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || Date.now() >= until)
+        throw new Error(`状态锁 phase=${phase} rename 未确认，未重试共享路径: ${error.message}`, { cause: error })
+      await sleepAsync(10)
+    }
+  }
+  // 已移出共享路径，失败也只留下私有诊断文件。
+  try { fs.unlinkSync(retired) } catch (error) {
+    throw new Error(`状态锁 phase=${phase}-cleanup ${error.message}`, { cause: error })
+  }
+}
+
+function canonicalStatePath(file) {
+  // 保留真实 IO 路径大小写；Windows 可存在大小写敏感目录，不能 lower 后执行 IO。
+  return fs.realpathSync.native(file)
+}
+
+export async function withStateLock(sid, fn, opts = {}) {
+  // 先创建再 realpath，不以字符串路径/盘符大小写或 junction 作为锁身份。
+  fs.mkdirSync(RUNS_DIR, { recursive: true })
+  const runs = canonicalStatePath(RUNS_DIR)
+  const requestedDir = path.join(runs, sanitizeId(sid))
+  fs.mkdirSync(requestedDir, { recursive: true })
+  const dir = canonicalStatePath(requestedDir)
+  const relative = path.relative(runs, dir)
+  const runsIdentity = fs.statSync(runs, { bigint: true })
+  const parentIdentity = fs.statSync(path.dirname(dir), { bigint: true })
+  // session 必须仍为同一物理 RUNS 的直接子目录；前缀相似/.. 或跨根 junction 均拒绝。
+  // 额外核 dev/ino，防止 Windows 大小写不敏感的 relative 误认不同的物理父目录。
+  if (!relative || path.isAbsolute(relative) || relative === '..' ||
+      relative.startsWith(`..${path.sep}`) || relative.includes(path.sep) ||
+      !runsIdentity.ino || runsIdentity.ino !== parentIdentity.ino || runsIdentity.dev !== parentIdentity.dev)
+    throw new Error('状态锁 phase=session-layout 物理 session 不是 RUNS_DIR 的直接子目录，拒绝转换')
+  const lockFile = path.join(dir, '.state.lock')
+  const gateRoot = path.join(path.dirname(runs), 'state-transitions')
+  const timeoutMs = Number(opts.timeoutMs) || 5000
+  const deadline = Date.now() + timeoutMs
+  const ownText = `${process.pid}\n${randomBytes(12).toString('hex')}`
+  let acquired = false
+  let holder = ''
+  fs.mkdirSync(dir, { recursive: true })
+  while (!acquired) {
+    await stateTransition(lockFile, gateRoot, async () => {
+      try {
+        // wx 是业务锁的真实排他边界，gate 不跨业务 fn。
+        const fd = fs.openSync(lockFile, 'wx')
+        const ownerErrors = []
+        let createdIdentity
+        try {
+          createdIdentity = fs.fstatSync(fd)
+          fs.writeFileSync(fd, ownText, 'utf8')
+        } catch (error) {
+          ownerErrors.push(new Error(`状态锁 phase=owner-write ${error.message}`, { cause: error }))
+        } finally {
+          try { fs.closeSync(fd) } catch (error) {
+            ownerErrors.push(new Error(`状态锁 phase=owner-close ${error.message}`, { cause: error }))
+            // 此间未打开其他 fd，重试只针对本次句柄；after-effect 的 EBADF 表示已关闭。
+            try { fs.closeSync(fd) } catch (cleanupError) {
+              if (cleanupError.code !== 'EBADF') ownerErrors.push(new Error(`状态锁 phase=owner-close-cleanup ${cleanupError.message}`, { cause: cleanupError }))
             }
           }
-        } catch {
-          /* 内容读不到：按时间判定 */
         }
-        if (holderDead || Date.now() - st.mtimeMs > staleMs) {
-          fs.unlinkSync(lockFile)
-          continue
+        if (ownerErrors.length) {
+          try {
+            const current = fs.statSync(lockFile)
+            if (!createdIdentity || !createdIdentity.ino || current.ino !== createdIdentity.ino ||
+                current.dev !== createdIdentity.dev || current.birthtimeMs !== createdIdentity.birthtimeMs)
+              throw new Error('创建文件身份无法证明，保留锁 fail-closed')
+            await retireStateOwner(lockFile, fs.readFileSync(lockFile, 'utf8'), 'create-compensation')
+          } catch (cause) {
+            ownerErrors.push(new Error(`状态锁 phase=create-compensation 未确认: ${cause.message}`, { cause }))
+          }
+          throw new AggregateError(ownerErrors, ownerErrors.map(error => error.message).join('; '), { cause: ownerErrors[0] })
         }
-      } catch {
-        continue // 锁刚好被释放，重试
+        acquired = true
+      } catch (error) {
+        if (error.code !== 'EEXIST' || acquired) throw error
+        let text
+        try { text = fs.readFileSync(lockFile, 'utf8') } catch (readError) {
+          if (readError.code === 'ENOENT') return
+          throw readError
+        }
+        const pid = stateOwnerPid(text)
+        holder = pid ? `（持有者 pid=${pid}）` : '（持有者未知）'
+        if (pid && statePidDead(pid)) {
+          if (fs.readFileSync(lockFile, 'utf8') === text && statePidDead(pid))
+            await retireStateOwner(lockFile, text, 'dead')
+        }
+        return
       }
-      if (Date.now() > deadline) {
-        // 拿不到锁：fail-closed —— 宁可报错也不要在无锁下写状态
-        let holder = ''
-        try {
-          const pid = parseInt(fs.readFileSync(lockFile, 'utf8').trim(), 10)
-          if (Number.isInteger(pid) && pid > 0) holder = `（持有者 pid=${pid}）`
-        } catch {
-          /* 读不到内容就不提 */
-        }
-        throw new Error(
-          `获取状态锁超时（session=${sanitizeId(sid)}${holder}），请稍后重试`,
-        )
-      }
-      // 指数退避 + 抖动（异步等待，把事件循环让给其它请求）。
-      // 固定 15ms 会让多个进程「同步醒来」反复撞在一起（并发套件里表现为偶发超时）；
-      // 抖动把重试错开，退避上限 120ms 保证总吞吐不被拖垮。
-      attempt++
-      const base = Math.min(120, 5 * Math.pow(1.6, attempt))
-      const jitter = Math.floor(Math.random() * base * 0.3)
-      await sleepAsync(Math.floor(base + jitter))
+    }, deadline, async () => {
+      if (!acquired) return
+      await retireStateOwner(lockFile, ownText, 'acquire-compensation')
+      acquired = false
+    })
+    if (!acquired) {
+      if (Date.now() >= deadline) throw new Error(`获取状态锁超时（session=${sanitizeId(sid)}${holder}），未抢占`)
+      await sleepAsync(5)
     }
   }
-
-  try {
-    return await fn()
-  } finally {
-    if (acquired) {
-      try {
-        fs.unlinkSync(lockFile)
-      } catch {
-        /* 已回收 */
-      }
-    }
+  const errors = []
+  let result
+  try { result = await fn() } catch (error) { errors.push(error) } finally {
+    try {
+      // 释放使用独立预算，业务执行耗时不消耗释放机会。
+      await stateTransition(lockFile, gateRoot, () => retireStateOwner(lockFile, ownText, 'release'), Date.now() + timeoutMs)
+    } catch (error) { errors.push(error) }
   }
+  if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '), { cause: errors[0] })
+  return result
 }
 
 /**
@@ -456,6 +673,129 @@ export async function commitState(sid, mutate, opts = {}) {
     },
     opts,
   )
+}
+
+// 向导只对同一旧验证代发一次 offer；当前工作区变化不参与 caseKey。
+function receiptHash(value) {
+  const stable = item => item && typeof item === 'object'
+    ? Array.isArray(item) ? item.map(stable) : Object.fromEntries(Object.keys(item).sort().map(key => [key, stable(item[key])]))
+    : item
+  return createHash('sha256').update(JSON.stringify(stable(value))).digest('hex')
+}
+
+function receiptSessionIdentity(sid) {
+  const runs = fs.realpathSync.native(RUNS_DIR)
+  const requested = path.join(runs, sanitizeId(sid))
+  // 仅向导拒绝预存在的 session junction/符号链接，不改变普通状态锁/CLI。
+  if (fs.lstatSync(requested).isSymbolicLink())
+    throw new Error('receipt session-layout 不支持 session 路径别名')
+  const session = fs.realpathSync.native(requested)
+  const runStat = fs.statSync(runs, { bigint: true })
+  const sessionStat = fs.statSync(session, { bigint: true })
+  const parentStat = fs.statSync(path.dirname(session), { bigint: true })
+  if ([runStat, sessionStat, parentStat].some(stat => typeof stat.dev !== 'bigint' || typeof stat.ino !== 'bigint' || stat.ino === 0n) ||
+      !sessionStat.isDirectory() ||
+      runStat.dev !== parentStat.dev || runStat.ino !== parentStat.ino)
+    throw new Error('receipt session-layout 物理身份无法确认')
+  // 身份只取物理 dev/ino，不 lower IO 或按平台猜测文件系统大小写语义。
+  const key = receiptHash([String(runStat.dev), String(runStat.ino), String(sessionStat.dev), String(sessionStat.ino)])
+  return { key, directory: path.join(path.dirname(runs), 'verify-receipts', key) }
+}
+
+export function staleCaseIdentity(sid, state) {
+  return receiptHash([receiptSessionIdentity(sid).key, state.card_ts, state.card, state.last_verify])
+}
+
+// 永久 wx 文件从不删除/移动/修复；空文件和 partial 也会阻止再次领取。
+function writeReceiptFile(file, value) {
+  let fd
+  let phase = 'open'
+  const errors = []
+  try {
+    fd = fs.openSync(file, 'wx')
+    phase = 'write'
+    fs.writeFileSync(fd, JSON.stringify(value), 'utf8')
+    phase = 'file-sync'
+    fs.fsyncSync(fd)
+  } catch (error) { errors.push(error) } finally {
+    if (fd !== undefined) {
+      if (!errors.length) phase = 'close'
+      try { fs.closeSync(fd) } catch (error) {
+        errors.push(error)
+        // 首次 close 前效失败也有界再关闭；不改变已消耗文件或首因。
+        try { fs.closeSync(fd) } catch (cleanupError) {
+          if (cleanupError.code !== 'EBADF') errors.push(cleanupError)
+        }
+      }
+    }
+  }
+  if (!errors.length && process.platform !== 'win32') {
+    phase = 'directory-sync'
+    let dirFd
+    try {
+      dirFd = fs.openSync(path.dirname(file), 'r')
+      fs.fsyncSync(dirFd)
+    } catch (error) { errors.push(error) } finally {
+      if (dirFd !== undefined) try { fs.closeSync(dirFd) } catch (error) { errors.push(error) }
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, `receipt ${phase} 未确认，禁止自动重试`, { cause: errors[0] })
+}
+
+function readStaleOffer(dir, caseKey) {
+  if (!/^[a-f0-9]{64}$/.test(caseKey || '')) throw new Error('receipt 身份无效')
+  const file = path.join(dir, `${caseKey}.offer.json`)
+  if (!fs.lstatSync(file).isFile() || fs.statSync(file).size > 65536) throw new Error('receipt offer 文件无效')
+  const offer = JSON.parse(fs.readFileSync(file, 'utf8'))
+  if (offer.version !== 1 || offer.caseKey !== caseKey || typeof offer.sid !== 'string' || !Number.isFinite(offer.cardTs) || typeof offer.cmd !== 'string' || !offer.cmd ||
+      typeof offer.cwd !== 'string' || !Number.isFinite(offer.expiresAt) || !Number.isFinite(offer.detectedAt))
+    throw new Error('receipt offer 内容无效')
+  return offer
+}
+
+export async function issueStaleOffer(sid, original, cwd) {
+  receiptSessionIdentity(sid)
+  return withStateLock(sid, () => {
+    const current = loadState(sid)
+    const caseKey = staleCaseIdentity(sid, original)
+    if (staleCaseIdentity(sid, current) !== caseKey) throw new Error('receipt 验证代已变化')
+    const identity = receiptSessionIdentity(sid)
+    const dir = identity.directory
+    fs.mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, `${caseKey}.offer.json`)
+    if (fs.existsSync(file)) return readStaleOffer(dir, caseKey)
+    const entries = fs.readdirSync(dir)
+    // 每个 offer 预留一个永久 claim 槽：最多128代、合计256文件，无自动淘汰。
+    if (entries.some(name => !/^[a-f0-9]{64}\.(offer\.json|claim)$/.test(name)) ||
+        entries.filter(name => name.endsWith('.offer.json')).length >= 128 || entries.length >= 256)
+      throw new Error('receipt 容量已满或目录未知，仅可手动验证')
+    const detectedAt = Date.now()
+    const offer = {
+      version: 1, caseKey, sid: identity.key, cardTs: current.card_ts, cmd: current.card.verify.cmd,
+      cwd: fs.realpathSync.native(cwd), detectedAt, expiresAt: detectedAt + 10 * 60 * 1000,
+    }
+    writeReceiptFile(file, offer)
+    return offer
+  })
+}
+
+export async function claimStaleOffer(sid, expected, cwd, contextCwd) {
+  receiptSessionIdentity(sid)
+  return withStateLock(sid, () => {
+    const identity = receiptSessionIdentity(sid)
+    const dir = identity.directory
+    const offer = readStaleOffer(dir, expected?.caseKey)
+    const current = loadState(sid)
+    if (offer.sid !== identity.key || staleCaseIdentity(sid, current) !== offer.caseKey ||
+        Date.now() >= offer.expiresAt || current.card?.verify?.cmd !== offer.cmd)
+      throw new Error('receipt 已过期或卡/原验证已变化，禁止重放')
+    const boundCwd = current.card?.env?.project || offer.cwd
+    if (fs.realpathSync.native(boundCwd) !== offer.cwd || (cwd && fs.realpathSync.native(cwd) !== offer.cwd) ||
+        (contextCwd && fs.realpathSync.native(contextCwd) !== offer.cwd))
+      throw new Error('receipt 工作目录已变化')
+    writeReceiptFile(path.join(dir, `${offer.caseKey}.claim`), { version: 1, caseKey: offer.caseKey, claimedAt: Date.now() })
+    return offer
+  })
 }
 
 // 追加审计返回明确回执；错误不抛出，由调用者决定 fail-closed 策略。
@@ -1547,41 +1887,205 @@ export function isBypassed(state) {
 //   Carlos Flow 明确支持非 Git 项目，所以调用方要 fail-open（不阻断 PASS），
 //   但要在 flow_status 里如实标注指纹不可用。
 export function workspaceFingerprint(cwd) {
+  const steps = fingerprintSteps(cwd)
+  const first = steps.next()
+  if (first.done) return first.value
+  const { gitRoot, payload } = first.value
+  // 普通Node CLI保持原同步路线及原环境兼容，不冒称Host环境白名单。
+  const code = `import fs from 'node:fs'; import { hashWorkspaceContent } from ${JSON.stringify(import.meta.url)}; const data=JSON.parse(fs.readFileSync(0,'utf8')); process.stdout.write(JSON.stringify(hashWorkspaceContent(data)));`
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+    cwd: gitRoot, env: process.env, windowsHide: true, encoding: 'utf8', input: payload,
+    timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
+  })
+  return steps.next(child).value
+}
+
+// 同步与Host异步路线共享全部Git采样/结果校验，只在固定哈希执行边界分流。
+function* fingerprintSteps(cwd) {
   const dir = cwd || process.cwd()
-  const head = spawnSync('git', ['rev-parse', 'HEAD'], {
+  const gitOptions = {
     cwd: dir,
     encoding: 'utf8',
-  })
-  if (head.error || head.status !== 0) {
-    return {
-      mode: 'pro',
-      mode_ts: 0,
-      claimed_profile: null,
-      ok: false,
-      reason: 'not_a_git_repo',
-    }
+    windowsHide: true,
+    timeout: 5000,
+    maxBuffer: 8 * 1024 * 1024,
+    env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
   }
-  const diff = spawnSync('git', ['diff', 'HEAD', '--no-color'], {
-    cwd: dir,
-    encoding: 'utf8',
+  const valid = (result) => !result.error && result.status === 0 && !result.signal
+  const failed = (phase, result) => ({
+    mode: 'pro',
+    mode_ts: 0,
+    claimed_profile: null,
+    ok: false,
+    reason: 'git_command_failed',
+    phase,
+    errorCode: result.error?.code || null,
+    status: result.status,
+    signal: result.signal || null,
   })
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], gitOptions)
+  if (!valid(head)) {
+    // 只有 Git 自身在固定语言下确认非仓库才保留兼容；未知故障不可冒充非 Git。
+    const repo = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], gitOptions)
+    let discoveryAbsent = true
+    try {
+      let current = path.resolve(dir)
+      if (!fs.statSync(current).isDirectory()) discoveryAbsent = false
+      while (discoveryAbsent) {
+        if (fs.lstatSync(current).isSymbolicLink()) {
+          discoveryAbsent = false
+          break
+        }
+        try {
+          fs.lstatSync(path.join(current, '.git'))
+          discoveryAbsent = false
+          break
+        } catch (e) {
+          if (e.code !== 'ENOENT') throw e
+        }
+        const parent = path.dirname(current)
+        if (parent === current) break
+        current = parent
+      }
+      if (process.env.GIT_DIR || process.env.GIT_WORK_TREE || process.env.GIT_COMMON_DIR)
+        discoveryAbsent = false
+    } catch { discoveryAbsent = false }
+    if (discoveryAbsent && !repo.error && !repo.signal && repo.status === 128 &&
+        /^fatal: not a git repository \(or any of the parent directories\): \.git\s*$/.test(String(repo.stderr || '').trim())) {
+      return { mode: 'pro', mode_ts: 0, claimed_profile: null, ok: false, reason: 'not_a_git_repo' }
+    }
+    return failed('head', head)
+  }
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(String(head.stdout || '').trim()))
+    return failed('head', head)
+  const root = spawnSync('git', ['rev-parse', '--show-toplevel'], { ...gitOptions, encoding: null })
+  if (!valid(root)) return failed('root', root)
+  const rootBytes = root.stdout || Buffer.alloc(0)
+  const rootText = rootBytes.toString('utf8')
+  if (!Buffer.from(rootText, 'utf8').equals(rootBytes)) return failed('root_encoding', root)
+  if (!rootBytes.length || rootBytes[rootBytes.length - 1] !== 10)
+    return failed('root_protocol', root)
+  // Git 记录仅以 LF 结束；路径自身的 CR 不可剥离，否则会误选相邻有效仓库。
+  const gitRoot = rootText.slice(0, -1)
+  if (!path.isAbsolute(gitRoot)) return failed('root', root)
+  const diff = spawnSync('git', ['diff', 'HEAD', '--no-color'], { ...gitOptions, cwd: gitRoot })
+  if (!valid(diff)) return failed('diff', diff)
   const untracked = spawnSync(
     'git',
-    ['ls-files', '--others', '--exclude-standard'],
-    {
-      cwd: dir,
-      encoding: 'utf8',
-    },
+    ['ls-files', '--others', '--exclude-standard', '-z'],
+    { ...gitOptions, cwd: gitRoot, encoding: null },
   )
+  if (!valid(untracked)) return failed('untracked', untracked)
+  const rawFiles = untracked.stdout || Buffer.alloc(0)
+  const fileText = rawFiles.toString('utf8')
+  if (!Buffer.from(fileText, 'utf8').equals(rawFiles)) return failed('untracked_encoding', untracked)
 
+  const payload = JSON.stringify({ diff: String(diff.stdout || ''), files: fileText.split('\0').filter(Boolean).sort(), gitRoot, flowHomeAbs: path.resolve(FLOW_HOME) })
+  if (Buffer.byteLength(payload) > 8 * 1024 * 1024)
+    return { mode: 'pro', mode_ts: 0, claimed_profile: null, ok: false, reason: 'untracked_read_failed', phase: 'hash_input', errorCode: 'ENOBUFS' }
+  const child = yield { gitRoot, payload }
+  if (!valid(child)) return {
+    mode: 'pro', mode_ts: 0, claimed_profile: null,
+    ok: false, reason: 'untracked_read_failed', phase: 'hash_child',
+    errorCode: child.error?.code || 'CHILD_FAILED', status: child.status, signal: child.signal || null,
+  }
+  let result
+  try { result = JSON.parse(child.stdout) } catch {
+    return { mode: 'pro', mode_ts: 0, claimed_profile: null, ok: false, reason: 'untracked_read_failed', phase: 'hash_child', errorCode: 'INVALID_RESULT' }
+  }
+  if (result.ok !== true || !/^[a-f0-9]{64}$/.test(result.diff_sha256 || ''))
+    return { mode: 'pro', mode_ts: 0, claimed_profile: null, ok: false, reason: 'untracked_read_failed', phase: result.phase || 'hash_child', errorCode: result.errorCode || 'INVALID_RESULT' }
+  return { mode: 'pro', mode_ts: 0, claimed_profile: null, ok: true, head: String(head.stdout).trim(), diff_sha256: result.diff_sha256 }
+}
+
+// 内部请求能力不接受JSON参数或自报函数；每条真实收行独立捕获。
+const hashContexts = new WeakSet()
+export function captureHashContext() {
+  let context
+  try {
+    const host = globalThis.__CINDY_NODE__
+    context = host === undefined ? { host: false } : {
+      host: true,
+      launch: typeof host.bindLaunch === 'function' ? host.bindLaunch() : undefined,
+    }
+    if (context.host && typeof context.launch !== 'function') context.failure = 'HOST_HASH_UNSUPPORTED'
+  } catch {
+    context = { host: true, failure: 'HOST_HASH_CAPTURE_FAILED' }
+  }
+  hashContexts.add(context)
+  return Object.freeze(context)
+}
+
+export async function workspaceFingerprintAsync(cwd, context) {
+  const unavailable = (errorCode) => ({ mode: 'pro', mode_ts: 0, claimed_profile: null,
+    ok: false, reason: 'untracked_read_failed', phase: 'hash_child', errorCode })
+  if (!hashContexts.has(context)) {
+    if (globalThis.__CINDY_NODE__ !== undefined) return unavailable('HOST_HASH_UNSUPPORTED')
+    return workspaceFingerprint(cwd)
+  }
+  if (!context.host) return workspaceFingerprint(cwd)
+  if (context.failure) return unavailable(context.failure)
+  const steps = fingerprintSteps(cwd)
+  const first = steps.next()
+  if (first.done) return first.value
+  let handle
+  try { handle = await context.launch('src/state.js', ['--hash-child'], { deadlineMs: 5000 }) } catch {
+    return unavailable('HOST_HASH_LAUNCH_FAILED')
+  }
+  // completion由候选Host保证有界且始终resolve；不另建race丢弃子生命周期。
+  const completion = handle.completion
+  if (!completion || typeof completion.then !== 'function') {
+    handle.kill()
+    return unavailable('HOST_HASH_UNSUPPORTED')
+  }
+  let stdout = ''
+  let bytes = 0
+  let failed = false
+  // 输出可能分开UTF8帧；累计原始字节后统一解码，end与真实退出分别确认。
+  const chunks = []
+  let ended = false
+  let resolveEnd
+  const end = new Promise(resolve => { resolveEnd = resolve })
+  handle.stdout.on('data', chunk => {
+    const data = Buffer.from(chunk)
+    if (data.length > 64 * 1024 - bytes) { failed = true; handle.kill(); return }
+    bytes += data.length
+    chunks.push(data)
+  })
+  handle.stderr.on('data', chunk => {
+    const size = Buffer.byteLength(chunk)
+    if (size > 64 * 1024 - bytes) { failed = true; handle.kill() }
+    else bytes += size
+  })
+  const streamError = () => { failed = true; handle.kill(); ended = true; resolveEnd() }
+  handle.stdout.on('error', streamError)
+  handle.stderr.on('error', streamError)
+  handle.stdout.on('end', () => { ended = true; resolveEnd() })
+  try {
+    const payload = Buffer.from(first.value.payload)
+    for (let offset = 0; offset < payload.length; offset += 64 * 1024) {
+      if (!handle.stdin.write(payload.subarray(offset, offset + 64 * 1024))) { failed = true; break }
+    }
+    handle.stdin.end()
+  } catch { failed = true; handle.kill() }
+  let receipt
+  try { receipt = await completion } catch { return unavailable('HOST_HASH_CLEANUP_UNKNOWN') }
+  if (receipt?.completionScope !== 'direct' || receipt.status !== 'exited')
+    return unavailable('BOUND_LAUNCH_CLEANUP_UNKNOWN')
+  // 实际Host先stdout.end再complete；end事件可能在nextTick，不可丢尾部输出。
+  if (!ended) await end
+  if (failed) return unavailable('HOST_HASH_STREAM_FAILED')
+  stdout = Buffer.concat(chunks).toString('utf8')
+  return steps.next({ status: receipt.code, signal: receipt.signal, stdout }).value
+}
+
+// 仅由上述短命受信子进程运行；读取阶段 metadata / content / close 均在可终止边界内。
+export function hashWorkspaceContent({ diff, files, gitRoot, flowHomeAbs }) {
   const h = createHash('sha256')
-  h.update(String(diff.stdout || ''))
-
-  const files = String(untracked.stdout || '')
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .sort()
+  h.update(diff)
+  const readDeadline = Date.now() + 5000
+  let readBytes = 0
+  const chunk = Buffer.alloc(64 * 1024)
 
   // 状态目录必须排除（R3）：跑一次检查就会往里写审计/状态文件，
   // 若计入指纹则「验证 → 落审计 → 记裁定」之间指纹必变 → 每次都误报 STALE。
@@ -1590,34 +2094,121 @@ export function workspaceFingerprint(cwd) {
   // 用户完全可以把它设在**项目内部**（如 <repo>/.flowhome），那就会自我失效。
   // 所以这里按**解析后的绝对路径**排除真正的 FLOW_HOME，
   // 同时保留 .carlos-flow/ 的字面排除以兼容默认布局。
-  const flowHomeAbs = path.resolve(FLOW_HOME)
   for (const f of files) {
-    const abs = path.resolve(dir, f)
+    const abs = path.resolve(gitRoot, f)
     const inFlowHome =
       abs === flowHomeAbs || abs.startsWith(flowHomeAbs + path.sep)
     if (inFlowHome) continue
     if (f.startsWith('.carlos-flow/') || f.startsWith('.carlos-flow\\'))
       continue
     h.update(`\u0000untracked-file:${f}\u0000`)
+    let fd
     try {
-      const buf = fs.readFileSync(path.join(dir, f))
-      // 大文件只入路径 + 大小，不入内容（避免读上万文件/大文件）
-      if (buf.length > 1024 * 1024) {
-        h.update(`size:${buf.length}`)
-      } else {
-        h.update(buf)
+      if (!fs.lstatSync(abs).isFile()) throw Object.assign(new Error('非普通未跟踪文件'), { code: 'UNTRACKED_TYPE' })
+      fd = fs.openSync(abs, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))
+      const before = fs.fstatSync(fd)
+      if (!before.isFile()) throw Object.assign(new Error('非普通未跟踪文件'), { code: 'UNTRACKED_TYPE' })
+      let fileBytes = 0
+      for (;;) {
+        if (Date.now() > readDeadline) throw Object.assign(new Error('未跟踪读取超时'), { code: 'ETIMEDOUT' })
+        const count = fs.readSync(fd, chunk, 0, chunk.length, null)
+        if (!count) break
+        fileBytes += count
+        readBytes += count
+        if (readBytes > 8 * 1024 * 1024) throw Object.assign(new Error('未跟踪内容超限'), { code: 'ENOBUFS' })
+        h.update(chunk.subarray(0, count))
       }
+      const after = fs.fstatSync(fd)
+      const current = fs.lstatSync(abs)
+      if (fileBytes !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs ||
+          current.dev !== after.dev || current.ino !== after.ino || current.size !== after.size || current.mtimeMs !== after.mtimeMs)
+        throw Object.assign(new Error('未跟踪文件读取期间变化'), { code: 'UNTRACKED_CHANGED' })
     } catch (e) {
-      h.update(`<<unreadable: ${e}>>`)
+      return { ok: false, reason: 'untracked_read_failed', phase: 'untracked_read', errorCode: e.code || 'UNKNOWN' }
+    } finally {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd) } catch (e) {
+          return { ok: false, reason: 'untracked_read_failed', phase: 'untracked_close', errorCode: e.code || 'UNKNOWN' }
+        }
+      }
     }
   }
 
+  if (Date.now() > readDeadline)
+    return { ok: false, reason: 'untracked_read_failed', phase: 'untracked_read', errorCode: 'ETIMEDOUT' }
   return {
     mode: 'pro',
     mode_ts: 0,
     claimed_profile: null,
     ok: true,
-    head: String(head.stdout || '').trim(),
     diff_sha256: h.digest('hex'),
   }
+}
+
+// 只读固定入口：模块导入不激活；参数只作数据，不加载项目代码或启动后继进程。
+function runHashChild() {
+  const limit = 8 * 1024 * 1024
+  const chunks = []
+  let bytes = 0
+  let finished = false
+  let exited = false
+  const exitOnce = (code) => {
+    if (exited) return
+    exited = true
+    process.exit(code)
+  }
+  // 输出错误不再向已坏管道写JSON；回调与事件只允许一次受控退出。
+  process.stdout.on('error', () => exitOnce(1))
+  const failed = (errorCode) => ({ ok: false, reason: 'untracked_read_failed', phase: 'hash_child', errorCode })
+  const timer = setTimeout(() => finish(failed('INPUT_TIMEOUT')), 5000)
+  const finish = (result) => {
+    if (finished) return
+    finished = true
+    clearTimeout(timer)
+    process.stdin.pause()
+    chunks.length = 0
+    let output = JSON.stringify(result)
+    const success = result.ok === true && Buffer.byteLength(output) <= 64 * 1024
+    if (Buffer.byteLength(output) > 64 * 1024) output = JSON.stringify(failed('OUTPUT_LIMIT'))
+    try {
+      process.stdout.write(output, error => exitOnce(!error && success ? 0 : 1))
+    } catch {
+      exitOnce(1)
+    }
+  }
+  process.stdin.on('error', () => finish(failed('INPUT_ERROR')))
+  process.stdin.on('data', (chunk) => {
+    if (finished) return
+    const size = Buffer.byteLength(chunk)
+    if (size > limit - bytes) return finish(failed('INPUT_LIMIT'))
+    bytes += size
+    chunks.push(Buffer.from(chunk))
+  })
+  process.stdin.on('end', () => {
+    if (finished) return
+    try {
+      const raw = Buffer.concat(chunks, bytes)
+      const text = raw.toString('utf8')
+      if (!Buffer.from(text).equals(raw)) return finish(failed('INVALID_INPUT'))
+      const data = JSON.parse(text)
+      if (!data || typeof data !== 'object' || Array.isArray(data) ||
+          Object.keys(data).sort().join(',') !== 'diff,files,flowHomeAbs,gitRoot' ||
+          typeof data.diff !== 'string' || !Array.isArray(data.files) ||
+          data.files.some(f => typeof f !== 'string' || f.includes('\0')) ||
+          typeof data.gitRoot !== 'string' || !path.isAbsolute(data.gitRoot) || data.gitRoot.includes('\0') ||
+          typeof data.flowHomeAbs !== 'string' || !path.isAbsolute(data.flowHomeAbs) || data.flowHomeAbs.includes('\0'))
+        return finish(failed('INVALID_INPUT'))
+      const result = hashWorkspaceContent(data)
+      if (result.ok === true) return finish(result)
+      return finish(failed(/^[A-Z0-9_]{1,64}$/.test(result.errorCode || '') ? result.errorCode : 'HASH_FAILED'))
+    } catch {
+      finish(failed('INVALID_INPUT'))
+    }
+  })
+}
+
+const hashChildEntry = fileURLToPath(import.meta.url)
+if (process.argv[1] === hashChildEntry && path.isAbsolute(process.argv[1])) {
+  if (process.argv.length === 3 && process.argv[2] === '--hash-child') runHashChild()
+  else process.exitCode = 1
 }

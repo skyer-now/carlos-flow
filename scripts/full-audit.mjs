@@ -19,6 +19,7 @@
 //   9. ghost.json 工具清单 vs 服务端实际工具
 //
 // 退出码：0 = 全部通过；1 = 发现问题
+import { createContext, Script } from 'node:vm'
 import { parseTools } from './check-no-dead-handler.mjs'
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -255,20 +256,74 @@ const readJsonText = (text) => {
 const ghostJson = readJson("ghost.json");
 const idx = read("src/index.js") || "";
 const uniqueServer = parseTools(idx).map((tool) => tool.name)
-const ghostTools = (ghostJson?.tools || []).map((t) => t.name);
+const declaredPublic = Array.isArray(ghostJson?.tools) ? ghostJson.tools : [];
+const ghostTools = declaredPublic.map((t) => t?.name);
+if (!Array.isArray(ghostJson?.tools)) P('工具清单', 'public 工具清单不是数组');
+if (new Set(ghostTools).size !== ghostTools.length) P('工具清单', 'public 工具重复');
 
-// 两种合法形态：
-//   A. 直接声明：ghost.json 逐条列出全部 flow_*（宿主上限 16，超过直接拒装）
-//   B. 两段式目录：只声明 list_tools / call_tool，目录与分发表在 main.js（宿主 §3.5）
-//      —— 这种形态下「工具清单」的守卫对象变成 **main.js 的类目表**：
-//      它必须恰好覆盖服务端全部工具，否则某个操作在 Cindy 里根本点不到（静默丢失）。
-const TWO_LEVEL = ghostTools.length === 2 && ghostTools.includes("list_tools") && ghostTools.includes("call_tool");
+// 两元工具可附带唯一已知启动器；不是任意额外工具的白名单。
+const metaPresent = ghostTools.some((name) => ['list_tools', 'call_tool', 'start_wizard'].includes(name));
+const allowedPublic = ['list_tools', 'call_tool', 'start_wizard'];
+const TWO_LEVEL = metaPresent;
+if (TWO_LEVEL && !(
+  (ghostTools.length === 2 || ghostTools.length === 3) && new Set(ghostTools).size === ghostTools.length &&
+  ghostTools.includes('list_tools') && ghostTools.includes('call_tool') && ghostTools.every((name) => allowedPublic.includes(name))
+)) P('工具清单', '不允许的 public 工具集合；只允许两元工具或附加 start_wizard');
 
 if (TWO_LEVEL) {
-  const mainJs = read("main.js") || "";
-  const members = [...mainJs.matchAll(/members:\s*\[([^\]]*)\]/gs)]
-    .flatMap((m) => [...m[1].matchAll(/(['"])([^'"]+)\1/g)].map((x) => x[2]));
+  const mainJs = read('main.js') || '';
+  let members = [];
+  // 编译真实逻辑页、读取真实类目并实调已注册分发器，注释/字符串不能冒充接线。
+  // 宿主接口全为惰性桩；替换目标函数为哨兵，绝不启动 Node/Agent 或读配置。
+  const sent = [];
+  const sandbox = createContext({
+    cindy: { onHostMessage(fn) { sandbox.__handler = fn; }, send(msg) { sent.push(msg); } },
+    BroadcastChannel: class { postMessage() {} },
+  });
+  try {
+    new Script(mainJs).runInContext(sandbox, { timeout: 1500 });
+    if (!Array.isArray(sandbox.CATEGORIES) || sandbox.CATEGORIES.some((category) => !Array.isArray(category.members) || category.members.some((name) => typeof name !== 'string'))) {
+      P('工具清单', 'main.js 类目表结构无效');
+    } else members = sandbox.CATEGORIES.flatMap((category) => category.members);
+    const routes = { list_tools: 'listTools', call_tool: 'callToolRequest', start_wizard: 'startWizard' };
+    for (const name of ghostTools.filter((name) => allowedPublic.includes(name))) {
+      const target = routes[name];
+      if (typeof sandbox[target] !== 'function' || typeof sandbox.__handler !== 'function') {
+        P('工具清单', `public 处理器缺失：${name}`);
+        continue;
+      }
+      sandbox[target] = async (msg) => ({ type: 'tool-result', callId: msg.callId, ok: true, result: { auditRoute: name } });
+      sent.length = 0;
+      sandbox.__auditMessage = { type: 'tool-call', tool: name, args: {}, callId: 'audit-route' };
+      await new Script('__handler(__auditMessage)').runInContext(sandbox, { timeout: 1500 });
+      if (!sent.some((msg) => msg.type === 'tool-result' && msg.callId === 'audit-route' && msg.result?.auditRoute === name)) P('工具清单', `public 分发不匹配：${name}`);
+    }
+  } catch (error) {
+    P('工具清单', `main.js 编译或分发失败：${error.message}`);
+  }
+  for (const tool of declaredPublic) {
+    const schema = tool?.parameters;
+    const props = schema?.properties;
+    const object = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+    const required = schema?.required === undefined ? [] : schema.required;
+    let valid = object(schema) && schema.type === 'object' && object(props) && Array.isArray(required) &&
+      required.every((key) => typeof key === 'string' && Object.hasOwn(props, key)) && new Set(required).size === required.length;
+    if (valid && tool.name === 'start_wizard') {
+      const choices = (value, wanted) => value?.type === 'string' && Array.isArray(value.enum) && value.enum.length === wanted.length && wanted.every((name) => value.enum.includes(name));
+      const expected = props.expected;
+      valid = required.length === 0 && (Object.keys(props).length === 0 || (
+        Object.keys(props).sort().join(',') === 'action,expected,intent' &&
+        choices(props.action, ['open', 'prepare', 'resume']) && choices(props.intent, ['clarify', 'confirm-scope', 'execute', 'check', 'review', 'finish']) &&
+        expected?.type === 'object' && object(expected.properties) && Object.keys(expected.properties).sort().join(',') === 'callId,generation,intent,nonce' &&
+        Object.values(expected.properties).every((field) => field.type === 'string') && Array.isArray(expected.required) && expected.required.length === 4 && new Set(expected.required).size === 4 && expected.required.every((key) => Object.hasOwn(expected.properties, key)) && expected.additionalProperties === false
+      ));
+    }
+    if (valid && tool.name === 'list_tools') valid = Object.keys(props).length === 1 && props.category?.type === 'string' && required.length === 0;
+    if (valid && tool.name === 'call_tool') valid = Object.keys(props).length === 2 && props.name?.type === 'string' && props.args?.type === 'object' && required.length === 1 && required[0] === 'name';
+    if (!valid) P('工具清单', `public 参数 schema 无效：${tool?.name}`);
+  }
   const uniqMembers = [...new Set(members)];
+  if (uniqMembers.length !== members.length) P('工具清单', 'main.js 类目成员重复');
   if (!mainJs) P("工具清单", "ghost.json 走两段式，但仓库里没有 main.js");
   if (uniqMembers.length !== uniqueServer.length) {
     P("工具清单", `main.js 类目表覆盖 ${uniqMembers.length} 个操作，服务端实际 ${uniqueServer.length} 个`);
