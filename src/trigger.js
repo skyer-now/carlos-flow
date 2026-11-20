@@ -81,6 +81,13 @@ const DEFAULT_CONFIG = {
   triggerThreshold: 15,             // 触发阈值（0-100）
   autoTriggerThreshold: 25,         // 自动触发阈值（高中意图时）
   lowConfidenceThreshold: 10,       // 低置信度阈值
+  placeholderTtlMs: 5 * 60 * 1000,  // 占位卡自动老化窗口（5分钟）
+
+  // 语义副作用分级矩阵 (LEVEL_0: READ_ONLY, LEVEL_1: EPHEMERAL, LEVEL_2: MUTATING)
+  ephemeralActionWords: [
+    'log', 'print', 'test:run', 'debug', 'trace', 'echo', 'status', 'check',
+    '加日志', '打印', '跑单测', '排查', '调试', '查状态', '跑一下测试', '测一下', '单测',
+  ],
 
   // 只读意图识别：命中只读词且**不含**改动动词 → 不进入工作流门禁。
   // 原因：占位卡恒为 read_only 档（scope=[]），若一个只需要只读调研的任务
@@ -165,16 +172,37 @@ if (existsSync(CONFIG_PATH)) {
  * 被激活，这三项永远无法被满足（只读任务本来就不改文件）——
  * 该会话会被永久锁死，且没有任何合法路径解闸。
  */
-function isReadOnlyIntent(message) {
+/**
+ * 语义副作用分级识别
+ * LEVEL_0: READ_ONLY (只读/闲聊，0分静默)
+ * LEVEL_1: EPHEMERAL (轻量排查/单测/打印，记录流水不建卡)
+ * LEVEL_2: MUTATING (真实改动/重构/新增，进入工作流门禁)
+ */
+export function classifySideEffect(message) {
   const s = String(message || '').toLowerCase();
-  if (!s) return false;
+  if (!s) return 'LEVEL_0';
   const ro = config.readOnlyIntentWords || [];
   const mut = config.mutatingActionWords || [];
+  const eph = config.ephemeralActionWords || [];
+
+  // 1. 优先检查改动动词（如“实现/修改/新增/重构”），但“开源实现/功能实现”属于只读调研名词短语，排除误判
+  const cleanForMut = s.replace(/开源实现|技术实现|功能实现|如何实现|怎么实现/g, '');
+  const hasMutating = mut.some((w) => cleanForMut.includes(String(w).toLowerCase()));
+  if (hasMutating) return 'LEVEL_2';
+
+  // 2. 检查临时排查/调试词汇
+  const hasEphemeral = eph.some((w) => s.includes(String(w).toLowerCase()));
+  if (hasEphemeral) return 'LEVEL_1';
+
+  // 3. 检查只读意图词汇
   const hasReadOnly = ro.some((w) => s.includes(String(w).toLowerCase()));
-  if (!hasReadOnly) return false;
-  // 同时含改动动词 → 以改动为准（避免 "analyze and refactor" 被误判为只读）
-  const hasMutating = mut.some((w) => s.includes(String(w).toLowerCase()));
-  return !hasMutating;
+  if (hasReadOnly) return 'LEVEL_0';
+
+  return 'LEVEL_2';
+}
+
+function isReadOnlyIntent(message) {
+  return classifySideEffect(message) === 'LEVEL_0';
 }
 
 /**
@@ -321,7 +349,9 @@ class DynamicTriggerManager {
       timestamp: Date.now(),
       impulseScore: triggerData.impulseScore || 0,
       context: triggerData.context || 'unknown',
-      userResponse: triggerData.userResponse || 'pending'
+      userResponse: triggerData.userResponse || 'pending',
+      user_msg: triggerData.user_msg || (triggerData.context && triggerData.context.message) || null,
+      ...triggerData,
     });
 
     this.state.lastTriggerTime = Date.now();
@@ -787,6 +817,54 @@ class TriggerDecisionEngine {
   }
 
   /**
+   * 从当前会话历史中提取代码文件路径（多轮上下文消解，供手机端简短指令继承）
+   */
+  resolveContextScope(sessionId, cwd = null) {
+    if (!sessionId) return [];
+    try {
+      const hist = this.triggerManager.state;
+      const recent = (hist.triggerHistory || []).slice(-10);
+      const candidates = new Set();
+      // 正则匹配源码相对路径（如 src/auth.js, client/carlos.js, package.json 等）
+      const pathRegex = /(?:[a-zA-Z0-9_.-]+\/)+[a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+/g;
+      
+      for (const item of recent) {
+        const text = JSON.stringify(item);
+        let m;
+        while ((m = pathRegex.exec(text)) !== null) {
+          const p = m[0];
+          if (!p.startsWith('http://') && !p.startsWith('https://')) {
+            candidates.add(p);
+          }
+        }
+      }
+      return Array.from(candidates);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 检查并老化未派发的过期占位卡
+   */
+  checkPlaceholderExpiry(sessionId, state) {
+    if (!state || !state.card || !Array.isArray(state.activation_pending) || state.activation_pending.length === 0) {
+      return { expired: false };
+    }
+    // 必须是从未派发（dispatch_count === 0）的纯占位卡
+    if (Number(state.dispatch_count) > 0) {
+      return { expired: false };
+    }
+    const cardTs = Number(state.card_ts) || 0;
+    const now = Date.now();
+    const ttl = Number(config.placeholderTtlMs) || 300000;
+    if (cardTs > 0 && now - cardTs > ttl) {
+      return { expired: true, cardTs, elapsedMs: now - cardTs };
+    }
+    return { expired: false };
+  }
+
+  /**
    * 获取触发统计
    */
   getStats() {
@@ -827,6 +905,29 @@ export const TriggerEngine = {
    */
   getConfig() {
     return { ...config };
+  },
+
+  /**
+   * 语义副作用分级
+   */
+  classifySideEffect(message) {
+    return classifySideEffect(message);
+  },
+
+  /**
+   * 会话上下文路径提取
+   */
+  resolveContextScope(sessionId, cwd = null) {
+    const engine = this.create(sessionId);
+    return engine.resolveContextScope(sessionId, cwd);
+  },
+
+  /**
+   * 检查占位卡是否老化
+   */
+  checkPlaceholderExpiry(sessionId, state) {
+    const engine = this.create(sessionId);
+    return engine.checkPlaceholderExpiry(sessionId, state);
   },
 
   /**

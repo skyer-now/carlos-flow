@@ -2699,6 +2699,57 @@ const TOOLS = [
 
   // 9 -----------------------------------------------------------------------
   {
+    name: 'flow_cancel',
+    description:
+      '一键撤销/取消当前任务卡，重置门禁状态回自由态。' +
+      '当用户明确说“取消门禁 / 撤销任务 / 不走流程 / 随便问问”时调用。' +
+      '会清空未决占位卡，记录审计事件并释放派发锁。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: '会话 ID，默认 unknown' },
+        reason: { type: 'string', description: '取消理由（建议写用户原话）' },
+      },
+    },
+    handler: async (args) => {
+      try {
+        const a = args || {}
+        const sessionId = a.sessionId || 'unknown'
+        const state = loadState(sessionId)
+
+        await commitState(sessionId, (latest) => {
+          latest.card = null
+          latest.card_ts = 0
+          latest.activation_pending = []
+          latest.activation_activated = false
+          latest.claimed = false
+          latest.claimed_role = null
+          latest.dispatch_count = 0
+          latest.verdict = null
+          latest.completed_ok = false
+          latest.stale = false
+        })
+
+        audit('decision', sessionId, {
+          kind: 'card_cancelled',
+          reason: a.reason || '用户请求撤销',
+        })
+
+        return ok({
+          ok: true,
+          sessionId,
+          cancelled: true,
+          reason: a.reason || '用户请求撤销',
+          note: '门禁任务卡已一键撤销，会话已恢复自由态。',
+        })
+      } catch (e) {
+        return fail(e && e.message ? e.message : String(e))
+      }
+    },
+  },
+
+  // 9b -----------------------------------------------------------------------
+  {
     name: 'flow_bypass',
     description:
       '开关免检模式（bypass）。当用户明确说“直接干 / 跳过门禁 / 免检 / 别管流程”时调用。' +

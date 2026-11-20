@@ -66,7 +66,7 @@ var CATEGORIES = [
       'flow_check_scope 不传 paths 时会自己跑 git diff 取当前改动，用来在裁定前自查越界。',
     ],
     members: [
-      'flow_status', 'flow_stats', 'flow_protocol', 'flow_mode', 'flow_bypass', 'flow_add_user_msg',
+      'flow_status', 'flow_stats', 'flow_protocol', 'flow_mode', 'flow_bypass', 'flow_cancel', 'flow_add_user_msg',
       'flow_save_result', 'flow_revert_plan', 'flow_check_scope', 'flow_diff_hunks',
     ],
   },
