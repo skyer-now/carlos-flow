@@ -1,3 +1,11 @@
+## [2.28.0] - 2026-11-21
+
+- **15 条通用与 AI 编程专属防撞规则引擎落地 (rules.js)**：全面覆盖通用资产安全 (R1 敏感凭据/R2 依赖锁/R3 Git 隔离)、跨平台与环境安全 (R4 宿主个人绝对路径/R5 Windows 反斜杠吞字符/R6 符号链接逃逸阻断)、破坏性操作拦截 (R7 根目录递归删除/R8 全局盲杀进程/R9 黑窗防护/R10 临时目录清理)、以及 AI 编程恶习专属防御 (R11 降级断言假绿作弊/R12 未声明幽灵依赖/R13 格式污染重写预警/R14 偷懒伪代码占位符/R15 源码与测试同改强制负对照)。
+- **双轨生产灰度引擎与多运行模式**：新增 `enforce`（生产严格门禁）、`shadow`（旁路影子记账）、`bypass`（紧急人工熔断降级）三态模式切换，支持环境级与配置级无缝动态调节。
+- **灰度指标综合看板与自愈告警系统**：实现零依赖指标流持久化（`gate-audit/metrics/rules-metrics.jsonl`），实时输出拦截率、影子违规率与系统健康度；阻断率突破 20% 自动触发 CRITICAL 告警。
+- **一键降级 (Kill-Switch) 与一键回滚恢复 API**：提供 `triggerEmergencyBypass()` 紧急熔断与 `rollbackRulesEngine()` 一键回滚恢复，配合审计链追踪，保障业务连续性。
+- **真实基准数据集评测与零误拦验证**：经 30 组真实业务与危险样本全量回归，达成 0.00% 误拦率 (FPR) 与 0.00% 漏拦率 (FNR)。
+
 ## [2.27.0] - 2026-11-21
 
 - **WorkBuddy / Codex / Trae / Qoder 跨客户端一键初始化与模板支持**：在 `templates/` 新增 Tencent WorkBuddy、OpenAI Codex CLI、ByteDance Trae、Alibaba Qoder (通义灵码) 预置配置模板，扩展 `client/carlos.js init --target` 支持，实现环境 PATH 探测与绝对路径/正斜杠安全渲染，彻底解决跨平台反斜杠非法转义与 GUI 子进程 ENOENT 问题。

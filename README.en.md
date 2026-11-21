@@ -38,6 +38,8 @@ When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or
 * **Evidence-Driven Testing**: Spawns real test suites (`verify.cmd`); no valid pass proof means no completion.
 * **Tamper-Evident Audit Trail**: SHA-256 chained logs (`prevHash` → `hash`).
 * **Separation of Duties**: Implementers (`executor`) cannot approve their own work; independent review (`auditor`) is mandatory.
+* **15 Anti-Pattern Rules**: Comprehensive rules covering asset credentials (R1-R3), portability (R4-R6), destructive commands (R7-R10), and AI-specific coding cheats like assertion stripping, phantom dependencies, and lazy placeholders (R11-R15).
+* **Dual-Track Rollout & Kill-Switch**: Full support for strict `enforce`, observation-only `shadow`, and emergency `bypass` modes with live health dashboard and alarm thresholds.
 
 ### 3. Smart Plain-Language Guidance
 * **Plain Error Explanations**: Converts errors into clear steps: *Why it stopped + What caused it + How to continue*.

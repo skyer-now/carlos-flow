@@ -251,9 +251,9 @@ async function callToolRequest(msg) {
     var stale = res.result && res.result.structuredContent
     if (name === 'flow_verdict' && payload.verdict === 'PASS' && res.result.isError === true &&
         stale && stale.code === 'VERIFY_STALE' && stale.expected && /^[a-f0-9]{64}$/.test(stale.expected.caseKey) &&
-        context && context.session_id === payload.sessionId) {
+        context && context.session_id === payload.sessionId && context.workdir_is_local === true &&
+        context.workdir_is_read_only === false && Number.isFinite(stale.expiresAt) && stale.expiresAt > Date.now()) {
       await rememberStale(msg.callId, context.session_id, stale)
-      drawStale(msg.callId, '检测时发现验证之后有变化；不是实时检测。')
     }
     // 原样透传 MCP 结果：工具自身失败用 isError 表达，宿主会按错误内容展示，
     // 这保证了「直接声明工具」与「经 call_tool 转发」两条路径的语义一致。
@@ -505,8 +505,11 @@ function rulesOf(toolName) {
 }
 
 // KV 仅为有界展示缓存，LWW 不参与执行领取；绝不保存命令、路径、diff 或点击票。
+var staleIssued = Object.create(null)
 async function staleCache() {
-  var cfg = await (await fetch('/kv')).json()
+  var response = await fetch('/kv')
+  if (!response.ok) throw new Error('展示缓存未知')
+  var cfg = await response.json()
   var rows = Array.isArray(cfg.staleWizard) ? cfg.staleWizard : []
   rows = rows.filter(function (row) {
     return row && typeof row.callId === 'string' && row.callId.length <= 200 &&
@@ -528,13 +531,25 @@ async function saveStaleCache(cache) {
 }
 
 async function rememberStale(callId, sid, stale) {
-  var cache = await staleCache()
-  cache.rows = cache.rows.filter(function (row) { return row.callId !== callId })
-  cache.rows.push({
-    callId: callId, sid: sid, caseKey: stale.expected.caseKey,
-    detectedAt: stale.detectedAt, expiresAt: stale.expiresAt, requested: false, deferred: false,
-  })
-  await saveStaleCache(cache)
+  var issued = { callId: callId, sid: sid, caseKey: stale.expected.caseKey,
+    expiresAt: stale.expiresAt, ready: false, requested: false, viewed: false, deferred: false }
+  staleIssued[callId] = issued
+  try {
+    var cache = await staleCache()
+    if (staleIssued[callId] !== issued || issued.expiresAt <= Date.now()) return
+    cache.rows = cache.rows.filter(function (row) { return row.callId !== callId })
+    cache.rows.push({ callId: callId, sid: sid, caseKey: issued.caseKey,
+      detectedAt: stale.detectedAt, expiresAt: issued.expiresAt, requested: false, deferred: false })
+    await saveStaleCache(cache)
+    if (staleIssued[callId] !== issued || issued.expiresAt <= Date.now()) return
+    issued.ready = true
+    drawStale(callId, '检测时发现验证之后有变化；查看将请求原会话读取当前 Git 未暂存差异，非验证时快照。')
+  } catch (error) {
+    if (staleIssued[callId] === issued) {
+      issued.ready = false
+      drawStale(callId, '向导状态未知；不会自动重试，请查看原任务。', true)
+    }
+  }
 }
 
 function drawStale(callId, text, hide) {
@@ -547,33 +562,51 @@ function drawStale(callId, text, hide) {
 
 async function staleAction(msg) {
   if (['stale-view', 'stale-retry', 'stale-defer'].indexOf(msg.actionId) < 0) return
-  var cache = await staleCache()
-  var row = cache.rows.find(function (item) { return item.callId === msg.callId && item.sid === msg.sessionId })
-  if (!row) {
-    drawStale(msg.callId, '展示记录不可用；不会重建执行资格，请手动验证。', true)
-    return
-  }
-  if (msg.actionId === 'stale-view') {
-    drawStale(msg.callId, '检测时发现代码与原验证不同；此处不是实时检测，不展示命令、路径或完整差异。')
-    return
-  }
-  if (msg.actionId === 'stale-defer') {
-    row.deferred = true
+  var issued = staleIssued[msg.callId]
+  function bound() { return issued && staleIssued[msg.callId] === issued && issued.sid === msg.sessionId }
+  function eligible() { return bound() && issued.ready && !issued.deferred && issued.expiresAt > Date.now() }
+  // 无内存签发或跨会话事件不能改变真实卡，也不能从缓存恢复资格。
+  if (!eligible()) return
+  var viewing = msg.actionId === 'stale-view'
+  var deferring = msg.actionId === 'stale-defer'
+  if (!deferring && (!msg.userActionToken || (viewing ? issued.viewed : issued.requested))) return
+  if (deferring) issued.deferred = true
+  try {
+    var cache = await staleCache()
+    if (!bound() || !issued.ready || issued.expiresAt <= Date.now() || (!deferring && issued.deferred)) return
+    var row = cache.rows.find(function (item) {
+      return item.callId === issued.callId && item.sid === issued.sid && item.caseKey === issued.caseKey && item.expiresAt === issued.expiresAt
+    })
+    if (!row) throw new Error('展示绑定未知')
+    // 最后一次读取后在同一同步段领取，保存失败也不回滚重放。
+    if (deferring) row.deferred = true
+    else if (viewing) { if (issued.viewed) return; issued.viewed = true }
+    else { if (issued.requested) return; issued.requested = true; row.requested = true }
     await saveStaleCache(cache)
-    drawStale(msg.callId, '已收起提示；不取消验证，也不撤回已经提交的重新检查。', true)
-    return
+    if (!bound() || !issued.ready || issued.expiresAt <= Date.now() || (!deferring && issued.deferred)) return
+    if (deferring) {
+      drawStale(msg.callId, '已收起提示；不取消或撤回已经提交的请求。', true)
+      return
+    }
+    var guidance = viewing ?
+      '请在原会话的新活跃工具调用中先用 flow_status 核对当前卡与原验证；卡已变化或无法确认则停止。再用 flow_diff_hunks 读取真实 Git 差异，明确这是当前 Git 未暂存差异，非验证时快照。错误只能报告未知，不能说无变化；空结果不能推断未跟踪或已暂存无变化。仅输出数量与行区间的脱敏摘要，不输出原命令、路径或原始 diff。不执行验证、PASS 或 falsify。' :
+      '请沿原会话权限调用 Carlos call_tool，name 为 flow_run_verify，args 使用以下 sessionId 与 expected；不得省略 expected 或失败后回退普通执行，不自动 PASS 或 falsify。'
+    var result = await cindy.agent.run({ mode: 'continue', userActionToken: msg.userActionToken,
+      promptTemplate: '用户选择：{{user_message}}\n' + guidance + '\n{{event_json}}',
+      userMessage: viewing ? '查看当前变化' : '重新检查原验证',
+      event: { sessionId: issued.sid, expected: { caseKey: issued.caseKey } },
+    })
+    if (!eligible()) return
+    if (!result || result.ok !== true) throw new Error('继续请求未知')
+    drawStale(msg.callId, '已请求原会话继续；不代表已读取差异、执行命令或检查通过。')
+  } catch (error) {
+    if (bound() && !issued.deferred) {
+      issued.ready = false
+      drawStale(msg.callId, '向导状态未知；请查看原任务，不自动重试。', true)
+    } else if (bound() && deferring) {
+      drawStale(msg.callId, '向导状态未知；已停止后续交互，不撤回已提交请求。', true)
+    }
   }
-  if (!msg.userActionToken || row.requested) {
-    drawStale(msg.callId, '重新检查未再次提交；请查看原任务执行状态。', true)
-    return
-  }
-  row.requested = true
-  await saveStaleCache(cache)
-  var result = await cindy.agent.run({ mode: 'continue', userActionToken: msg.userActionToken,
-    promptTemplate: '用户选择：{{user_message}}\n请沿原会话权限调用 Carlos call_tool，name 为 flow_run_verify，args 使用以下 sessionId 与 expected；不得省略 expected 或失败后回退普通执行，不自动 PASS 或 falsify。\n{{event_json}}',
-    userMessage: '重新检查原验证', event: { sessionId: row.sid, expected: { caseKey: row.caseKey } },
-  })
-  drawStale(msg.callId, result.ok ? '已请求原任务继续；不代表命令已执行或检查通过。' : '继续请求未确认；请查看原任务，不自动重新提交。', true)
 }
 
 cindy.onHostMessage(async function (msg) {

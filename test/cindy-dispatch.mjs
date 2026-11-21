@@ -202,11 +202,11 @@ try {
   const before = requests.length
   await uiHandler({ type: 'event', name: 'card-action', callId: 'wizard', sessionId: 'ui', actionId: 'stale-view' })
   await uiHandler({ type: 'event', name: 'card-action', callId: 'wizard', sessionId: 'ui', actionId: 'stale-defer' })
-  check('W10 查看与收起均零 Node/Agent', requests.length === before && agents.length === 0)
+  check('W10 无票查看与收起均零 Node/Agent，收起终止交互', requests.length === before && agents.length === 0)
   await uiHandler({ type: 'event', name: 'card-action', callId: 'wizard', sessionId: 'other', actionId: 'stale-retry', userActionToken: '票' })
   check('W11 跨会话 callback 不续接', agents.length === 0)
-  await uiHandler({ type: 'event', name: 'card-action', callId: 'wizard', sessionId: 'ui', actionId: 'stale-retry', userActionToken: '真实点击票' })
-  await uiHandler({ type: 'event', name: 'card-action', callId: 'wizard', sessionId: 'ui', actionId: 'stale-defer' })
+  await uiHandler({ type: 'event', name: 'card-action', callId: 'wizard-second', sessionId: 'ui', actionId: 'stale-retry', userActionToken: '真实点击票' })
+  await uiHandler({ type: 'event', name: 'card-action', callId: 'wizard-second', sessionId: 'ui', actionId: 'stale-defer' })
   check('W12 真票 continue 且收起不撤回，不复用 RPC', agents.length === 1 && agents[0].mode === 'continue' && requests.length === before)
   check('W13 缓存白名单无路径/点击票/命令', !JSON.stringify(kv).includes('冻结目录') && !JSON.stringify(kv).includes('真实点击票'))
   structured = undefined

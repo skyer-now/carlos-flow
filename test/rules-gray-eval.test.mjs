@@ -11,9 +11,12 @@ import {
   checkPhantomDependencies,
   getRulesEngineConfig,
   getRulesMetricsSummary,
+  evaluateRulesDashboard,
+  triggerEmergencyBypass,
+  rollbackRulesEngine,
 } from '../src/rules.js';
 
-describe('Carlos Flow 规则灰度引擎、指标采集与一键降级实测', () => {
+describe('Carlos Flow 规则灰度引擎、指标看板、告警阈值与降级恢复全链路实测', () => {
   let tmpHome;
 
   beforeEach(() => {
@@ -57,21 +60,59 @@ describe('Carlos Flow 规则灰度引擎、指标采集与一键降级实测', (
     assert.equal(summary.ruleHits['R7'], 1);
   });
 
-  it('3. 一键降级熔断开关 (bypass)：跳过所有规则校验并记录 BYPASS', () => {
-    process.env.CARLOS_RULES_BYPASS = 'true';
-    const res = checkCardScopeRules(['.git/config'], [], { confirmed: false });
-    assert.equal(res.ok, true); // 即使 R3 也被熔断放行
-    assert.equal(res.violations.length, 0);
+  it('3. 一键降级与回滚恢复流程实测 (Bypass -> Rollback to Enforce)', () => {
+    // 初始状态：处于严格拦截模式
+    assert.equal(checkCommandRules('rm -rf /').ok, false);
 
-    const cmdRes = checkCommandRules('rm -rf /');
-    assert.equal(cmdRes.ok, true);
+    // 步骤 1：触发一键紧急降级 (Kill-Switch)
+    const bypassCfg = triggerEmergencyBypass('production_incident_emergency');
+    assert.equal(bypassCfg.mode, 'bypass');
+    assert.equal(getRulesEngineConfig().mode, 'bypass');
 
-    const summary = getRulesMetricsSummary();
-    assert.equal(summary.bypassedCount, 2);
-    assert.equal(summary.blockedCount, 0);
+    // 验证降级后：所有危险调用被熔断放行（避免卡死业务）
+    assert.equal(checkCardScopeRules(['.git/config'], [], { confirmed: false }).ok, true);
+    assert.equal(checkCommandRules('rm -rf /').ok, true);
+
+    // 检查看板感知到降级运行告警
+    const dashboardDuringBypass = evaluateRulesDashboard();
+    assert.equal(dashboardDuringBypass.mode, 'bypass');
+    assert.ok(dashboardDuringBypass.alarms.some((a) => a.type === 'ENGINE_BYPASSED'));
+
+    // 步骤 2：故障排查完毕，执行一键回滚恢复 (Rollback to Enforce)
+    const restoredCfg = rollbackRulesEngine('enforce');
+    assert.equal(restoredCfg.mode, 'enforce');
+    assert.equal(getRulesEngineConfig().mode, 'enforce');
+
+    // 验证恢复后：硬门禁重新生效
+    assert.equal(checkCommandRules('rm -rf /').ok, false);
+    assert.equal(checkCardScopeRules(['.git/config'], [], { confirmed: false }).ok, false);
   });
 
-  it('4. 真实样本数据集验证：精确测算误拦率 (FPR) 与漏拦率 (FNR)', () => {
+  it('4. 灰度看板与告警阈值自动判定 (Dashboard & Alarms)', () => {
+    process.env.CARLOS_RULES_MODE = 'enforce';
+
+    // 注入大量阻断样本，模拟高误拦/高频攻击激增场景
+    for (let i = 0; i < 6; i++) {
+      checkCommandRules('rm -rf /'); // 6 次阻断
+    }
+    for (let i = 0; i < 4; i++) {
+      checkCommandRules('npm test'); // 4 次放行
+    }
+
+    const dashboard = evaluateRulesDashboard();
+    assert.equal(dashboard.metrics.totalEvaluations, 10);
+    assert.equal(dashboard.metrics.blockedCount, 6);
+    assert.equal(dashboard.metrics.passedCount, 4);
+    assert.equal(dashboard.metrics.blockRatePct, 60.0);
+
+    // 阻断率 60% > 告警阈值 20%，必须触发 HIGH_BLOCK_RATE 告警
+    assert.equal(dashboard.health, 'UNHEALTHY');
+    const highBlockAlarm = dashboard.alarms.find((a) => a.type === 'HIGH_BLOCK_RATE');
+    assert.ok(highBlockAlarm);
+    assert.equal(highBlockAlarm.level, 'CRITICAL');
+  });
+
+  it('5. 真实样本数据集验证：精确测算误拦率 (FPR) 与漏拦率 (FNR)', () => {
     process.env.CARLOS_RULES_MODE = 'enforce';
 
     // 真实业务与恶意攻击基准数据集 (30 条典型样本)

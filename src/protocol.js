@@ -43,7 +43,7 @@ auditor 报告 ≤200 字，五段式：裁定 / 失败类型 / scope 标注 / �
 
   FULL_TASK_WIZARD: 'Cindy start_wizard 的 open/prepare 在当前 Host 本机可写任务只读采样并供准确意图卡；resume 只消费原生确认的独立expected，不进后端参数、不锁未来SID。普通call_tool不补SID/cwd、不碰向导KV，旧STALE expected保留。页面三项内存草稿只是未可信提案，按钮零Node/Agent；现有原生卡真票continue后新active resume，协调一个动作后本回合prepare下一意图卡，不要求用户催技术调用。目标→范围→执行→真实检查负对照与还原→独立审查→结果依据flow_status真源，不扩权限、免检、自动PASS或重放。缓存异常只影响展示；确认异常failclosed，LWW非CAS/exactlyonce，真实Host连续闭环仍待验。',
 
-  STALE_WIZARD: '仅PASS真实指纹STALE供三按钮卡；查看/暂缓仅KV且不取消已提交重查。重新检查以真实点击票Agent continue后发新工具调用，沿原权限，不复活旧callId。expected可选；无效绝不fallback。不可变offer与永久wx claim按同旧验证代最多启动一次；满128代fail-closed，无GC，不封普通手动验证。未知结果不自动重放/PASS/falsify；不承诺硬件掉电exactly-once。',
+  STALE_WIZARD: '仅PASS真实指纹STALE在本地可写且有限未来期限供三按钮卡；本实例内存绑定callId/SID/caseKey/期限，KV不可恢复资格。await后重核对象，view/retry同步领取各一次，未知不回滚重试，跨SID不更新真实卡。查看真票Agent continue原会话，新活跃工具先flow_status核当前卡再flow_diff_hunks读真实当前Git未暂存差异、非验证时快照；错误不称无变化，空结果不推断未跟踪/暂存无变化，摘要仅数量/行区间，不输出命令路径原始diff，不执行验证。暂缓终止后续交互、不撤已提交请求。重验真票continue携expected，无效绝不fallback，不复用旧callId。纯规则不变，Agent仅工具续接非新增决策层。不可变offer与永久wx claim按同旧验证代最多启动一次；满128代fail-closed，无GC，不封普通手动验证。未知不重放/PASS/falsify，不承诺硬件exactly-once；真实桌面手机点击未验。',
 
   AUDIT_EVENTS: `["run","finding","decision","resolution"]`,
 

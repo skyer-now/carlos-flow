@@ -45,6 +45,13 @@ export const RULES_METADATA = [
   { id: 'R15', name: '测试文件修改与负对照证伪隔离', category: 'agent_anti_cheat', level: 'FAIL' },
 ];
 
+// 默认告警阈值配置（可动态覆盖）
+export const DEFAULT_ALARM_THRESHOLDS = {
+  maxBlockRatePct: 20.0, // 拦截率上限阈值 (阻断率超 20% 告警)
+  maxShadowViolationRatePct: 30.0, // 影子模式异常率上限 (超 30% 告警)
+  minEvaluationsForAlarm: 5, // 触发统计告警的最小样本基数
+};
+
 // R1: 敏感凭据文件名与目录段
 const CREDENTIAL_NAMES = new Set([
   '.env', '.env.local', '.env.development', '.env.production', '.env.test',
@@ -75,6 +82,7 @@ export function getRulesEngineConfig() {
     strictRules: ['R3', 'R7', 'R8', 'R9'],
     confirmableRules: ['R1', 'R2', 'R12', 'R14', 'R15'],
     advisoryRules: ['R4', 'R5', 'R10', 'R13'],
+    alarmThresholds: { ...DEFAULT_ALARM_THRESHOLDS },
   };
 
   const home = resolveFlowHome();
@@ -82,7 +90,11 @@ export function getRulesEngineConfig() {
   try {
     if (fs.existsSync(configFile)) {
       const parsed = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-      config = { ...config, ...parsed };
+      config = {
+        ...config,
+        ...parsed,
+        alarmThresholds: { ...DEFAULT_ALARM_THRESHOLDS, ...(parsed.alarmThresholds || {}) },
+      };
       if (isKillSwitch) config.mode = 'bypass';
     }
   } catch {
@@ -90,6 +102,59 @@ export function getRulesEngineConfig() {
   }
 
   return config;
+}
+
+/**
+ * 动态修改灰度配置或执行一键降级 / 一键回滚恢复
+ * @param {Object} patchConfig 待更新的配置片段
+ * @returns {Object} 更新后的全局配置
+ */
+export function setRulesEngineConfig(patchConfig = {}) {
+  const home = resolveFlowHome();
+  const configFile = path.join(home, 'rules-config.json');
+  const current = getRulesEngineConfig();
+
+  const next = {
+    ...current,
+    ...patchConfig,
+    alarmThresholds: {
+      ...current.alarmThresholds,
+      ...(patchConfig.alarmThresholds || {}),
+    },
+  };
+
+  try {
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify(next, null, 2), 'utf8');
+  } catch (err) {
+    // 写入异常仍返回内存合并态
+  }
+
+  return next;
+}
+
+/**
+ * 一键降级开关：将规则引擎切换至 bypass 熔断放行状态
+ */
+export function triggerEmergencyBypass(reason = 'manual_kill_switch') {
+  recordRuleMetrics({
+    hook: 'admin',
+    decision: 'EMERGENCY_BYPASS_TRIGGERED',
+    reason,
+  });
+  return setRulesEngineConfig({ mode: 'bypass', bypassReason: reason, bypassAt: new Date().toISOString() });
+}
+
+/**
+ * 一键回滚与恢复：重置回默认生产严格模式（enforce）或指定模式（shadow）
+ */
+export function rollbackRulesEngine(targetMode = 'enforce') {
+  recordRuleMetrics({
+    hook: 'admin',
+    decision: 'ROLLBACK_TRIGGERED',
+    targetMode,
+  });
+  return setRulesEngineConfig({ mode: targetMode, bypassReason: null, bypassAt: null });
 }
 
 /**
@@ -113,7 +178,7 @@ export function recordRuleMetrics(event = {}) {
 }
 
 /**
- * 获取累计规则指标统计 (用于误拦率与漏拦率实时核算)
+ * 获取累计规则指标统计 (用于误拦率与漏拦率实时核算及看板呈现)
  */
 export function getRulesMetricsSummary() {
   const home = resolveFlowHome();
@@ -123,6 +188,7 @@ export function getRulesMetricsSummary() {
     blockedCount: 0,
     shadowViolations: 0,
     bypassedCount: 0,
+    passedCount: 0,
     ruleHits: {},
     recentEvents: [],
   };
@@ -141,6 +207,7 @@ export function getRulesMetricsSummary() {
         if (ev.decision === 'BLOCKED') summary.blockedCount++;
         if (ev.decision === 'SHADOW_WARN') summary.shadowViolations++;
         if (ev.decision === 'BYPASS') summary.bypassedCount++;
+        if (ev.decision === 'PASS') summary.passedCount++;
 
         if (ev.rule) {
           summary.ruleHits[ev.rule] = (summary.ruleHits[ev.rule] || 0) + 1;
@@ -153,6 +220,70 @@ export function getRulesMetricsSummary() {
   } catch {}
 
   return summary;
+}
+
+/**
+ * 灰度指标综合看板与告警状态判定
+ * 实时计算阻断率、影子违规率，并与告警阈值对比输出告警清单与运行健康度
+ */
+export function evaluateRulesDashboard() {
+  const config = getRulesEngineConfig();
+  const summary = getRulesMetricsSummary();
+  const thresholds = config.alarmThresholds || DEFAULT_ALARM_THRESHOLDS;
+
+  const total = summary.totalEvaluations;
+  const blockRate = total > 0 ? (summary.blockedCount / total) * 100 : 0;
+  const shadowRate = total > 0 ? (summary.shadowViolations / total) * 100 : 0;
+
+  const alarms = [];
+
+  // 告警检测 1：阻断率超标告警 (防止误拦激增卡死产线)
+  if (total >= thresholds.minEvaluationsForAlarm && blockRate > thresholds.maxBlockRatePct) {
+    alarms.push({
+      level: 'CRITICAL',
+      type: 'HIGH_BLOCK_RATE',
+      message: `🚨 规则硬阻断率达 ${blockRate.toFixed(2)}%，已突破告警阈值 ${thresholds.maxBlockRatePct}%！`,
+      hint: '可能存在规则过严导致的集中误拦，建议通过 triggerEmergencyBypass 一键降级或转为 shadow 模式排查。',
+    });
+  }
+
+  // 告警检测 2：影子模式违规率异常告警
+  if (total >= thresholds.minEvaluationsForAlarm && shadowRate > thresholds.maxShadowViolationRatePct) {
+    alarms.push({
+      level: 'WARNING',
+      type: 'HIGH_SHADOW_VIOLATION_RATE',
+      message: `⚠️ 影子模式潜在拦截率达 ${shadowRate.toFixed(2)}%，突破预警阈值 ${thresholds.maxShadowViolationRatePct}%。`,
+      hint: '全量开启 enforce 严格模式前，请先核验违规样本是否包含合法业务场景。',
+    });
+  }
+
+  // 告警检测 3：熔断降级运行告警 (提醒当前门禁处于关闭状态)
+  if (config.mode === 'bypass') {
+    alarms.push({
+      level: 'WARNING',
+      type: 'ENGINE_BYPASSED',
+      message: '⚠️ 规则引擎当前处于一键降级熔断状态 (BYPASS)，所有安全规则已放行。',
+      hint: '排查或紧急发布完毕后，请调用 rollbackRulesEngine("enforce") 恢复标准门禁。',
+    });
+  }
+
+  return {
+    mode: config.mode,
+    health: alarms.some((a) => a.level === 'CRITICAL') ? 'UNHEALTHY' : alarms.length > 0 ? 'WARNING' : 'HEALTHY',
+    metrics: {
+      totalEvaluations: total,
+      blockedCount: summary.blockedCount,
+      shadowViolations: summary.shadowViolations,
+      bypassedCount: summary.bypassedCount,
+      passedCount: summary.passedCount,
+      blockRatePct: Number(blockRate.toFixed(2)),
+      shadowViolationRatePct: Number(shadowRate.toFixed(2)),
+    },
+    thresholds,
+    ruleHits: summary.ruleHits,
+    alarms,
+    recentEvents: summary.recentEvents,
+  };
 }
 
 /**

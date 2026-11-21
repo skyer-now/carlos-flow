@@ -57,7 +57,9 @@ settings.html/js 共享壳：有 Host session 查询即任务展示分支，非�
 
 每会话最多128代；offer发行预留相应claim槽，共最多256文件，不做bounded淘汰/自动GC。满额/未知目录只关闭向导，不禁止普通验证。人工删除/目录回滚、混跑不遵守协议的writer、任意外部文件替换及硬件掉电丢记录不在保证内。Windows只做file fsync、不冒充目录项耐久；POSIX目录同步返回成功也不是硬件掉电exactly-once。
 
-main 原callId交卷前只供一张三按钮卡：「查看变化」「重新检查」「暂不继续」。KV仅24条白名单展示记录、整体LWW；不含cmd、路径、diff、点击token，不能充当CAS权威。查看明确是检测时摘要、非实时；查看/暂缓零Node/Agent。暂缓只收起，不取消或撤已提交retry。重新检查仅消费真实callback userActionToken，`agent.run(mode=continue)` 回原会话，提示新工具调用携带expected，不能复用旧callId发执行RPC。并发KV可导致多Agent回合，永久claim仍最多一次spawn；capability/receipt身份不等于Host auth。
+main 原callId交卷前仅在本地可写且 expiresAt 为有限未来时供三按钮卡：「查看变化」「重新检查」「暂不继续」。本实例内存绑定 callId/SID/caseKey/期限，KV仅24条白名单展示记录、整体LWW，不含cmd、路径、diff、点击token，不能恢复重启或未知后的执行资格。回调每次await后重核当前对象；view/retry各一次，在读取后同一同步段领取再保存，互不阻止；失败不回滚。跨SID无效点击不更新真实卡。GET必须ok，GET/PUT/Agent异常中文未知，不泄露、不自动重试。暂缓终止后续交互但不撤已提交请求。
+
+查看与重验仅消费真实callback userActionToken，通过 `agent.run(mode=continue)` 续接原会话，不复用旧callId调Node。查看引导新活跃工具调用先flow_status核当前卡，再flow_diff_hunks读真实当前Git未暂存差异，明确非验证时快照；错误不能说无变化，空结果不推断未跟踪/暂存无变化；摘要仅数量/行区间，不输出原命令、路径或原始diff，不执行验证。重验始终携expected、不fallback。纯规则不变，Agent只是原会话工具续接而非新增AI决策层；capability/receipt身份不等于Host auth，同实例去重不是跨实例CAS。
 
 UI验证为VM运行真实main、仅模拟Host边界；后端用真实文件/子进程/marker。没有安装或手机桌面真人点击验收，不宣称实际UI E2E。Host依据0.1.139/9ffef649…匹配证据，不以latest代替；最低宿主版本以 ghost.json 为准；v2.18.x 的保守支持基线为 0.1.139，不宣称是相关能力的首次引入版本。原型阶段曾保留含义未明的 1.0.2，该记录不再代表当前清单；不新增 background 能力。
 
