@@ -70,7 +70,7 @@ export function parseTools(src) {
       if (!key) throw new Error('工具字段解析失败')
       return [key[1] || key[3], field.slice(key[0].length)]
     }))
-    const name = /^(['"])(flow_[a-z_]+)\1$/.exec(fields.get('name') || '')?.[2]
+    const name = /^(['"])([a-z0-9_]+)\1$/.exec(fields.get('name') || '')?.[2]
     if (!name) throw new Error('工具对象缺少可解析名称')
     const desc = fields.get('description') || ''
     const handlerValue = fields.get('handler') || ''

@@ -1,3 +1,15 @@
+# Carlos Flow v2.25.0 发布说明
+
+## 核心新特性
+
+### 1. 四大高阶复合门面工具 (High-Level Facades)
+- **`carlos_task`**：聚合管理任务的留痕、开卡、角色认领与派发 (`submit` / `claim` / `dispatch` / `start`)；
+- **`carlos_verify`**：聚合管理真实验证执行、反向负对照证伪与越界检查 (`run` / `falsify` / `check_scope`)；
+- **`carlos_review`**：聚合管理双轴独立审查派发、审查结论提交与最终裁定 (`axes` / `submit` / `guard` / `verdict`)；
+- **`carlos_manage`**：聚合管理状态查询、一键人话撤销、回滚计划与存储度量 (`status` / `cancel` / `revert` / `stats` / `bypass`)。
+
+---
+
 # Carlos Flow v2.24.0 发布说明
 
 ## 核心新特性

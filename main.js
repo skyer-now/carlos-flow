@@ -29,7 +29,7 @@ var CATEGORIES = [
       'scope 为空的卡按 fail-closed 处理：任何文件改动都算越界。',
       '激活占位卡（activation_pending 非空）必须先补齐 scope / acceptance / verify.cmd，否则 claim / dispatch / verdict 全被拒。',
     ],
-    members: ['flow_submit_requirement', 'flow_claim', 'flow_dispatch', 'flow_verdict'],
+    members: ['flow_submit_requirement', 'flow_claim', 'flow_dispatch', 'flow_verdict', 'carlos_task'],
   },
   {
     name: 'verify',
@@ -41,7 +41,7 @@ var CATEGORIES = [
       '记 PASS 前必须 flow_falsify：改动前跑必须失败、改动后跑必须通过，否则视为空测试。',
       '负对照会临时把文件改回旧内容；返回值里的 restore.ok=false 表示工作区还原没通过核对，要立刻人工确认。',
     ],
-    members: ['flow_run_verify', 'flow_falsify'],
+    members: ['flow_run_verify', 'flow_falsify', 'carlos_verify'],
   },
   {
     name: 'audit',
@@ -52,7 +52,7 @@ var CATEGORIES = [
       '任一轴 FAIL 硬拦；WARN 不硬拦，但会随裁定一起返回（warn_findings），汇报时不能吞。',
       'flow_audit 只读审计流水，可验证哈希链完整性；它不产生裁定。',
     ],
-    members: ['flow_audit_axes', 'flow_audit_submit', 'flow_audit_guard', 'flow_audit'],
+    members: ['flow_audit_axes', 'flow_audit_submit', 'flow_audit_guard', 'flow_audit', 'carlos_review'],
   },
   {
     name: 'infra',
@@ -67,7 +67,7 @@ var CATEGORIES = [
     ],
     members: [
       'flow_status', 'flow_stats', 'flow_protocol', 'flow_mode', 'flow_bypass', 'flow_cancel', 'flow_add_user_msg',
-      'flow_save_result', 'flow_revert_plan', 'flow_check_scope', 'flow_diff_hunks',
+      'flow_save_result', 'flow_revert_plan', 'flow_check_scope', 'flow_diff_hunks', 'carlos_manage',
     ],
   },
   {

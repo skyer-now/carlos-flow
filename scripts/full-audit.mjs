@@ -330,8 +330,8 @@ if (TWO_LEVEL) {
   }
   for (const t of uniqueServer) if (!uniqMembers.includes(t)) P("工具清单", `main.js 类目表缺操作 ${t}（Cindy 里将无法调用）`);
   for (const t of uniqMembers) if (!uniqueServer.includes(t)) P("工具清单", `main.js 类目表声明了服务端不存在的操作 ${t}`);
-  // 被声明的每个成员都必须落在工具名前缀上，防止把类目名当工具名写进去
-  for (const t of uniqMembers) if (!/^flow_/.test(t)) P("工具清单", `main.js 类目表里的 ${t} 不是 flow_* 操作`);
+  // 被声明的每个成员都必须落在合法工具名前缀上（flow_* 或 carlos_* 复合门面）
+  for (const t of uniqMembers) if (!/^(flow_|carlos_)/.test(t)) P("工具清单", `main.js 类目表里的 ${t} 不是合法操作名`);
   if (ghostJson?.kind !== "chip") P("工具清单", `两段式插件必须 kind=chip（当前 ${ghostJson?.kind}）`);
   if (ghostJson?.entry !== "main.js") P("工具清单", `两段式插件的 entry 必须是 main.js（当前 ${ghostJson?.entry}）`);
   const nodeEntry = ghostJson?.node?.entry;

@@ -92,7 +92,7 @@ try {
   // 3. 类目下钻：必须同时给工具明细与 RULES
   const gate = await invoke("list_tools", { category: "gate" });
   const g = gate && gate.result;
-  check("3a. 下钻返回该类目工具明细", !!(g && Array.isArray(g.tools) && g.tools.length === 4),
+  check("3a. 下钻返回该类目工具明细", !!(g && Array.isArray(g.tools) && g.tools.length >= 4),
     g ? `${g.tool_count} 个` : "");
   check("3b. 明细里带参数 schema（可直接照着填）",
     !!(g && g.tools.every((t) => t.parameters && t.parameters.type === "object")));

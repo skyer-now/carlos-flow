@@ -1,3 +1,7 @@
+## [2.25.0] - 2026-11-20
+
+- **四大高阶复合门面工具 (High-Level Facades)**：新增 `carlos_task`（任务生命周期）、`carlos_verify`（验证与反向证伪）、`carlos_review`（独立审查与裁定）、`carlos_manage`（状态运维与回滚）四大高阶门面，聚合并替代底层频繁的细粒度单次调用，降低大模型交互轮次与 Token 消耗，彻底解决宿主工具面膨胀问题。
+
 ## [2.24.0] - 2026-11-20
 
 - **在线隐式强化学习引擎 (LearnedRulesManager)**：自动捕获 `flow_cancel`、`flow_bypass`、超时老化与 PASS 履约等用户交互行为信号，将误触句式特征提炼存入本地抑制规则库（`~/.carlos-flow/learned-rules.json`），动态自适应调整触发阈值，被叫停过的句式永久自愈，绝不在同一处犯错第二次。
