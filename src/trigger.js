@@ -746,6 +746,11 @@ class TriggerDecisionEngine {
       });
     }
 
+    // 5. 空闲时异步调度自动归档（7天终态会话无感冷冻）
+    try {
+      import('./storage.js').then((m) => m.scheduleAutoPrune?.()).catch(() => {});
+    } catch {}
+
     const outcome = {
       shouldTrigger: decision === 'trigger',
       decision,
