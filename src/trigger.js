@@ -721,9 +721,8 @@ class TriggerDecisionEngine {
       : config.triggerThreshold;
 
     // 反馈学习：负反馈多 → 抬高触发阈值（更保守）；正反馈多 → 降低阈值（更灵敏）
-    // 三个来源：当前会话即时反馈 + 配置持久化偏移 + 在线学习规则管理器偏移
-    const learnedOffset = Number(LearnedRulesManager.load().threshold_offset) || 0;
-    const feedbackAdj = this.getFeedbackThresholdAdjustment() + (Number(config.feedbackThresholdOffset) || 0) + learnedOffset;
+    // 两个来源：当前会话即时反馈 + 配置持久化偏移
+    const feedbackAdj = this.getFeedbackThresholdAdjustment() + (Number(config.feedbackThresholdOffset) || 0);
     const effectiveThreshold = Math.max(1, threshold + feedbackAdj);
 
     let decision;

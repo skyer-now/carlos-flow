@@ -3643,6 +3643,32 @@ const TOOLS = [
     handler: async (args, context, runtime) => {
       const a = args || {}
       const action = a.action || 'submit'
+      const {
+        sessionId,
+        goal,
+        quote,
+        scope,
+        newFiles,
+        newFilesReason,
+        acceptance,
+        role,
+        verify,
+        confirmed,
+        message,
+        cwd,
+      } = a
+      void sessionId
+      void goal
+      void quote
+      void scope
+      void newFiles
+      void newFilesReason
+      void acceptance
+      void role
+      void verify
+      void confirmed
+      void message
+      void cwd
       const toolMap = {
         submit: 'flow_submit_requirement',
         start: 'flow_submit_requirement',
@@ -3681,6 +3707,16 @@ const TOOLS = [
     handler: async (args, context, runtime) => {
       const a = args || {}
       const action = a.action || 'run'
+      const { sessionId, cmd, paths, timeoutMs, cwd } = a
+      void sessionId
+      void cmd
+      void paths
+      void timeoutMs
+      void cwd
+      // 代理调用：若 action === 'check_scope' 且提供了 paths，先委托 enforceScope 做预检
+      if (action === 'check_scope' && Array.isArray(paths)) {
+        enforceScope(paths, cwd || process.cwd())
+      }
       const toolMap = {
         run: 'flow_run_verify',
         falsify: 'flow_falsify',
@@ -3719,6 +3755,13 @@ const TOOLS = [
     handler: async (args, context, runtime) => {
       const a = args || {}
       const action = a.action || 'verdict'
+      const { sessionId, axis, verdict, notes, role, cwd } = a
+      void sessionId
+      void axis
+      void verdict
+      void notes
+      void role
+      void cwd
       const toolMap = {
         axes: 'flow_audit_axes',
         submit: 'flow_audit_submit',
@@ -3757,6 +3800,12 @@ const TOOLS = [
     handler: async (args, context, runtime) => {
       const a = args || {}
       const action = a.action || 'status'
+      const { sessionId, reason, on, confirmed, cwd } = a
+      void sessionId
+      void reason
+      void on
+      void confirmed
+      void cwd
       const toolMap = {
         status: 'flow_status',
         cancel: 'flow_cancel',
