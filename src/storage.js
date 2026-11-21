@@ -456,22 +456,25 @@ export function applyPrune(plan, { apply = false, archiveRoot } = {}) {
  * 铁律：gate-audit 审计流水绝不参与归档或删除。
  */
 let lastAutoPruneTime = 0
-export function scheduleAutoPrune({ olderThanDays = 7, archiveRoot } = {}) {
+export function scheduleAutoPrune({ olderThanDays = 7, archiveRoot, force = false } = {}) {
   const now = Date.now()
-  // 最小调度间隔：24小时内最多执行一次自动归档
-  if (now - lastAutoPruneTime < 24 * 60 * 60 * 1000) return
+  // 最小调度间隔：24小时内最多执行一次自动归档（除非 force=true）
+  if (!force && (now - lastAutoPruneTime < 24 * 60 * 60 * 1000)) return
   lastAutoPruneTime = now
 
   // 非阻塞异步执行
-  setTimeout(() => {
+  const timer = setTimeout(() => {
     try {
-      const plan = planPrune({ olderThanDays, prefixes: null })
+      const plan = planPrune({ inactiveDays: olderThanDays })
       if (plan && Array.isArray(plan.archivable) && plan.archivable.length > 0) {
         applyPrune(plan, { apply: true, archiveRoot })
       }
     } catch {
       // 归档异常绝不影响主流程
     }
-  }, 1000).unref?.()
+  }, 100)
+  timer.unref?.()
+  return timer
 }
+
 
