@@ -68,6 +68,73 @@
 }
 ```
 
+## 4. Tencent WorkBuddy
+
+写入 `~/.workbuddy/mcp.json` 或直接运行 `node client/carlos.js init --target workbuddy`：
+
+```json
+{
+  "mcpServers": {
+    "carlos-flow": {
+      "command": "node",
+      "args": ["<INSTALL_PATH>/src/index.js"],
+      "env": {
+        "CARLOS_FLOW_HOME": "~/.carlos-flow"
+      }
+    }
+  }
+}
+```
+
+## 5. OpenAI Codex CLI
+
+写入 `~/.codex/config.toml` 或直接运行 `node client/carlos.js init --target codex`：
+
+```toml
+[mcp_servers.carlos-flow]
+command = "node"
+args = ["<INSTALL_PATH>/src/index.js"]
+
+[mcp_servers.carlos-flow.env]
+CARLOS_FLOW_HOME = "~/.carlos-flow"
+```
+
+## 6. ByteDance Trae / 豆包 MarsCode
+
+写入 `.trae/mcp.json` 或直接运行 `node client/carlos.js init --target trae`：
+
+```json
+{
+  "mcpServers": {
+    "carlos-flow": {
+      "command": "node",
+      "args": ["<INSTALL_PATH>/src/index.js"],
+      "env": {
+        "CARLOS_FLOW_HOME": "~/.carlos-flow"
+      }
+    }
+  }
+}
+```
+
+## 7. Alibaba Qoder (通义灵码)
+
+写入 `.qoder/mcp.json` 或直接运行 `node client/carlos.js init --target qoder`：
+
+```json
+{
+  "mcpServers": {
+    "carlos-flow": {
+      "command": "node",
+      "args": ["<INSTALL_PATH>/src/index.js"],
+      "env": {
+        "CARLOS_FLOW_HOME": "~/.carlos-flow"
+      }
+    }
+  }
+}
+```
+
 ---
 
 ## 配置自检

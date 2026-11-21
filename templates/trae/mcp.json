@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "carlos-flow": {
+      "command": "node",
+      "args": [
+        "__ROOT__/src/index.js"
+      ],
+      "env": {
+        "CARLOS_FLOW_HOME": "__FLOW_HOME__"
+      }
+    }
+  }
+}

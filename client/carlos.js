@@ -179,9 +179,20 @@ if (toolName === "init") {
   const target = process.argv.includes("--target")
     ? process.argv[process.argv.indexOf("--target") + 1]
     : process.env.CARLOS_INIT_TARGET;
-  const VALID_TARGETS = ["cindy", "opencode", "cursor", "cline", "vscode", "claude"];
+  const VALID_TARGETS = [
+    "cindy",
+    "opencode",
+    "cursor",
+    "cline",
+    "vscode",
+    "claude",
+    "workbuddy",
+    "codex",
+    "trae",
+    "qoder",
+  ];
   if (!target || !VALID_TARGETS.includes(target)) {
-    console.error("用法: node carlos.js init --target cindy|opencode|cursor|cline|vscode|claude");
+    console.error("用法: node carlos.js init --target cindy|opencode|cursor|cline|vscode|claude|workbuddy|codex|trae|qoder");
     console.error("  或设置环境变量 CARLOS_INIT_TARGET=<target>");
     process.exit(1);
   }
@@ -215,7 +226,7 @@ if (toolName === "clean") {
 if (!toolName) {
   console.error("用法: node carlos.js <工具名> [json参数]");
   console.error("      node carlos.js clean [--apply] [--older-than 7]   清理测试残留会话（默认只列不删）");
-  console.error("      node carlos.js init --target cindy|opencode|cursor|cline|vscode|claude");
+  console.error("      node carlos.js init --target cindy|opencode|cursor|cline|vscode|claude|workbuddy|codex|trae|qoder");
   console.error("");
   console.error("最常用的三个工具（其余见 flow_protocol）：");
   console.error("  flow_status     看当前进度：有没有任务卡、走到哪一步、下一步该做什么");
@@ -663,6 +674,76 @@ async function runInit(target) {
     
     writeFileSync(configPath, JSON.stringify(existing, null, 2), "utf8");
     console.log(`✅ Claude Desktop 配置已更新: ${configPath}`);
+  } else if (target === "workbuddy") {
+    // 写入腾讯 WorkBuddy 全局配置：~/.workbuddy/mcp.json
+    const wbDir = join(home, ".workbuddy");
+    mkdirSync(wbDir, { recursive: true });
+    const wbPath = join(wbDir, "mcp.json");
+    
+    let existing = {};
+    if (existsSync(wbPath)) {
+      try { existing = JSON.parse(readFileSync(wbPath, "utf8")); } catch {}
+    }
+    if (!existing.mcpServers) existing.mcpServers = {};
+    
+    const templatePath = resolve(ROOT_ABS, "templates", "workbuddy", "mcp.json");
+    const template = JSON.parse(readFileSync(templatePath, "utf8"));
+    existing.mcpServers["carlos-flow"] = template.mcpServers["carlos-flow"];
+    
+    if (existing.mcpServers["carlos-flow"].args) {
+      existing.mcpServers["carlos-flow"].args = existing.mcpServers["carlos-flow"].args.map(a => a.replace(/__ROOT__/g, ROOT_ABS));
+    }
+    if (existing.mcpServers["carlos-flow"].env) {
+      for (const k of Object.keys(existing.mcpServers["carlos-flow"].env)) {
+        existing.mcpServers["carlos-flow"].env[k] = existing.mcpServers["carlos-flow"].env[k].replace(/__FLOW_HOME__/g, flowHome).replace(/__ROOT__/g, ROOT_ABS);
+      }
+    }
+    writeFileSync(wbPath, JSON.stringify(existing, null, 2), "utf8");
+    console.log(`✅ Tencent WorkBuddy 配置已更新: ${wbPath}`);
+  } else if (target === "codex") {
+    // 写入 OpenAI Codex CLI 配置：~/.codex/config.toml
+    const codexDir = join(home, ".codex");
+    mkdirSync(codexDir, { recursive: true });
+    const codexPath = join(codexDir, "config.toml");
+    
+    const templatePath = resolve(ROOT_ABS, "templates", "codex", "config.toml");
+    let content = readFileSync(templatePath, "utf8");
+    // TOML 格式 Windows 反斜杠需归一化为正斜杠或转义
+    content = content.replace(/__ROOT__/g, rootYaml).replace(/__FLOW_HOME__/g, flowHome.replace(/\\/g, "/"));
+    
+    let existing = "";
+    if (existsSync(codexPath)) {
+      existing = readFileSync(codexPath, "utf8");
+    }
+    if (!existing.includes("[mcp_servers.carlos-flow]")) {
+      const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n\n" : "";
+      writeFileSync(codexPath, existing + separator + content.trim() + "\n", "utf8");
+      console.log(`✅ OpenAI Codex 配置已追加: ${codexPath}`);
+    } else {
+      console.log(`ℹ️ OpenAI Codex 配置中已包含 carlos-flow: ${codexPath}`);
+    }
+  } else if (target === "trae") {
+    // 写入字节跳动 Trae 项目配置：.trae/mcp.json
+    const configDir = join(process.cwd(), ".trae");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, "mcp.json");
+    
+    const templatePath = resolve(ROOT_ABS, "templates", "trae", "mcp.json");
+    const template = readFileSync(templatePath, "utf8");
+    const content = template.replace(/__ROOT__/g, rootJson).replace(/__FLOW_HOME__/g, JSON.stringify(flowHome).slice(1, -1));
+    writeFileSync(configPath, content, "utf8");
+    console.log(`✅ ByteDance Trae 配置已写入: ${configPath}`);
+  } else if (target === "qoder") {
+    // 写入阿里通义灵码 Qoder 项目配置：.qoder/mcp.json
+    const configDir = join(process.cwd(), ".qoder");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, "mcp.json");
+    
+    const templatePath = resolve(ROOT_ABS, "templates", "qoder", "mcp.json");
+    const template = readFileSync(templatePath, "utf8");
+    const content = template.replace(/__ROOT__/g, rootJson).replace(/__FLOW_HOME__/g, JSON.stringify(flowHome).slice(1, -1));
+    writeFileSync(configPath, content, "utf8");
+    console.log(`✅ Alibaba Qoder 配置已写入: ${configPath}`);
   }
   console.log(`\n🎉 初始化完成！现在可以使用 carlos-flow 了。`);
   console.log(`   提示: 设置环境变量 CARLOS_FLOW_HOME 可自定义状态目录（默认 ~/.carlos-flow）`);

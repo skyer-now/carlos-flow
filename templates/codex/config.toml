@@ -1,0 +1,6 @@
+[mcp_servers.carlos-flow]
+command = "node"
+args = ["__ROOT__/src/index.js"]
+
+[mcp_servers.carlos-flow.env]
+CARLOS_FLOW_HOME = "__FLOW_HOME__"

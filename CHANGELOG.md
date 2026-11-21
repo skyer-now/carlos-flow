@@ -1,3 +1,8 @@
+## [2.27.0] - 2026-11-21
+
+- **WorkBuddy / Codex / Trae / Qoder 跨客户端一键初始化与模板支持**：在 `templates/` 新增 Tencent WorkBuddy、OpenAI Codex CLI、ByteDance Trae、Alibaba Qoder (通义灵码) 预置配置模板，扩展 `client/carlos.js init --target` 支持，实现环境 PATH 探测与绝对路径/正斜杠安全渲染，彻底解决跨平台反斜杠非法转义与 GUI 子进程 ENOENT 问题。
+- **跨平台文档完善**：`INSTALL.md` 与中英文 README 增加各大国产 AI IDE 与 WorkBuddy / Codex 的接入与排障章节。
+
 ## [2.26.0] - 2026-11-21
 
 - **异步无感自动归档调度器 (scheduleAutoPrune)**：实现 7 天终态完工会话在空闲时异步自动迁移归档至 `archive/` 目录，彻底释放历史会话存储压力与 IO 负载；严格保护 `gate-audit/*.jsonl` 审计流水与活跃未决会话 100% 绝对不被破坏。
@@ -327,6 +332,12 @@
 > Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), versioning follows [SemVer](https://semver.org/)
 
 ---
+
+## [2.27.0] - 2026-11-21 — 增加 WorkBuddy、Codex、Trae、Qoder 模板与 init 兼容初始化支持
+
+### ✨ 新增 | Added
+
+- （待补充）
 
 ## [2.26.0] - 2026-11-21 — 异步无感自动归档调度器落地与状态自愈优化
 

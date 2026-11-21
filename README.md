@@ -62,6 +62,18 @@ carlos-flow init --target vscode
 
 # Cline / Claude Desktop 环境
 carlos-flow init --target cline
+
+# Tencent WorkBuddy 环境
+carlos-flow init --target workbuddy
+
+# OpenAI Codex CLI 环境
+carlos-flow init --target codex
+
+# ByteDance Trae 环境
+carlos-flow init --target trae
+
+# Alibaba Qoder (通义灵码) 环境
+carlos-flow init --target qoder
 ```
 
 ### 3. 验证服务状态

@@ -21,6 +21,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { serveStdio } from './mcp-stdio.mjs'
 import { PROTOCOL, loadProjectSensitiveConfig } from './protocol.js'
 import { parseCard, validateCard, validateNewFiles, riskTier, isSensitive, pathKey, checkNewFilesBoundary, detectProjectTestCommand, validateAgentMesh } from './card.js'
+import { checkCardScopeRules, checkCommandRules, checkGitDiffRules, checkCodePatternRules, checkPhantomDependencies } from './rules.js'
 import { deriveWizardStatus, generateQASheet } from '../ui/narrator.js'
 import { storageOverview } from './storage.js'
 import {
@@ -1154,6 +1155,32 @@ const TOOLS = [
           card.agents = meshCheck.agents
         }
 
+        // 15条通用防撞规则：在提交层前置校验白名单敏感资产 (R1~R3, R15)
+        // 占位卡阶段（空 scope）或只读调研不阻断
+        const isActivationInit = a.activation === true || card.activation === true
+        if (!isActivationInit && Array.isArray(card.scope) && card.scope.length > 0) {
+          const scopeRulesCheck = checkCardScopeRules(card.scope, card.new_files, {
+            confirmed: a.confirmed === true || card.confirmed === true,
+          })
+          if (!scopeRulesCheck.ok) {
+            const failViolation = scopeRulesCheck.violations.find((v) => v.level === 'FAIL')
+            if (failViolation) {
+              audit('decision', sessionId, {
+                kind: 'blocked',
+                rule: failViolation.rule,
+                reason: failViolation.message,
+                tier: riskTier(card.scope),
+              })
+              return ok({
+                ok: false,
+                reason: `${failViolation.message}\n💡 提示：${failViolation.hint}`,
+                findings: [failViolation.message],
+                tier: riskTier(card.scope),
+              })
+            }
+          }
+        }
+
         const tier = riskTier(card.scope)
         const result = validateCard(card, options)
         const findings =
@@ -2142,6 +2169,21 @@ const TOOLS = [
             )
           }
 
+          // 15条通用防撞规则：R11 降级断言 / R13 格式污染检查
+          try {
+            const diffProc = spawnSync('git', ['diff', 'HEAD'], { cwd: scopeRootNow, encoding: 'utf8', windowsHide: true })
+            if (diffProc.status === 0 && diffProc.stdout) {
+              const diffRules = checkGitDiffRules(diffProc.stdout)
+              if (!diffRules.ok) {
+                const failV = diffRules.violations.find((v) => v.level === 'FAIL')
+                if (failV) {
+                  audit('decision', sessionId, { kind: 'verdict_denied', rule: failV.rule, reason: failV.message })
+                  return fail(`${failV.message}\n💡 提示：${failV.hint}`)
+                }
+              }
+            }
+          } catch { /* ignore git diff errors */ }
+
           // ── 门禁 7/9（仅 PASS）：裁定角色必须是 auditor ──
           // role 门禁绑定到会话 ID（claimed_role），而非调用方自述字符串
           if (verdict === 'PASS' && state.claimed_role !== 'auditor') {
@@ -3025,6 +3067,20 @@ const TOOLS = [
           receipt = await claimStaleOffer(sessionId, a.expected, a.cwd, context.workdir)
           verifiedCmd = receipt.cmd
           workdir = receipt.cwd
+        }
+
+        // 15条通用防撞规则：R7/R8 危险命令与全局盲杀前置拦截
+        const cmdRulesCheck = checkCommandRules(verifiedCmd)
+        if (!cmdRulesCheck.ok) {
+          const failViolation = cmdRulesCheck.violations.find((v) => v.level === 'FAIL')
+          if (failViolation) {
+            audit('decision', sessionId, {
+              kind: 'command_denied',
+              rule: failViolation.rule,
+              reason: failViolation.message,
+            })
+            return fail(`${failViolation.message}\n💡 提示：${failViolation.hint}`)
+          }
         }
 
         // ⚠️ 命令必须在**锁外**跑（最长 120s）。若把整段包进 withStateLock，
