@@ -7,7 +7,7 @@ cd "$(dirname "$0")" || exit 1
 
 # 冒烟测试需要一个 Token；未设置时用临时值，避免因本地缺环境变量而误报失败。
 export CARLOS_BRIDGE_TOKEN="${CARLOS_BRIDGE_TOKEN:-gatekeeper-local-token}"
-export BRIDGE_PORT="${BRIDGE_PORT:-19099}"
+export BRIDGE_PORT="${BRIDGE_PORT:-28099}"
 
 echo "=== Gatekeeper: 语法校验 ==="
 node --check bridge/mcp-bridge.js && echo "✅ bridge/mcp-bridge.js 语法通过"
