@@ -6,6 +6,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import {
   RUNS_DIR,
+  FLOW_HOME,
   sanitizeId,
   retryOwnReaperOperation,
   cleanupOwnReaperFiles,
@@ -101,7 +102,7 @@ import { PROMPT_PROFILES } from './profiles.js'
  * 本地错误自愈知识库 (Failure Memory & Self-Healing Guidelines)
  * 记录历史项目中踩过的坑与规则，避免重复犯错
  */
-const KNOWLEDGE_PATH = path.join(os.homedir(), '.carlos-flow', 'failure-memory.json')
+const KNOWLEDGE_PATH = path.join(FLOW_HOME, 'failure-memory.json')
 
 export function loadFailureMemory() {
   try {

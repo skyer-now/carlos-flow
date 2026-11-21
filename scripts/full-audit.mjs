@@ -20,7 +20,7 @@
 //
 // 退出码：0 = 全部通过；1 = 发现问题
 import { createContext, Script } from 'node:vm'
-import { parseTools } from './check-no-dead-handler.mjs'
+import { parseTools, loadImplementationSource } from './check-no-dead-handler.mjs'
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -255,7 +255,7 @@ const readJsonText = (text) => {
 };
 const ghostJson = readJson("ghost.json");
 const idx = read("src/index.js") || "";
-const uniqueServer = parseTools(idx).map((tool) => tool.name)
+const uniqueServer = parseTools(loadImplementationSource(ROOT)).map((tool) => tool.name)
 const declaredPublic = Array.isArray(ghostJson?.tools) ? ghostJson.tools : [];
 const ghostTools = declaredPublic.map((t) => t?.name);
 if (!Array.isArray(ghostJson?.tools)) P('工具清单', 'public 工具清单不是数组');

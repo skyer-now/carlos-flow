@@ -19,7 +19,7 @@
 //   3. 关键不变量（fail-closed / 真实验证 / 链式审计）必须在源码里出现
 //
 // 退出码：0 = 承诺全部兑现；1 = 有承诺未兑现（逐条打印）
-import { parseTools } from './check-no-dead-handler.mjs'
+import { parseTools, loadImplementationSource } from './check-no-dead-handler.mjs'
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +36,7 @@ console.log("=".repeat(72));
 console.log("Carlos Flow · 承诺兑现度门禁（文档/描述 ↔ 代码路径）");
 console.log("=".repeat(72));
 
-const indexSrc = read("src/index.js") || "";
+const indexSrc = loadImplementationSource(ROOT);
 const dispatchSrc = read("src/dispatch.js") || "";
 const stateSrc = read("src/state.js") || "";
 const readme = read("README.md") || "";

@@ -13,7 +13,7 @@ const gate = /Array\.isArray\(state\.activation_pending\)\s*&&\s*state\.activati
 
 export const MUTANTS = [
   mutant('M1-激活只打印日志', '激活调用改为假成功', 'client/carlos.js', "const r = await callMCP('tools/call', { name: step.tool, arguments: step.args });", `const r = { result: { isError: false, content: [{ text: '{"ok":true}' }] } };`),
-  mutant('M2-claim闸门失效', '领取不再检查占位卡', 'src/index.js', /\/\/ 激活占位卡闸门：占位卡未补齐字段时不允许领取派发名额\s*if \(\s*Array\.isArray\(state\.activation_pending\)\s*&&\s*state\.activation_pending\.length > 0/, (s) => s.replace(gate, 'false')),
+  mutant('M2-claim闸门失效', '领取的外层与锁内占位检查均失效，保留卡代和额度CAS', 'src/index.js', /\/\/ 激活占位卡闸门：占位卡未补齐字段时不允许领取派发名额[\s\S]*?latest\.claimed = true/, (s) => s.replace(gate, 'false').replace('latest.activation_pending?.length', 'false')),
   mutant('M3-verdict闸门失效', '裁定不再检查占位卡', 'src/index.js', /if \(\s*Array\.isArray\(state\.activation_pending\)\s*&&\s*state\.activation_pending\.length > 0\s*\) \{\s*audit\('decision', sessionId, \{\s*kind: 'verdict_denied'/, (s) => s.replace(gate, 'false')),
   mutant('M4-会话撞名', '删除清洗后会话哈希后缀', 'src/trigger.js', "return safe + '-' + suffix;", 'return safe;'),
   mutant('M5-scope不算补齐项', '缺失项忽略scope', 'src/index.js', "...(!cardHasScope ? ['scope'] : []),", "...(false ? ['scope'] : []),"),
@@ -22,7 +22,7 @@ export const MUTANTS = [
   mutant('M10-普通卡也上闸', '普通卡也派生待补项', 'src/index.js', /\/\/ 普通卡（未标 activation，且本会话从未激活过）：不上闸门。[\s\S]*?activationPending = \[\]/, (s) => s.replace('activationPending = []', 'activationPending = currentMissing')),
   mutant('M11-占位卡硬编码三项', '占位卡不再按实际内容派生', 'src/index.js', /if \(isActivation\) \{\s*\/\/ 显式占位卡：待补项 = 服务端从这张卡实际缺什么推导出来的。\s*activationPending = currentMissing/, (s) => s.replace('activationPending = currentMissing', "activationPending = ['scope', 'acceptance', 'verify.cmd']")),
   mutant('M12-跨进程锁失效', '非排他创建锁', 'src/state.js', "const fd = fs.openSync(lockFile, 'wx')", "const fd = fs.openSync(lockFile, 'a')"),
-  mutant('M13-只读意图误判', '无视改动动词', 'src/trigger.js', 'return !hasMutating;', 'return true;'),
+  mutant('M13-只读意图误判', '无视改动动词', 'src/trigger.js', "if (hasMutating) return 'LEVEL_2';", "if (hasMutating) return 'LEVEL_0';"),
   mutant('M14-审计链断链', '记录哈希不链接上一条', 'src/state.js', 'rec.hash = computeAuditHash(rec, prev)', "rec.hash = computeAuditHash(rec, '')"),
   mutant('M15-审计链校验恒真', '单日链校验忽略损坏计数', 'src/state.js', /ok: broken === 0,(?=\s*total,\s*broken,\s*legacy,\s*brokenAt,\s*file: shards\[shards.length - 1\])/, 'ok: true,'),
   mutant('M16-越界检查退回 fail-open', '越界改动放行', 'src/dispatch.js', /if \(violations.length > 0\) \{[\s\S]*?ok: false,/, (s) => s.replace('ok: false,', 'ok: true,')),
@@ -38,7 +38,7 @@ export const MUTANTS = [
   mutant('M19-负对照还原不核对', '还原摘要核对恒真', 'src/dispatch.js', 'restoreReport = verifyRestoredState(saved, currentDigests)', 'restoreReport = { ok: true, checked: 0, mismatched: [], unreadable: [] }'),
   mutant('M20-死锁号不回收', '忽略已死锁持有者', 'src/state.js', "if (err && err.code === 'ESRCH') holderDead = true", 'if (false) holderDead = true'),
   mutant('M8-未派发可记PASS', '裁定不再检查真实派发计数', 'src/index.js', "if (verdict === 'PASS' && !(Number(state.dispatch_count) > 0)) {", 'if (false) {'),
-]
+].map(m => m.file === 'src/index.js' ? { ...m, file: 'src/handlers/gate.js' } : m)
 
 export function inject(m, source) {
   const text = source.replace(/\r\n/g, '\n')
@@ -67,7 +67,7 @@ export function freshWorkspace(prefix = 'carlos-flow-mutation-') {
 
 const SUITES = ['e2e', 'trigger', 'concurrency', 'scope', 'audit', 'sensitive', 'lock', 'falsify', 'hardening', 'cas', 'roll']
 
-const COPY_NAMES = ['src', 'client', 'bridge', 'test', 'scripts', 'package.json', 'package-lock.json', 'README.md', 'README.zh.md', 'README.en.md', 'CHANGELOG.md', 'RELEASE_NOTES.md']
+const COPY_NAMES = ['ui', 'src', 'client', 'bridge', 'test', 'scripts', 'package.json', 'package-lock.json', 'README.md', 'README.zh.md', 'README.en.md', 'CHANGELOG.md', 'RELEASE_NOTES.md']
 
 function fingerprint(repo) {
   const hashes = {}

@@ -1,12 +1,16 @@
 # Carlos 工作流 (Carlos-Flow)
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/skyer-now/carlos-flow)
-[![Version](https://img.shields.io/badge/version-2.18.0-blue)](https://www.npmjs.com/package/carlos-flow)
+[![Version](https://img.shields.io/badge/version-2.28.1-blue)](https://www.npmjs.com/package/carlos-flow)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [中文说明](README.zh.md) | [English Documentation](README.en.md)
 
 ---
+
+## 阶段一（2.28.1，本地准备）
+
+`src/index.js` 负责服务与统一路由；`src/handlers/` 按 gate、verify、audit、infra、facade 实现真实领域，shared 共用请求补偿，catalog 保持原 26 工具顺序及契约。门面同样经过参数校验；结构化恢复说明保留已填参数/卡片，缺授权、范围、验收事实时须澄清，不自动确认。宿主权限和 UI 不变。验证状态及未完成项见 [阶段报告](docs/STAGE_1_REPORT.md)，不代表已公开发布或安装。
 
 ## 💡 为什么需要 Carlos 工作流？
 

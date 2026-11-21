@@ -2,20 +2,20 @@
 // 门禁三：空壳检测。
 // 逐个解析 TOOLS 数组中的完整 handler，再判断体内是否存在真实副作用动作。
 // 表达式箭头归一为 return，不跳过常量表达式空壳。
-import { parseTools } from './check-no-dead-handler.mjs'
+import { parseTools, loadImplementationSource } from './check-no-dead-handler.mjs'
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const src = readFileSync(resolve(ROOT, "src/index.js"), "utf8");
+const src = loadImplementationSource(ROOT);
 
 // 白名单：确实应返回常量的纯文档型工具
 const PURE_DOC_TOOLS = new Set(["flow_protocol"]);
 
 // 真实副作用词表（含本项目实际使用的封装函数与 fs 操作）
 const REAL_WORK =
-  /\b(await|async|loadState|saveState|writeUserMessage|getUserMessages|readManifest|saveAgentResult|buildRevertPlan|revertPlan|audit|spawn|spawnSync|execFileSync|execSync|readFileSync|writeFileSync|appendFileSync|mkdirSync|unlinkSync|rmSync|renameSync|copyFileSync|withStateLock|gitHead|verifyAuditChain|computeFingerprint|checkScope|enforceScope|parseCard|validateCard|sanitizeSid)\b/;
+  /\b(callTool|await|async|loadState|saveState|writeUserMessage|getUserMessages|readManifest|saveAgentResult|buildRevertPlan|revertPlan|audit|spawn|spawnSync|execFileSync|execSync|readFileSync|writeFileSync|appendFileSync|mkdirSync|unlinkSync|rmSync|renameSync|copyFileSync|withStateLock|gitHead|verifyAuditChain|computeFingerprint|checkScope|enforceScope|parseCard|validateCard|sanitizeSid)\b/;
 
 // 常量返回特征：整段函数体只有一个 return ok({...}) / return {...}，无任何其它语句
 function isConstantReturn(body) {

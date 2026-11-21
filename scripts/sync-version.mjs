@@ -102,7 +102,7 @@ if (ghost) {
 let guide = readText("TRIGGER_GUIDE.md");
 if (guide) {
   const before = guide;
-  guide = guide.replace(/v\d+\.\d+\.\d+/g, "v" + ver);
+  guide = guide.replace(/^(>\s*)?(\*\*版本\*\*:\s*)v\d+\.\d+\.\d+[ \t]*$/gm, (_, prefix = '', label) => prefix + label + 'v' + ver);
   if (guide !== before) {
     writeText("TRIGGER_GUIDE.md", guide);
   } else {

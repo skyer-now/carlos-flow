@@ -78,9 +78,7 @@ function makeFakeRoot(name) {
   ownedDirectories.push(dir);
   mkdirSync(join(dir, "src"), { recursive: true });
   mkdirSync(join(dir, "bridge"), { recursive: true });
-  for (const f of readdirSync(join(ROOT, "src"))) {
-    writeFileSync(join(dir, "src", f), rf(join(ROOT, "src", f)));
-  }
+  cpSync(join(ROOT, 'src'), join(dir, 'src'), { recursive: true });
   mkdirSync(join(dir, 'ui'), { recursive: true });
   const narrator = rf(join(ROOT, 'ui', 'narrator.js'));
   writeFileSync(join(dir, 'ui', 'narrator.js'), narrator);

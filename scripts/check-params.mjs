@@ -13,7 +13,7 @@
 // 断言它在 handler（或该工具直接调用的下游函数）里**真的被读取**。
 //
 // 退出码：0 = 无静默失效；1 = 发现静默失效（逐条打印）
-import { parseTools, objectAt } from './check-no-dead-handler.mjs'
+import { parseTools, objectAt, loadImplementationSource } from './check-no-dead-handler.mjs'
 import { readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +30,7 @@ console.log("=".repeat(72));
 console.log("Carlos Flow · 参数有效性门禁（inputSchema 声明 ↔ handler 实际读取）");
 console.log("=".repeat(72));
 
-const indexSrc = read("src/index.js") || "";
+const indexSrc = loadImplementationSource(ROOT);
 const stateSrc = read("src/state.js") || "";
 
 /** 从 src 的第 idx 个字符开始（idx 指向 '{'），返回配对括号内的内容与结束位置 */

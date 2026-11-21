@@ -8,6 +8,10 @@
 
 **Languages:** [English Documentation](README.en.md) | [中文说明](README.zh.md)
 
+## Stage one (2.28.1, local preparation)
+
+`src/index.js` assembles the service and validated routing. Real implementations live in `src/handlers/{gate,verify,audit,infra,facade}.js`; shared request compensation and the catalog preserve the original 26-tool order, descriptions and schemas. Facades also use argument validation. Structured recovery preserves supplied arguments/card facts and requires clarification rather than inventing authorization, scope or acceptance facts. Host permissions and UI remain unchanged. See [the stage report](docs/STAGE_1_REPORT.md) for verification and outstanding work; this is not a public release or installation.
+
 ---
 
 > **Mechanical Safety Gate & Plain-Language Guide for AI Coding Agents**

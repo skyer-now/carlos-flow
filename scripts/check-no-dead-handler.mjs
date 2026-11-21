@@ -53,6 +53,8 @@ function members(body, object = false) {
 
 export function parseTools(src) {
   const marker = /\bconst\s+TOOLS\s*=\s*\[/.exec(src)
+  if (!marker && src.includes("from './handlers/catalog.js'"))
+    return parseTools(loadImplementationSource(resolve(dirname(fileURLToPath(import.meta.url)), '..')))
   if (!marker) throw new Error('未找到工具数组')
   const start = marker.index + marker[0].length
   let end = start
@@ -82,6 +84,16 @@ export function parseTools(src) {
   }
   if (!tools.length) throw new Error('工具数组为空')
   return tools
+}
+
+export function loadImplementationSource(root) {
+  const entry = readFileSync(join(root, 'src/index.js'), 'utf8')
+  if (!entry.includes("from './handlers/catalog.js'")) return entry
+  const domains = ['gate', 'verify', 'audit', 'infra', 'facade']
+  const tools = domains.flatMap(domain => parseTools(readFileSync(join(root, `src/handlers/${domain}.js`), 'utf8')))
+  // 真实领域体逐个解析；不拼接无关处理器来掩盖丢参或空壳。
+  return readFileSync(join(root, 'src/handlers/shared.js'), 'utf8') + '\nconst TOOLS = [\n' +
+    tools.map(tool => '{' + tool.block + '},').join('\n') + '\n]\n' + entry
 }
 
 export function verifyParserFormats() {
@@ -169,7 +181,7 @@ for (const f of files) {
 console.log("\n▶ 工具实现 ↔ handler 装配");
 try {
   const src = readFileSync(join(ROOT, "src/index.js"), "utf8");
-  const declared = parseTools(src).map((tool) => tool.name)
+  const declared = parseTools(loadImplementationSource(ROOT)).map((tool) => tool.name)
   const hasDispatchLookup = /TOOLS\.find\([\s\S]{0,80}?\.name\s*===/.test(src);
   if (hasDispatchLookup) pass("CallTool handler 通过 TOOLS.find 分发到工具实现");
   else fail("CallTool handler 找不到按 name 分发到工具实现的逻辑");

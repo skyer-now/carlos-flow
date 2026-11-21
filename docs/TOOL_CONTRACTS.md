@@ -1,5 +1,16 @@
 # Carlos Flow 工具契约文档
 
+## 阶段一领域化定位（2.28.1，本地准备）
+
+原 26 项（22 原子 + 4 门面）工具的顺序、描述与 inputSchema 固定不变，摘要由 `test/handler-parity.mjs` 对照 42b19d6 固定。真实实现移至 `src/handlers/`：gate 留痕/领取/派发/裁定，verify 验证/负对照，audit 双轴/审计查询，infra 状态/触发/辅助操作，facade 只做明确路由；catalog 拒绝重复、遗漏与未登记工具；shared 不依赖任何领域模块或入口。
+
+门面统一经过 `callTool` 的原子工具 Schema 校验、Host 能力故障检查与同一 AsyncLocalStorage 审计补偿口径，不直接调用底层 handler。参数拒绝新增 `structuredContent={ok:false,code:INVALID_TOOL_ARGUMENTS,tool,error,missing,schema,originalArguments,instructions}`；占位卡 guide 拒绝新增 `ACTIVATION_INCOMPLETE` 与 missing/preservedCard/澄清说明，不生成授权、范围或验收事实。pro 的占位卡文本路径保持原状。
+
+短锁重验卡身份、pending、额度与 claim，原子消费后仅按同卡同派发计数合并基线。范围检查以卡片项目根为准，显式异仓 cwd 拒绝。负对照失败先按完整旧证据 CAS 作废，再追加审计；新卡提交成功后审计请求绑定新版本。非 verdict 审计待确认不能消费旧证据 PASS；最终 verdict 追加失败可重试全部门禁并重新持久化 resolution，遵守原审计恢复测试，不把待确认状态当已完成。宿主权限、UI、锁实现和长命令锁外原则不变。
+
+以下历史 `src/index.js` 实现定位现在按工具域查阅；历史版本说明不重写。阶段验证与已知未完成项见 `docs/STAGE_1_REPORT.md`，不声明已公开发布或完成桌面验收。
+
+
 ## PhaseB候选：固定哈希子入口与Host请求能力
 
 此为未安装候选适配，不声明当前安装版0.1.139具备新接口；不虚设尚未发布的最低Host版本。`node.entries=['src/state.js']`及`node.childSpawn=true`是实际权限扩展，待后续安装批准与真实Desktop验收。三public工具、21后端操作、guide/pro及expected永久领取语义不变。

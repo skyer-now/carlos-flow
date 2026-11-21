@@ -1,7 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAgentMesh } from '../src/card.js';
-import { loadFailureMemory, saveFailureMemory, inferProactiveGuidelines, buildContractPrompt } from '../src/dispatch.js';
+import { mkdtempSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+const isolated = mkdtempSync(path.join(tmpdir(), 'carlos-knowledge-'));
+process.env.CARLOS_FLOW_HOME = path.join(isolated, 'flow');
+process.env.HOME = process.env.USERPROFILE = path.join(isolated, 'home');
+mkdirSync(process.env.HOME, { recursive: true });
+const { validateAgentMesh } = await import('../src/card.js');
+const { loadFailureMemory, saveFailureMemory, inferProactiveGuidelines, buildContractPrompt } = await import('../src/dispatch.js');
 
 describe('P2 本地错误自愈知识库与 P3 多 Agent 权限网格实测', () => {
   describe('P2 本地错误自愈知识库 (Failure Memory)', () => {
