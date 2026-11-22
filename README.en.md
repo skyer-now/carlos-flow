@@ -49,7 +49,7 @@ When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or
 * **Plain Error Explanations**: Converts errors into clear steps: *Why it stopped + What caused it + How to continue*.
 * **Semantic Side-Effect Triage**: Distinguishes read-only questions from real mutations to prevent accidental locks.
 * **Multi-Turn Context Resolution**: Understands short commands like "Let's do it" by auto-extracting file paths from recent dialogue.
-* **One-Click Revert & Cancel**: Instantly reset or restore your workspace back to the initial snapshot.
+* **Verifiable Revert & Cancel**: Cancel immediately; "Revert" first produces a restore plan and only restores the pre-task snapshot after you confirm.
 
 ---
 
@@ -95,7 +95,7 @@ carlos-flow flow_status '{"sessionId":"test"}'
 A: No. The core engine is built with lightweight local JavaScript. Each decision takes **less than 2ms**, with zero external network or model token overhead.
 
 **Q: What if I triggered the gate by accident?**  
-A: Simply reply with **"Cancel gate"** to release the session immediately, or **"Revert"** to restore your code back to the initial state.
+A: Reply **"Cancel gate"** to release the session immediately, or **"Revert"** to generate a restore plan; the code is restored only after you confirm it.
 
 ---
 

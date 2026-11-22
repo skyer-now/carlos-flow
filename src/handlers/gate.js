@@ -1,7 +1,14 @@
 // gate 领域：真实工具实现与原始契约。
 import {
+  pendingAuditEntries,
+  auditCardIdentity,
+  archiveCardAudit,
+  storeAuditEntries,
+  isRetryableVerdict,
   audit,
   auditRequests,
+  bindAuditVersion,
+  readAuditState,
   log,
   ok,
   fail,
@@ -335,6 +342,7 @@ const TOOLS = [
               })
               if (!receipt.persisted)
                 throw new Error(`追加范围审计未确认持久化: ${receipt.error}`)
+              latest.audit_scope_ancestors = [...(latest.audit_scope_ancestors || []), auditCardIdentity(latest)]
               latest.card = candidate
               latest.card_ts = cardTs
               latest.tier = riskTier(candidate.scope)
@@ -345,7 +353,7 @@ const TOOLS = [
               latest.verdict = null
               latest.verdict_role = null
               latest.completed_ok = false
-              delete latest.audit_pending
+              bindAuditVersion(sessionId, latest)
               return {
                 added,
                 added_new_files: addedNewFiles,
@@ -626,6 +634,7 @@ const TOOLS = [
         // 后写入者用过期 prevState 算出 pending=[]，而它写的卡片字段仍为空 ⇒ 闸门被绕过。
         const gated = await withStateLock(sessionId, () => {
           const prev = loadState(sessionId)
+          if (isActivation && prev.card) return null // CLI/activation 等锁期间出现卡，同样不得覆盖或归档。
           const wasActivatedBefore = prev.activation_activated === true
           const prevPendingBefore = Array.isArray(prev.activation_pending)
             ? prev.activation_pending
@@ -647,6 +656,7 @@ const TOOLS = [
             activationPending = []
           }
 
+          archiveCardAudit(prev)
           const state = {
             ...defaultState(),
             ...prev,
@@ -666,8 +676,9 @@ const TOOLS = [
             // 单调标记：一旦激活过就永不清除
             activation_activated: isActivation || wasActivatedBefore,
           }
+          delete state.audit_scope_ancestors
           saveState(sessionId, state)
-          if (auditRequests.getStore()) auditRequests.getStore().version = { ...state, sid: sessionId }
+          bindAuditVersion(sessionId, state)
           return {
             state,
             activationPending,
@@ -676,6 +687,8 @@ const TOOLS = [
           }
         })
 
+        if (!gated) return ok({ ok: true, activated: false, skipped: true,
+          reason: '会话已有任务卡，跳过激活（未覆盖当前任务）' })
         const {
           state,
           activationPending,
@@ -787,7 +800,7 @@ const TOOLS = [
         }
         const role = rawRole
         const sessionId = a.sessionId || 'unknown'
-        const state = loadState(sessionId)
+        const state = readAuditState(sessionId)
 
         if (!state.card) {
           return fail(
@@ -833,6 +846,7 @@ const TOOLS = [
           if (latest.card_ts !== state.card_ts || JSON.stringify(latest.card) !== JSON.stringify(state.card) ||
               !latest.card || isStale(latest) || latest.activation_pending?.length || latest.dispatch_count >= MAX_DISPATCH)
             throw new Error('领取前任务卡或门禁状态已变化，请重新核对状态')
+          bindAuditVersion(sessionId, latest)
           latest.claimed = true
           latest.claimed_role = role
           latest.last_user_ts = Date.now()
@@ -901,7 +915,7 @@ const TOOLS = [
 
         // Phase 1-1: dispatch 前强制校验 stale / dispatch_count / claim
         const sessionId = a.sessionId || 'unknown'
-        const state = loadState(sessionId)
+        const state = readAuditState(sessionId)
         if (!state.card)
           return fail(guideError(state, '没有留痕，不允许派发。'))
         if (isStale(state))
@@ -1021,6 +1035,7 @@ const TOOLS = [
               !latest.card || isStale(latest) || latest.activation_pending?.length || latest.dispatch_count >= MAX_DISPATCH ||
               latest.claimed !== true || latest.dispatch_count !== state.dispatch_count)
             throw new Error('派发前任务卡或名额已变化，请重新领取并核对状态')
+          bindAuditVersion(sessionId, latest)
           latest.dispatch_count = (Number(latest.dispatch_count) || 0) + 1
           // 额度已消耗，需要重新 claim 才能再次派发
           latest.claimed = false
@@ -1122,7 +1137,7 @@ const TOOLS = [
       try {
         const a = args || {}
         const sessionId = a.sessionId || 'unknown'
-        const state = loadState(sessionId)
+        const state = readAuditState(sessionId)
         const judgedSnapshot = JSON.stringify(state)
 
         // 裁定闸门的分组与顺序与 docs/TOOL_CONTRACTS.md 第 1.2 节严格一致：
@@ -1400,7 +1415,8 @@ const TOOLS = [
           const scopeRootNow = resolveRepoRoot(state.card.env?.project || a.cwd || process.cwd())
           if (a.cwd && !dispatchDirInsideProject(scopeRootNow, resolveRepoRoot(a.cwd)))
             return fail('裁定目录与卡片项目根不一致，拒绝读取其他项目证据')
-          if (state.audit_pending && state.audit_pending.kind !== 'verdict')
+          if (pendingAuditEntries(state).some(e => !isRetryableVerdict(e, state, auditRequests.getStore())) ||
+              (state.audit_pending?.kind === 'verdict' && state.audit_pending.card_ts !== state.card_ts))
             return fail('审计仍待确认，不能消费旧证据记录 PASS')
           const current = enforceScope(allowedScope, scopeRootNow)
           const introduced = introducedChanges(
@@ -1605,10 +1621,15 @@ const TOOLS = [
           }
           // 先取消已有 PASS，再进行可能失败的审计。
           latest.completed_ok = false
+          const carriedEntries = pendingAuditEntries(latest)
+          if (latest.audit_pending?.kind === 'verdict' &&
+              (latest.audit_pending.verdict !== verdict || latest.audit_pending.card_ts !== judgedCardTs))
+            carriedEntries.push({ ...latest.audit_pending, entries: undefined })
           latest.audit_pending = {
             kind: 'verdict',
             verdict,
             card_ts: judgedCardTs,
+            entries: carriedEntries,
           }
           saveState(sessionId, latest)
           if (latest.verdict && latest.verdict !== verdict) {
@@ -1628,9 +1649,10 @@ const TOOLS = [
             role: a.role,
             card_ts: judgedCardTs,
           })
-          delete latest.audit_pending
+          storeAuditEntries(latest, pendingAuditEntries(latest).filter(e =>
+            !isRetryableVerdict(e, latest, auditRequests.getStore())))
           latest.verdict = verdict
-          latest.completed_ok = verdict === 'PASS'
+          latest.completed_ok = verdict === 'PASS' && !latest.audit_pending
           latest.verdict_ts = Date.now()
           // 落盘裁定者角色：审计链据此回溯「这条 PASS 是谁落的」。
           latest.verdict_role = a.role === undefined ? null : a.role
@@ -1677,7 +1699,7 @@ const TOOLS = [
         if (warns.length) result.warn_findings = warns
         if (findings.length) result.findings = findings
         if (verdict === 'PASS') {
-          result.qa_sheet = generateQASheet(state, a.notes)
+          result.qa_sheet = generateQASheet(state, a.notes, { stale: isStale(state) })
         }
         return ok(result)
       } catch (e) {

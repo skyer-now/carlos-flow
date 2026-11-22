@@ -1,6 +1,9 @@
 // infra 领域：真实工具实现与原始契约。
 import {
   audit,
+  bindAuditVersion,
+  readAuditState,
+  archiveCardAudit,
   ok,
   fail,
   asStringArray,
@@ -63,6 +66,7 @@ const TOOLS = [
       const sid = sessionId || 'unknown'
       let nextMode = mode
       await commitState(sid, (latest) => {
+        bindAuditVersion(sid, latest)
         latest.mode = mode
         latest.mode_ts = Date.now()
         nextMode = latest.mode
@@ -199,6 +203,8 @@ const TOOLS = [
             sampled_at: Date.now(),
           }),
           completed_ok: state.completed_ok === true,
+          audit_pending: state.audit_pending || null,
+          audit_history_pending: state.audit_history_pending || [],
           stale: taskStale,
           bypass: !!state.bypass,
           card: state.card,
@@ -331,8 +337,12 @@ const TOOLS = [
         const state = loadState(sessionId)
 
         await commitState(sessionId, (latest) => {
+          // 清身份前保留当前卡及 scope 祖先的完整事件；取消自身审计绑定实际取消的卡。
+          bindAuditVersion(sessionId, latest)
+          archiveCardAudit(latest)
           latest.card = null
           latest.card_ts = 0
+          delete latest.audit_scope_ancestors
           latest.activation_pending = []
           latest.activation_activated = false
           latest.claimed = false
@@ -394,7 +404,7 @@ const TOOLS = [
       try {
         const a = args || {}
         const sessionId = a.sessionId || 'unknown'
-        const state = loadState(sessionId)
+        const state = readAuditState(sessionId)
 
         if (!state.card) {
           return fail(
@@ -415,6 +425,9 @@ const TOOLS = [
 
         let bypassNow = false
         await commitState(sessionId, (latest) => {
+          if (JSON.stringify([latest.card_ts, latest.card]) !== JSON.stringify([state.card_ts, state.card]))
+            throw new Error('免检提交前任务卡已变化，未修改新卡')
+          bindAuditVersion(sessionId, latest)
           latest.bypass = a.on === true
           latest.bypass_ts = Date.now()
           bypassNow = latest.bypass
@@ -494,6 +507,7 @@ const TOOLS = [
         const a = args || {}
         const sessionId = a.sessionId || 'unknown'
         const role = a.role === 'auditor' ? 'auditor' : 'executor'
+        readAuditState(sessionId) // 同步保存产物前接纳实际卡，不能沿用入口 await 前的卡。
         const file = saveAgentResult(
           sessionId,
           role,
@@ -727,7 +741,7 @@ const TOOLS = [
         // 安全约束（与 CLI 客户端一致）：
         //   · 会话已有任务卡 → 不自动开卡（不覆盖用户已有任务）
         //   · 只执行 auto 步骤；needsFill 步骤交回 Agent 补齐
-        const existing = loadState(sessionId)
+        const existing = readAuditState(sessionId)
         if (existing.card) {
           return ok({
             ...base,
@@ -801,6 +815,8 @@ const TOOLS = [
             const tier = riskTier(card.scope)
             const withLock = await withStateLock(sessionId, () => {
               const prev = loadState(sessionId)
+              if (prev.card) return null // 锁外观察为空不是覆盖许可；等待期间新卡必须保留。
+              archiveCardAudit(prev)
               const state = {
                 ...defaultState(),
                 ...prev,
@@ -820,8 +836,14 @@ const TOOLS = [
                 activation_pending: ['scope', 'acceptance', 'verify.cmd'],
                 activation_activated: true,
               }
+              delete state.audit_scope_ancestors
               saveState(sessionId, state)
+              bindAuditVersion(sessionId, state)
               return state
+            })
+            if (!withLock) return ok({
+              ...base, activated: false, executed,
+              note: '等锁期间会话已有任务卡，跳过自动开卡（未覆盖当前任务）',
             })
             audit('run', sessionId, {
               kind: 'activation',

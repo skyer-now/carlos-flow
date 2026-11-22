@@ -1,6 +1,8 @@
 // audit 领域：真实工具实现与原始契约。
 import {
   audit,
+  bindAuditVersion,
+  readAuditState,
   ok,
   fail,
   loadState,
@@ -76,11 +78,13 @@ const TOOLS = [
     handler: async (args) => {
       try {
         const sid = args.sessionId || 'unknown'
-        const state = loadState(sid)
+        const state = readAuditState(sid)
         if (!state.card) return fail('无卡，无法提交审计轴结论')
         const axisCardTs = state.card_ts
         await commitState(sid, (latest) => {
-          if (!latest.card) return
+          if (!latest.card || JSON.stringify([latest.card_ts, latest.card]) !== JSON.stringify([state.card_ts, state.card]))
+            throw new Error('审计轴提交前任务卡已变化，旧轴结论未写入新卡')
+          bindAuditVersion(sid, latest)
           latest.audit_axes[args.axis] = {
             verdict: args.verdict,
             findings: args.findings,

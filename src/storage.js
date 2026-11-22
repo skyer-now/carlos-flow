@@ -6,11 +6,11 @@
 // 三条红线（本模块自身不越界，也不给调用方留越界口子）：
 //   1. **绝不碰 gate-audit**：审计是逐日哈希链，删一天就断链，追溯能力永久丢失；
 //   2. 「归档」= 移出 FLOW_HOME（不是删除），随时能搬回来；
-//   3. 只归档**终态**会话（verdict 非 null）—— 没有结论的会话可能还有人要接着跑。
+//   3. 只归档**终态且无审计欠账**的会话；状态未知或计划后变化一律保留。
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
-import { FLOW_HOME, AUDIT_DIR, RUNS_DIR, sanitizeId } from './state.js'
+import { createHash, randomBytes } from 'node:crypto'
+import { FLOW_HOME, AUDIT_DIR, RUNS_DIR, sanitizeId, archiveStateSession } from './state.js'
 import {
   withBackupTransaction,
   backupManifestEntries,
@@ -69,15 +69,52 @@ export function listSessions(limit = 300) {
   return out
 }
 
+// 不借 loadState 的默认值推断归档资格；保留完整状态摘要及精确物理身份。
+function pruneState(dirName) {
+  if (sanitizeId(dirName) !== dirName) throw new Error('归档 session 身份无效')
+  const dir = path.join(RUNS_DIR, dirName)
+  const directory = fs.lstatSync(dir, { bigint: true })
+  const file = path.join(dir, 'state.json')
+  const before = fs.lstatSync(file, { bigint: true })
+  if (!directory.isDirectory() || !directory.ino || !before.isFile() || !before.ino)
+    throw new Error('归档物理身份未知或路径为链接')
+  const raw = fs.readFileSync(file, 'utf8')
+  const after = fs.lstatSync(file, { bigint: true })
+  const identity = stat => [stat.dev, stat.ino, stat.birthtimeNs, stat.mtimeNs, stat.ctimeNs, stat.size].map(String)
+  if (JSON.stringify(identity(before)) !== JSON.stringify(identity(after)))
+    throw new Error('读取归档状态期间发生变化')
+  const state = JSON.parse(raw)
+  const object = state && typeof state === 'object' && !Array.isArray(state)
+  // 非空/旧式/未知活动标记保守保留；历史队列只有缺省/null 或空数组可确认无欠账。
+  const active = state?.audit_pending
+  const history = state?.audit_history_pending
+  const noActive = active == null || (typeof active === 'object' && !Array.isArray(active) &&
+    Array.isArray(active.entries) && active.entries.length === 0 &&
+    Object.keys(active).every(key => ['kind', 'entries'].includes(key)) &&
+    (active.kind === undefined || active.kind === 'events'))
+  const noHistory = history == null || (Array.isArray(history) && history.length === 0)
+  return {
+    state,
+    mtime: Number(after.mtimeMs),
+    safe: !!object && ['PASS', 'DIRECTION', 'LOCAL', 'WARN', 'FAIL'].includes(state.verdict) && noActive && noHistory,
+    identity: {
+      directory: [directory.dev, directory.ino, directory.birthtimeNs].map(String),
+      file: identity(after),
+      sha256: createHash('sha256').update(raw).digest('hex'),
+    },
+  }
+}
+
 export function sessionSummary(dirName) {
   const dir = path.join(RUNS_DIR, dirName)
   const usage = dirUsage(dir)
-  const stateFile = path.join(dir, 'state.json')
   let state = null
   let mtime = 0
+  let prune = null
   try {
-    mtime = fs.statSync(stateFile).mtimeMs
-    state = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+    prune = pruneState(dirName)
+    mtime = prune.mtime
+    state = prune.state
   } catch {
     /* 没有状态或有坏文件：按未知处理 */
   }
@@ -93,6 +130,8 @@ export function sessionSummary(dirName) {
     verdict: state && state.verdict ? state.verdict : null,
     completed_ok: !!(state && state.completed_ok),
     has_card: !!(state && state.card),
+    prune_safe: !!prune?.safe,
+    prune_identity: prune?.identity || null,
   }
 }
 
@@ -188,7 +227,7 @@ export function storageOverview({ limit = 10, inactiveDays = 7 } = {}) {
   const staleCandidates = summaries
     .filter((x) => x.inactive_days !== null && x.inactive_days >= inactiveDays)
     .sort((x, y) => y.inactive_days - x.inactive_days)
-  const terminal = staleCandidates.filter((x) => x.verdict !== null)
+  const terminal = staleCandidates.filter((x) => x.prune_safe)
 
   const auditDays = auditDayStats()
   const auditBytes = auditDays.reduce((n, x) => n + x.bytes, 0)
@@ -312,7 +351,7 @@ function migrateBackupsLocked(sid, dir, dryRun) {
  * 生成清理计划（**只读，不改任何文件**）。
  *
  * - stale：超过 inactiveDays 天没有活动的会话
- * - archivable：其中已是终态（verdict 非 null）的 —— 只有这些会被真正归档
+ * - archivable：其中已是终态、状态可确认且两类审计队列均无欠账的会话
  * - backups：可迁移去重的备份（历史时间戳命名）
  */
 export function planPrune({ inactiveDays = 30, limit = 500 } = {}) {
@@ -321,7 +360,7 @@ export function planPrune({ inactiveDays = 30, limit = 500 } = {}) {
   const stale = summaries
     .filter((x) => x.inactive_days !== null && x.inactive_days >= inactiveDays)
     .sort((x, y) => y.bytes - x.bytes)
-  const archivable = stale.filter((x) => x.verdict !== null)
+  const archivable = stale.filter((x) => x.prune_safe)
 
   // 待迁移的备份 = **manifest 里被当作 backup 指针引用**、且还不是内容寻址命名的文件。
   //
@@ -377,26 +416,20 @@ export function planPrune({ inactiveDays = 30, limit = 500 } = {}) {
   }
 }
 
-function moveDir(src, dest) {
-  fs.mkdirSync(path.dirname(dest), { recursive: true })
-  try {
-    fs.renameSync(src, dest)
-    return true
-  } catch {
-    // 跨盘：退化为复制 + 删源
-    try {
-      fs.cpSync(src, dest, { recursive: true })
-      fs.rmSync(src, {
-        recursive: true,
-        force: true,
-        maxRetries: 3,
-        retryDelay: 50,
-      })
-      return true
-    } catch {
-      return false
-    }
+function archiveDestination(root, stamp, sid) {
+  // 真实路径核对包含 junction；归档必须在 FLOW_HOME 外，不覆盖任何已有归档。
+  fs.mkdirSync(root, { recursive: true })
+  const home = fs.realpathSync.native(FLOW_HOME)
+  const archiveRoot = fs.realpathSync.native(root)
+  const runs = fs.realpathSync.native(RUNS_DIR)
+  for (const protectedRoot of [home, runs]) {
+    const relative = path.relative(protectedRoot, archiveRoot)
+    if (!relative || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`)))
+      throw new Error('归档根必须位于 FLOW_HOME 与物理 RUNS_DIR 外')
   }
+  const parent = path.join(archiveRoot, stamp, 'runs')
+  fs.mkdirSync(parent, { recursive: true })
+  return path.join(parent, sid)
 }
 
 /**
@@ -405,8 +438,8 @@ function moveDir(src, dest) {
  * @param {object} plan planPrune() 的返回值
  * @param {{ apply?: boolean, archiveRoot?: string }} opts
  */
-export function applyPrune(plan, { apply = false, archiveRoot } = {}) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+export async function applyPrune(plan, { apply = false, archiveRoot } = {}) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '-' + randomBytes(12).toString('hex')
   const root =
     archiveRoot ||
     path.join(path.dirname(FLOW_HOME), path.basename(FLOW_HOME) + '-archive')
@@ -416,6 +449,7 @@ export function applyPrune(plan, { apply = false, archiveRoot } = {}) {
     archiveDir: apply ? archiveDir : null,
     archived: [],
     archiveFailed: [],
+    archiveErrors: [],
     archiveBytes: 0,
     backup: [],
     backupSavedBytes: 0,
@@ -424,13 +458,35 @@ export function applyPrune(plan, { apply = false, archiveRoot } = {}) {
   // ① 归档陈旧终态会话（移动，不删除；审计目录绝不参与）
   for (const s of plan.archivable) {
     const src = path.join(RUNS_DIR, s.session)
-    const dest = path.join(archiveDir, 'runs', s.session)
     if (!apply) {
       result.archived.push({ session: s.session, bytes: s.bytes })
       result.archiveBytes += s.bytes
       continue
     }
-    if (moveDir(src, dest)) {
+    let moved = false
+    try {
+      if (sanitizeId(s.session) !== s.session || !s.prune_identity || !s.prune_safe)
+        throw new Error('旧计划缺少可确认的归档身份')
+      // archiveStateSession 也只读定位，不为归档取得锁而重建 session。
+      fs.lstatSync(src)
+      const dest = archiveDestination(root, stamp, s.session)
+      const validate = () => {
+        const current = pruneState(s.session)
+        return current.safe && Number.isFinite(plan.inactiveDays) && plan.inactiveDays >= 0 &&
+          Date.now() - current.mtime >= plan.inactiveDays * 86400000 &&
+          JSON.stringify(current.identity) === JSON.stringify(s.prune_identity)
+      }
+      moved = await archiveStateSession(s.session, validate, () => {
+        // owner 已退出，转换 gate 仍持有；此处重验到 rename 之间没有 writer 窗口。
+        if (!validate()) return false
+        if (fs.existsSync(dest)) throw new Error('归档目标已存在，拒绝覆盖')
+        fs.renameSync(src, dest) // EXDEV/占用/未知失败传播；绝不复制后删源或盲目重试。
+        return true
+      })
+    } catch (error) {
+      result.archiveErrors.push({ session: s.session, error: error.message })
+    }
+    if (moved) {
       result.archived.push({ session: s.session, bytes: s.bytes })
       result.archiveBytes += s.bytes
     } else {
@@ -463,11 +519,11 @@ export function scheduleAutoPrune({ olderThanDays = 7, archiveRoot, force = fals
   lastAutoPruneTime = now
 
   // 非阻塞异步执行
-  const timer = setTimeout(() => {
+  const timer = setTimeout(async () => {
     try {
       const plan = planPrune({ inactiveDays: olderThanDays })
       if (plan && Array.isArray(plan.archivable) && plan.archivable.length > 0) {
-        applyPrune(plan, { apply: true, archiveRoot })
+        await applyPrune(plan, { apply: true, archiveRoot })
       }
     } catch {
       // 归档异常绝不影响主流程

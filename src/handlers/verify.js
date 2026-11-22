@@ -1,6 +1,7 @@
 // verify 领域：真实工具实现与原始契约。
 import {
   audit,
+  readAuditState,
   ok,
   fail,
   fingerprintFailed,
@@ -11,7 +12,6 @@ import {
   clearFalsifyInvalidationFailure,
   invalidateLastFalsify,
   checkCommandRules,
-  loadState,
   withStateLock,
   commitState,
   workspaceFingerprintAsync,
@@ -20,7 +20,9 @@ import {
   computeOutputHash,
   claimStaleOffer,
   staleCaseIdentity,
+  FLOW_HOME,
 } from './shared.js'
+import { collectVerifyFailure } from '../failure-memory.js'
 const TOOLS = [
 {
     name: 'flow_run_verify',
@@ -41,7 +43,7 @@ const TOOLS = [
       try {
         const a = args || {}
         const sessionId = a.sessionId || 'unknown'
-        const state = loadState(sessionId)
+        const state = readAuditState(sessionId)
         if (!state.card) return fail('没有留痕，无法执行验证。')
         if (!state.card.verify || !state.card.verify.cmd)
           return fail('卡片未指定验证命令。')
@@ -68,6 +70,8 @@ const TOOLS = [
               context?.session_id !== sessionId || context.workdir_is_local !== true || context.workdir_is_read_only !== false)
             return fail('向导领取身份或本地会话位置无效；不会自动重试或回退执行。')
           receipt = await claimStaleOffer(sessionId, a.expected, a.cwd, context.workdir)
+          if (staleCaseIdentity(sessionId, state) !== receipt.caseKey)
+            return fail('领取期间卡片或原验证已变化；领取已消耗，未执行命令，不会自动重放。')
           verifiedCmd = receipt.cmd
           workdir = receipt.cwd
         }
@@ -121,10 +125,35 @@ const TOOLS = [
             // 没有它，验证通过后再改坏代码，flow_verdict(PASS) 仍会放行（见 A1）。
             fingerprint,
           }
+          // 验证失败意味着旧裁定失效：不能让 flow_status.completed_ok 继续报绿。
+          // 只清裁定字段，不碰卡、快照与审计；重新验证通过后可重新走双轴。
+          if (!state2.last_verify.ok) {
+            state2.completed_ok = false
+            state2.verdict = null
+            state2.verdict_role = null
+            state2.verdict_ts = 0
+          }
         })
 
         if (!merged) return fail('命令已执行，但卡或原验证已变化；旧结果未覆盖新证据，禁止重放。')
         if (fingerprintFailed(fingerprint)) return fail(fingerprintError(fingerprint))
+        // 阶段二接线：只把明确的业务断言失败采集为“待核实经验”。
+        // 语法/缺模块/权限/超时/未知 IO 一律不入库（分类函数内部拒绝）。
+        // 采集失败不影响验证结果，也不向调用方谎报保存成功。
+        if (!result.ok) {
+          try {
+            collectVerifyFailure(
+              { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, timedOut: result.timedOut },
+              {
+                flowHome: FLOW_HOME,
+                cwd: workdir || process.cwd(),
+                sessionId,
+                cardTs: receipt ? receipt.cardTs : verifiedCardTs,
+                cmd: verifiedCmd,
+              },
+            )
+          } catch {}
+        }
         return ok({
           ok: result.ok,
           exitCode: result.exitCode,
@@ -156,7 +185,7 @@ const TOOLS = [
       try {
         const a = args || {}
         const sessionId = a.sessionId || 'unknown'
-        const state = loadState(sessionId)
+        const state = readAuditState(sessionId)
         if (!state.card) return fail('没有留痕，无法做负对照。')
         if (!state.card.verify || !state.card.verify.cmd)
           return fail('卡片未指定验证命令，无法做负对照。')

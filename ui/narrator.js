@@ -1,47 +1,186 @@
+import { redact } from '../src/redact.js'
+
 /**
  * 完工电子质检交付单生成器 (QA Sheet Generator)
- * 纯内存装配结构化 Markdown 交付单
+ *
+ * 阶段二重写：交付单只能投影**已有证据**，不得默认绿。
+ * 旧实现缺字段时直接写 PASS / exitCode=0 / 「已校验」，会把未验证的任务
+ * 伪造成已验收；现在任何缺失证据都显示为「未验证」，并列入未验证清单。
+ *
+ * 独立审查后补强：PASS 头条由证据派生（不是只看四个标志位）；负对照与双轴
+ * 必须绑定当前卡与当前命令；过期由调用方传入真实 isStale 结果。
  */
-export function generateQASheet(state = {}, notes = '') {
-  const card = state.card || {};
-  const lv = state.last_verify || {};
-  const axes = state.audit_axes || {};
-  const goal = card.goal || '未指定目标';
-  const quote = card.quote || '无';
-  const scope = Array.isArray(card.scope) ? card.scope : [];
-  const newFiles = Array.isArray(card.new_files) ? card.new_files : [];
-  const verifyCmd = lv.cmd || (card.verify && card.verify.cmd) || '未执行';
-  const exitCode = lv.exitCode !== undefined ? lv.exitCode : 0;
-  const outputHash = lv.output_hash ? lv.output_hash.slice(0, 16) + '...' : '已校验';
+function clipText(text, max = 800) {
+  const s = String(text == null ? '' : text).trim()
+  return s.length <= max ? s : s.slice(0, max - 1) + '…'
+}
 
-  const standards = axes.standards ? `${axes.standards.verdict} (${axes.standards.evidence || '无异味'})` : 'PASS';
-  const spec = axes.spec ? `${axes.spec.verdict} (${axes.spec.evidence || '符合验收'})` : 'PASS';
+/** 导出内容脱敏：与失败记忆共用同一份实现，避免两套正则各漏一半。 */
+function redactSheet(text) {
+  return redact(text)
+}
+
+function axisLine(name, axis, cardTs) {
+  if (!axis || typeof axis !== 'object') return `- **${name}**：未提交（未验证）`
+  const verdict = typeof axis.verdict === 'string' ? axis.verdict : '未给出'
+  const bound = axis.card_ts === cardTs ? '与当前卡一致' : '不属于当前卡（证据失效）'
+  const evidence = typeof axis.evidence === 'string' && axis.evidence.trim() ? clipText(axis.evidence, 200) : '无证据文本'
+  return `- **${name}**：${verdict}（${bound}）；证据：${evidence}`
+}
+
+export function generateQASheet(state = {}, notes = '', options = {}) {
+  const card = state.card || {}
+  const lv = state.last_verify || null
+  const lf = state.last_falsify || null
+  const axes = state.audit_axes || {}
+  const cardTs = state.card_ts
+  const goal = card.goal || '未指定目标'
+  const quote = card.quote || '无'
+  const scope = Array.isArray(card.scope) ? card.scope : []
+  const newFiles = Array.isArray(card.new_files) ? card.new_files : []
+  const unverified = []
+  const staleNow = options.stale === true || state.stale === true
+  const cardCmd = typeof card.verify?.cmd === 'string' ? card.verify.cmd.trim() : ''
+
+  if (staleNow) unverified.push('任务卡已过期（stale），证据不属于当前有效任务')
+
+  let verifyLines
+  if (!lv || typeof lv !== 'object') {
+    unverified.push('验证命令未执行')
+    verifyLines = ['- **执行命令**：未执行（未验证）', '- **退出状态**：未验证']
+  } else {
+    const cmd = lv.cmd || (card.verify && card.verify.cmd) || '未记录'
+    const exit = Number.isInteger(lv.exitCode) ? `exitCode = ${lv.exitCode}（${lv.exitCode === 0 ? '通过' : '失败'}）` : '未记录（未验证）'
+    if (!Number.isInteger(lv.exitCode)) unverified.push('验证退出码缺失')
+    if (lv.ok !== true) unverified.push('当前验证未通过')
+    const hash = typeof lv.output_hash === 'string' && /^[a-f0-9]{64}$/i.test(lv.output_hash) ? lv.output_hash : '未提供'
+    if (hash === '未提供') unverified.push('验证输出指纹缺失')
+    const bound = lv.card_ts === cardTs ? '与当前卡一致' : '不属于当前卡（证据失效）'
+    if (lv.card_ts !== cardTs) unverified.push('验证证据未绑定当前卡')
+    if (cardCmd && String(lv.cmd || '').trim() !== cardCmd) unverified.push('验证命令与当前卡不一致')
+    verifyLines = [
+      `- **执行命令**：\`${clipText(redact(cmd), 300)}\``,
+      `- **退出状态**：${exit}`,
+      `- **输出指纹**：SHA-256 = \`${hash}\``,
+      `- **卡绑定**：${bound}`,
+    ]
+  }
+
+  let falsifyLines
+  if (!lf || typeof lf !== 'object') {
+    unverified.push('负对照未执行')
+    falsifyLines = ['- **负对照**：未执行（未验证）']
+  } else {
+    const before = lf.before || {}
+    const after = lf.after || {}
+    const restore = lf.restore || {}
+    if (lf.card_ts !== undefined && lf.card_ts !== cardTs) unverified.push('负对照证据不属于当前卡')
+    if (cardCmd && String(lf.cmd || '').trim() !== cardCmd) unverified.push('负对照命令与当前卡不一致')
+    if (lf.verdict !== 'meaningful') unverified.push('负对照未被判定为有效证伪')
+    // 现有负对照没有独立 card_ts，用「改动后输出哈希 = 当前验证输出哈希」绑定同一次运行，
+    // 旧卡的负对照哈希不会等于新卡验证哈希，因此不会被复用。
+    if (lv && typeof lv === 'object' && lf.after?.hash !== lv.output_hash) {
+      unverified.push('负对照的「改动后」结果与当前验证不一致')
+    }
+    if (typeof lf.ts === 'string' && typeof lv?.ts === 'string' && Date.parse(lf.ts) < Date.parse(lv.ts)) {
+      unverified.push('负对照早于当前验证')
+    }
+    if (before.ok !== false) unverified.push('负对照「改动前必须失败」未确认')
+    if (after.ok !== true) unverified.push('负对照「改动后必须通过」未确认')
+    if (restore.ok !== true) unverified.push('负对照后还原未确认')
+    falsifyLines = [
+      `- **负对照判定**：${lf.verdict || '未记录'}`,
+      `- **改动前**：${before.ok === false ? '按预期失败' : '未确认失败'}（exitCode = ${Number.isInteger(before.exitCode) ? before.exitCode : '未记录'}）`,
+      `- **改动后**：${after.ok === true ? '通过' : '未确认通过'}（exitCode = ${Number.isInteger(after.exitCode) ? after.exitCode : '未记录'}）`,
+      `- **还原核对**：${restore.ok === true ? `通过（${Number.isInteger(restore.checked) ? restore.checked : '未记录'} 个文件）` : '未通过/未记录'}`,
+    ]
+  }
+
+  const standardsLine = axisLine('Standards 规范轴', axes.standards, cardTs)
+  const specLine = axisLine('Spec 验收轴', axes.spec, cardTs)
+  for (const [name, axis] of [['Standards 规范轴', axes.standards], ['Spec 验收轴', axes.spec]]) {
+    if (!axis || typeof axis !== 'object' || !['PASS', 'WARN'].includes(axis.verdict) || axis.card_ts !== cardTs || !clipText(axis.evidence, 10)) {
+      unverified.push(`${name}结论不完整`)
+    }
+  }
+
+  // PASS 由证据派生：任何一项缺失/失效/验证失败都会拦住 PASS 头条。
+  const evidenceComplete = unverified.length === 0
+  const passed =
+    evidenceComplete &&
+    state.completed_ok === true &&
+    state.verdict === 'PASS' &&
+    state.verdict_role === 'auditor' &&
+    !staleNow
+  if (!passed) unverified.push('最终独立裁定尚未取得 PASS')
 
   return [
     '## 📋 Carlos 完工电子质检交付单',
     '',
-    `> **任务目标**：${goal}`,
-    `> **用户原话**：\`${quote}\``,
-    `> **裁定状态**：✅ **PASS (已通过双轴门禁独立复核)**`,
+    `> **任务目标**：${clipText(goal, 300)}`,
+    `> **用户原话**：\`${clipText(quote, 200)}\``,
+    `> **当前状态**：${passed ? '✅ PASS（已有当前任务的双轴独立裁定）' : '⚠️ 未完成 / 未验证（不得据此宣称验收通过）'}`,
     '',
     '### 1. 修改范围与授权文件 (Scope)',
     scope.length > 0 ? scope.map((s) => `- \`${s}\``).join('\n') : '- 零文件改动 (只读/分析)',
     newFiles.length > 0 ? '\n**获授权新建文件**：\n' + newFiles.map((f) => `- \`${f}\``).join('\n') : '',
     '',
     '### 2. 真实验证证据 (Verification Proof)',
-    `- **执行命令**：\`${verifyCmd}\``,
-    `- **退出状态**：exitCode = ${exitCode} (通过)`,
-    `- **输出指纹**：SHA-256 = \`${outputHash}\``,
+    ...verifyLines,
     '',
-    '### 3. 双轴独立审查结论 (Dual-Axis Review)',
-    `- **Standards 规范轴**：${standards}`,
-    `- **Spec 验收轴**：${spec}`,
+    '### 3. 负对照证据 (Negative Control)',
+    ...falsifyLines,
     '',
-    '### 4. 安全保障与回滚说明',
-    '- 🛡️ 本次改动前已自动生成代码安全快照；',
-    '- 💡 若需撤销本次所有改动，随时发送 **“恢复重来”** 即可一键还原现场。',
-    notes ? `\n> **审查员附注**：${notes}` : '',
-  ].join('\n');
+    '### 4. 双轴独立审查结论 (Dual-Axis Review)',
+    standardsLine,
+    specLine,
+    '',
+    '### 5. 未验证项',
+    unverified.length > 0 ? unverified.map((u) => `- ${u}`).join('\n') : '- 无（证据齐备）',
+    '',
+    '### 6. 安全保障与回滚说明',
+    '- 🛡️ 改动前快照由派发记录生成，可用 `flow_revert_plan` 取出还原计划；',
+    '- 💡 还原计划**不会自动执行**，需人工确认后按计划操作；',
+    '- ℹ️ 本交付单只投影导出时的真实证据，不补造 PASS，也不自动重跑命令。',
+    notes ? `\n> **审查员附注**：${clipText(redactSheet(notes), 500)}` : '',
+  ].join('\n')
+}
+
+/**
+ * 真实导出动作：把交付单写成 Markdown 文件。
+ * - 必须显式给出输出目录（由本次获授权范围决定），不猜默认位置；
+ * - 内容先脱敏；
+ * - 原子写入并返回 sha256，导出是否成功由返回值如实报告。
+ */
+export async function exportQASheet(state = {}, options = {}) {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const { createHash } = await import('node:crypto')
+  const outDir = options.outDir
+  if (typeof outDir !== 'string' || !outDir.trim()) {
+    return { ok: false, reason: '未指定获授权的输出目录' }
+  }
+  if (!path.isAbsolute(outDir)) return { ok: false, reason: '输出目录必须是绝对路径' }
+  const sessionId = clipText(options.sessionId || state.sessionId || 'unknown', 80).replace(/[^\w.-]+/g, '-') || 'unknown'
+  const body = redactSheet(generateQASheet(state, options.notes || '', { stale: options.stale === true }))
+  const file = path.join(outDir, `carlos-qa-sheet-${sessionId}.md`)
+  const tmp = path.join(outDir, `.carlos-qa-sheet-${process.pid}-${Date.now()}.tmp`)
+  try {
+    fs.mkdirSync(outDir, { recursive: true })
+    const fd = fs.openSync(tmp, 'w')
+    try {
+      fs.writeFileSync(fd, body, 'utf8')
+      fs.fsyncSync(fd)
+    } finally {
+      fs.closeSync(fd)
+    }
+    fs.renameSync(tmp, file)
+  } catch (e) {
+    try { fs.unlinkSync(tmp) } catch {}
+    return { ok: false, reason: `写入失败：${e && e.code ? e.code : 'UNKNOWN'}` }
+  }
+  const sha256 = createHash('sha256').update(body, 'utf8').digest('hex')
+  return { ok: true, path: file, sha256, bytes: Buffer.byteLength(body, 'utf8') }
 }
 
 export function narrate(event = {}) {
@@ -74,10 +213,10 @@ export function translateGateError(technicalMsg, state = {}) {
     return '🛑 这张任务卡已经过期或失效。\n💡 为什么停下：可能太久未操作，或目标已被推翻。\n👉 怎么办：请重新说明一下目标，我将为您开启一张新卡。';
   }
   if (/自己.*批|executor.*无权.*PASS|无权记录\s*PASS/i.test(msg)) {
-    return '🛑 写代码的角色不能自己给自己批作业。\n💡 为什么停下：为了保证代码质量，必须由独立的复核角色检查。\n👉 怎么办：门禁正在自动派发复核角色跑全量测试，全绿后会自动完成验收。';
+    return '🛑 写代码的角色不能自己给自己批作业。\n💡 为什么停下：为了保证代码质量，必须由独立的复核角色检查。\n👉 怎么办：请由独立的复核角色重新领取审查；门禁不会自动派发，也不会自动完成验收。';
   }
   if (/推翻|换思路|换方案/i.test(msg)) {
-    return '🛑 检测到您想推翻当前思路、换个方案。\n👉 已为您准备好一键回滚：请回复“恢复重来”，我会立即将代码还原到开工前的状态并开启新任务。';
+    return '🛑 检测到您想推翻当前思路、换个方案。\n👉 可先用 flow_revert_plan 生成还原计划；还原不会自动执行，需要您确认。';
   }
   if (/未指定\s*verify|没有可核验的验证/i.test(msg)) {
     return '🛑 任务还没有指定验证方法。\n💡 为什么停下：没有验证命令就无法确认改动是否真正修好。\n👉 怎么办：请提供验证命令，或者让我帮您自动跑现有测试。';

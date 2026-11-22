@@ -2,6 +2,12 @@
 import { createCatalog } from './handlers/catalog.js'
 import {
   auditRequests,
+  auditIdentity,
+  bindAuditVersion,
+  pendingAuditEntries,
+  historicalAuditEntries,
+  isCurrentAuditFailure,
+  recoverRequestAudit,
   log,
   ok,
   readFileSync,
@@ -251,13 +257,17 @@ async function callTool(toolName, args = {}, context, runtime) {
     let result
     let error
     try {
-      // 锁外操作即使等待期间换卡，旧请求的失败也不能取消新卡的完成状态。
+      // 捕获原请求版本；等待期间换卡也不能静默丢失旧卡未确认事件。
       const sid = args.sessionId || 'unknown'
-      auditRequests.getStore().version = { ...loadState(sid), sid }
+      bindAuditVersion(sid, loadState(sid))
+      auditRequests.getStore().tool = toolName
+      auditRequests.getStore().identity = auditIdentity({ toolName, args, cwd: process.cwd() })
       if (runtime?.failure && (toolName === 'flow_run_verify' || toolName === 'flow_falsify' ||
           (toolName === 'flow_verdict' && args.verdict === 'PASS')))
         throw new Error('Host固定哈希能力不可用，未执行操作。')
-      result = await t.handler(args, context, runtime)
+      const recovered = await recoverRequestAudit(sid)
+      if (!recovered) bindAuditVersion(sid, loadState(sid)) // recovery 的 await 后，handler 才实际接纳卡。
+      result = recovered ? ok(recovered) : await t.handler(args, context, runtime)
     } catch (e) {
       error = e && e.message ? e.message : String(e)
     }
@@ -267,19 +277,20 @@ async function callTool(toolName, args = {}, context, runtime) {
       error = `审计未确认持久化，请重试并复核状态: ${failure.error}`
       try {
         await commitState(failure.sid, (latest) => {
-          if (
-            latest.card_ts !== failure.card_ts ||
-            JSON.stringify(latest.card) !== failure.card
-          )
-            return
-          latest.completed_ok = false
-          latest.audit_pending = {
-            kind: failure.kind,
-            card_ts: failure.card_ts,
-            failed_at: failure.failed_at,
-            error: failure.error,
-            retry:
-              '重试原操作并复核 flow_status；失败追加可能已落盘，允许重复事件',
+          // 即使等待期间换卡，旧事件也必须保留；不得覆盖并发失败或新证据。
+          const entries = pendingAuditEntries(latest)
+          const history = historicalAuditEntries(latest)
+          if (entries.some(e => e.id === failure.id) || history.some(e => e.id === failure.id)) return
+          if (isCurrentAuditFailure(failure, latest)) {
+            entries.push(failure)
+            latest.completed_ok = false
+            latest.audit_pending = {
+              kind: 'events', entries,
+              retry: '使用相同原操作及参数重试：仅补记匹配事件，不重跑业务；随后核对 flow_status 与产物',
+            }
+          } else {
+            // 原卡 CAS 不匹配：只留历史事件，绝不触碰新卡完成/验证/领取。
+            latest.audit_history_pending = [...history, failure]
           }
         })
       } catch (e) {

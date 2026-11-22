@@ -51,24 +51,24 @@ describe('TASK-101 到 TASK-104 自动验证推断与质检单生成器实测', 
   });
 
   describe('TASK-103: 完工电子质检交付单生成 (generateQASheet)', () => {
-    it('生成结构完整且包含5大维度的质检单', () => {
+    it('缺证据时不得伪造成 PASS，必须列出未验证项', () => {
       const mockState = {
         card: {
           goal: '重构登录模块参数校验',
           quote: '修改 auth.js 里的参数校验逻辑',
           scope: ['src/auth.js', 'src/login.js'],
           new_files: ['src/validator.js'],
-          verify: { cmd: 'npm test' }
+          verify: { cmd: 'npm test' },
         },
         last_verify: {
           cmd: 'npm test',
           exitCode: 0,
-          output_hash: 'abcdef1234567890abcdef1234567890'
+          output_hash: 'abcdef1234567890abcdef1234567890',
         },
         audit_axes: {
           standards: { verdict: 'PASS', evidence: '代码无异味，命名规范' },
-          spec: { verdict: 'PASS', evidence: '验收项全部满足' }
-        }
+          spec: { verdict: 'PASS', evidence: '验收项全部满足' },
+        },
       };
 
       const sheet = generateQASheet(mockState, '全部测试通过，建议合入');
@@ -79,8 +79,39 @@ describe('TASK-101 到 TASK-104 自动验证推断与质检单生成器实测', 
       assert.ok(sheet.includes('npm test'));
       assert.ok(sheet.includes('Standards 规范轴'));
       assert.ok(sheet.includes('Spec 验收轴'));
-      assert.ok(sheet.includes('恢复重来'));
+      assert.ok(sheet.includes('未验证'), '缺证据必须显式标为未验证');
+      assert.ok(!/✅ PASS/.test(sheet), '缺证据不得写出 PASS');
+      assert.ok(!sheet.includes('恢复重来'), '不得承诺未实现的一键还原');
+      assert.ok(sheet.includes('不会自动执行'));
       assert.ok(sheet.includes('审查员附注'));
+    });
+
+    it('证据齐备且已获 auditor PASS 时才写出 PASS', () => {
+      const hash = 'a'.repeat(64);
+      const mockState = {
+        card: { goal: '交付单证据测试', quote: '测试', scope: ['src/a.js'], verify: { cmd: 'npm test' } },
+        card_ts: 1000,
+        completed_ok: true,
+        verdict: 'PASS',
+        verdict_role: 'auditor',
+        stale: false,
+        last_verify: { cmd: 'npm test', exitCode: 0, ok: true, card_ts: 1000, ts: '2026-11-22T10:00:00.000Z', output_hash: hash },
+        last_falsify: {
+          cmd: 'npm test',
+          verdict: 'meaningful',
+          ts: '2026-11-22T10:05:00.000Z',
+          before: { ok: false, exitCode: 1 },
+          after: { ok: true, exitCode: 0, hash },
+          restore: { ok: true, checked: 1, mismatched: [] },
+        },
+        audit_axes: {
+          standards: { verdict: 'PASS', evidence: '规范核对完成', card_ts: 1000 },
+          spec: { verdict: 'PASS', evidence: '验收逐条核对完成', card_ts: 1000 },
+        },
+      };
+      const sheet = generateQASheet(mockState, '');
+      assert.ok(sheet.includes('✅ PASS'));
+      assert.ok(sheet.includes('无（证据齐备）'));
     });
   });
 });

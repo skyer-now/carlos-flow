@@ -74,11 +74,11 @@ console.log("  备份待迁移  : " + plan.backupConversion.length + " 个会话
 console.log("  审计目录    : 不参与（哈希链，删一天就断），当前 " + auditBefore.files + " 个文件 / " + mb(auditBefore.bytes));
 
 if (apply) {
-  const filtered = applyPrune(wanted, { apply: true, archiveRoot });
+  const filtered = await applyPrune(wanted, { apply: true, archiveRoot });
   console.log("");
   console.log("  已归档      : " + filtered.archived.length + " 个会话，移出 " + mb(filtered.archiveBytes));
   if (filtered.archiveDir) console.log("  归档位置    : " + filtered.archiveDir + "（随时可搬回）");
-  if (filtered.archiveFailed.length) console.log("  ⚠ 归档失败  : " + filtered.archiveFailed.join(", ") + "（可能被占用，重跑即可）");
+  if (filtered.archiveFailed.length) console.log("  ⚠ 归档未确认: " + filtered.archiveFailed.join(", ") + "（核查源与归档位置，勿盲重试）");
   const saved = filtered.backup.reduce((n, x) => n + x.savedBytes, 0);
   const converted = filtered.backup.reduce((n, x) => n + x.converted, 0);
   const deduped = filtered.backup.reduce((n, x) => n + x.deduped, 0);

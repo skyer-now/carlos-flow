@@ -544,15 +544,20 @@ const testCases = [
       // path.normalize("~/.carlos-flow") 只是把斜杠换成反斜杠，路径仍是**字面量**，
       // 于是状态/审计链被写到「当前工作目录下的一个名叫 ~ 的目录」里（Windows 实测
       // FLOW_HOME = ~\\.carlos-flow），位置诡异、极易丢失。
-      const home = process.env.USERPROFILE || process.env.HOME || '';
       const probe = `
         import fs from 'node:fs';
+        import path from 'node:path';
+        import os from 'node:os';
         import { pathToFileURL } from 'node:url';
         const REPO = ${JSON.stringify(REPO_ROOT)};
-        const { FLOW_HOME } = await import(pathToFileURL(REPO + '/src/state.js').href);
+        const { FLOW_HOME, expandHome } = await import(pathToFileURL(REPO + '/src/state.js').href);
+        const expected = path.resolve(os.homedir(), '.carlos-flow');
+        // 精确比较规范化后的目标，既兼容分隔符，也拒绝同名前缀的相邻目录。
+        const matchesExpected = (candidate) => path.resolve(candidate) === expected;
         console.log(JSON.stringify({
           expanded: !FLOW_HOME.startsWith('~') && !FLOW_HOME.includes('/~'),
-          inHome: ${JSON.stringify(home)} ? FLOW_HOME.startsWith(${JSON.stringify(home)}) : true,
+          inHome: matchesExpected(FLOW_HOME),
+          rejectsNeighbor: !matchesExpected(expandHome('~/.carlos-flow-other')),
           flowHome: FLOW_HOME,
         }));
       `;
@@ -566,7 +571,7 @@ const testCases = [
       }
       const c = JSON.parse(r.stdout.trim().split('\n').pop());
       console.log(`  [DEBUG] ~ 展开: ${JSON.stringify(c)}`);
-      return c.expanded && c.inHome;
+      return r.status === 0 && c.expanded && c.inHome && c.rejectsNeighbor;
     }
   },
   {

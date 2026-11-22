@@ -16,6 +16,10 @@ import {
 //   · pathKey —— win32 折叠大小写、其它平台敏感，授权写法与落盘写法必须同口径；
 //   · realTargetPath —— 唯一一份「这条路径真实落在哪里」的解析。
 import { pathKey, realTargetPath } from './card.js'
+import {
+  loadProjectFailureMemory,
+  saveProjectFailureMemory,
+} from './failure-memory.js'
 
 export const MAX_DISPATCH = 5
 
@@ -102,45 +106,52 @@ import { PROMPT_PROFILES } from './profiles.js'
  * 本地错误自愈知识库 (Failure Memory & Self-Healing Guidelines)
  * 记录历史项目中踩过的坑与规则，避免重复犯错
  */
-const KNOWLEDGE_PATH = path.join(FLOW_HOME, 'failure-memory.json')
-
-export function loadFailureMemory() {
-  try {
-    if (fs.existsSync(KNOWLEDGE_PATH)) {
-      return JSON.parse(fs.readFileSync(KNOWLEDGE_PATH, 'utf8'))
-    }
-  } catch {}
-  return { rules: [] }
+/**
+ * 失败记忆：项目隔离存储（阶段二）。
+ *
+ * 旧实现在 FLOW_HOME 根下写单一 failure-memory.json，任何项目都读同一份，
+ * 于是 A 仓库的坑会被注入到 B 仓库的派发 Prompt，且旧全局记录无法判断归属。
+ * 现在改为按项目分区；仍复用同一个 CARLOS_FLOW_HOME，不建第二套知识库。
+ * 旧全局文件只读统计（legacy.ignored），不自动归入任何项目、也不注入。
+ */
+function memoryOptions(options = {}) {
+  return { flowHome: FLOW_HOME, cwd: options.cwd || process.cwd() }
 }
 
-export function saveFailureMemory(item) {
-  try {
-    const mem = loadFailureMemory()
-    const text = typeof item === 'string' ? item : item.rule
-    if (!text || mem.rules.some((r) => r.text === text)) return
-    mem.rules.push({
-      text,
-      tag: item.tag || 'general',
-      added_at: new Date().toISOString()
-    })
-    fs.mkdirSync(path.dirname(KNOWLEDGE_PATH), { recursive: true })
-    fs.writeFileSync(KNOWLEDGE_PATH, JSON.stringify(mem, null, 2), 'utf8')
-  } catch {}
+export function loadFailureMemory(options = {}) {
+  return loadProjectFailureMemory(memoryOptions(options))
+}
+
+export function saveFailureMemory(item, options = {}) {
+  const saved = saveProjectFailureMemory(item, memoryOptions(options))
+  if (!saved.ok) {
+    // 调用方必须能知道没保存成功；旧接口返回 undefined，这里抛出可读错误由上层转为提示。
+    const err = new Error(`失败记忆未保存：${saved.reason || '未知原因'}`)
+    err.code = 'FAILURE_MEMORY_NOT_SAVED'
+    throw err
+  }
+  return saved
 }
 
 /**
  * 根据 scope 文件类型推断事前最佳实践指南 (Proactive Guidelines)
  */
-export function inferProactiveGuidelines(scope = []) {
+export function inferProactiveGuidelines(scope = [], options = {}) {
   const list = Array.isArray(scope) ? scope.map((s) => String(s).toLowerCase()) : []
   const tips = []
 
-  // 0. 加载本地错误自愈知识库
-  const mem = loadFailureMemory()
+  // 0. 加载本项目错误自愈知识库（跨项目不串用）
+  const mem = loadProjectFailureMemory(memoryOptions(options))
   if (Array.isArray(mem.rules) && mem.rules.length > 0) {
+    // 超预算被裁剪时规则仍然有效：先注入，再附一句说明，不能整体作废。
     for (const r of mem.rules.slice(-3)) {
       tips.push(`• 历史避坑经验: ${r.text}`)
     }
+    if (mem.degraded) {
+      tips.push(`• 历史避坑经验: 已裁剪（${mem.degraded_reason || '超出预算'}）`)
+    }
+  } else if (mem.degraded) {
+    tips.push(`• 历史避坑经验: 暂不可用（${mem.degraded_reason || '记忆文件损坏'}），已按无经验继续`)
   }
 
   if (list.length > 0) {
@@ -251,9 +262,14 @@ export function buildContractPrompt(role, card, extra, options = {}) {
 
   // 事前代码规范注入：若是 executor 执行者，根据 scope 自动注入针对性编码最佳实践
   if (isExecutor && card && Array.isArray(card.scope) && card.scope.length > 0) {
-    const guidelines = inferProactiveGuidelines(card.scope)
-    if (guidelines) {
-      prompt += '\n\n' + guidelines
+    // 项目身份按本次派发的工作目录解析：拿不到真实工作目录就不注入，
+    // 绝不回落到 MCP server 的启动目录（那会把记忆写进/读自错误项目）。
+    const dispatchCwd = options.cwd || card.env?.project || card.verify?.cwd || null
+    if (dispatchCwd) {
+      const guidelines = inferProactiveGuidelines(card.scope, { cwd: dispatchCwd })
+      if (guidelines) {
+        prompt += '\n\n' + guidelines
+      }
     }
   }
 

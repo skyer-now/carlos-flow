@@ -1,6 +1,6 @@
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 const isolated = mkdtempSync(path.join(tmpdir(), 'carlos-knowledge-'));
@@ -63,4 +63,9 @@ describe('P2 本地错误自愈知识库与 P3 多 Agent 权限网格实测', ()
       assert.ok(!prompt.includes('src/api.js'));
     });
   });
+});
+
+// 不留下临时状态目录。
+after(() => {
+  try { rmSync(isolated, { recursive: true, force: true }); } catch {}
 });

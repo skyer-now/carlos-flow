@@ -13,6 +13,7 @@ import path from 'node:path'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'carlos-prune-home-'))
 process.env.CARLOS_FLOW_HOME = HOME
@@ -91,6 +92,189 @@ function makeSession(
 }
 
 try {
+  // P2：全部真实临时目录，所有外部进程均为本测试创建的 Node writer。
+  {
+    const archiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'carlos-prune-guards-'))
+    const guards = []
+    const oldState = sid => {
+      guards.push(sid)
+      state.saveState(sid, { ...state.defaultState(), card: { goal: 'A' }, card_ts: 1, verdict: 'PASS' })
+      fs.utimesSync(path.join(RUNS, sid, 'state.json'), day(20), day(20))
+    }
+    const onlyPlan = sid => {
+      const p = storage.planPrune({ inactiveDays: 7 })
+      return { ...p, archivable: p.archivable.filter(s => s.session === sid), backupConversion: [] }
+    }
+    const apply = p => storage.applyPrune(p, { apply: true, archiveRoot })
+    const online = sid => fs.existsSync(path.join(RUNS, sid, 'state.json'))
+    const waitFor = async file => {
+      const deadline = Date.now() + 5000
+      while (!fs.existsSync(file)) {
+        if (Date.now() >= deadline) throw new Error('测试 writer 文件握手超时')
+        await new Promise(r => setTimeout(r, 10))
+      }
+    }
+    const startWriter = code => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] })
+      let output = ''
+      child.stdout.on('data', b => { output += b })
+      child.stderr.on('data', b => { output += b })
+      const done = new Promise((resolve, reject) => {
+        child.on('error', reject)
+        child.on('close', code => resolve({ code, output }))
+      })
+      return done
+    }
+    const stateURL = new URL('../src/state.js', import.meta.url).href
+    try {
+      for (const [sid, field, value] of [
+        ['guard-active', 'audit_pending', { kind: 'events', entries: [{ id: 'a' }] }],
+        ['guard-history', 'audit_history_pending', [{ id: 'h' }]],
+      ]) {
+        oldState(sid)
+        const stale = onlyPlan(sid)
+        await state.withStateLock(sid, () => {
+          const s = state.loadState(sid)
+          s[field] = value
+          state.saveState(sid, s)
+          fs.utimesSync(path.join(RUNS, sid, 'state.json'), day(20), day(20))
+        })
+        check(`P2. ${field} 欠账计划排除`, onlyPlan(sid).archivable.length === 0)
+        const r = await apply(stale)
+        check(`P2. ${field} 计划后欠账仍在线`, r.archived.length === 0 && online(sid))
+      }
+      oldState('guard-new-b')
+      const oldPlan = onlyPlan('guard-new-b')
+      await state.withStateLock('guard-new-b', () => state.saveState('guard-new-b', {
+        ...state.defaultState(), card: { goal: 'B' }, card_ts: 2, verdict: null,
+      }))
+      check('P2. 旧计划不能搬走新 B', (await apply(oldPlan)).archived.length === 0 && state.loadState('guard-new-b').card.goal === 'B')
+
+      for (const [name, raw] of [
+        ['broken', '{'], ['null', 'null'], ['array', '[]'], ['legacy', '{"verdict":"PASS","audit_pending":{}}'],
+        ['history-unknown', '{"verdict":"PASS","audit_history_pending":{}}'], ['bad-verdict', '{"verdict":true}'],
+      ]) {
+        const sid = `guard-${name}`
+        oldState(sid)
+        fs.writeFileSync(path.join(RUNS, sid, 'state.json'), raw)
+        fs.utimesSync(path.join(RUNS, sid, 'state.json'), day(20), day(20))
+        check(`P2. 未知状态保守保留 ${name}`, onlyPlan(sid).archivable.length === 0)
+      }
+      oldState('guard-mtime')
+      const mtimePlan = onlyPlan('guard-mtime')
+      fs.utimesSync(path.join(RUNS, 'guard-mtime', 'state.json'), day(0), day(0))
+      check('P2. 仅 mtime 更新也拒绝旧计划', (await apply(mtimePlan)).archived.length === 0 && online('guard-mtime'))
+      oldState('guard-same-terminal-b')
+      const terminalPlan = onlyPlan('guard-same-terminal-b')
+      await state.withStateLock('guard-same-terminal-b', () => {
+        state.saveState('guard-same-terminal-b', { ...state.defaultState(), card: { goal: 'B' }, card_ts: 2, verdict: 'PASS' })
+        fs.utimesSync(path.join(RUNS, 'guard-same-terminal-b', 'state.json'), day(20), day(20))
+      })
+      check('P2. 即使新 B 也是旧 mtime 终态仍拒绝旧计划', (await apply(terminalPlan)).archived.length === 0 && online('guard-same-terminal-b'))
+      oldState('guard-replaced')
+      const replacedPlan = onlyPlan('guard-replaced')
+      fs.renameSync(path.join(RUNS, 'guard-replaced'), path.join(archiveRoot, 'replaced-original'))
+      oldState('guard-replaced')
+      check('P2. 同名物理目录替换拒绝旧计划', (await apply(replacedPlan)).archived.length === 0 && online('guard-replaced'))
+
+      oldState('guard-missing')
+      const missingPlan = onlyPlan('guard-missing')
+      fs.rmSync(path.join(RUNS, 'guard-missing'), { recursive: true })
+      await apply(missingPlan)
+      check('P2. 不为锁重建已不存在的会话', !fs.existsSync(path.join(RUNS, 'guard-missing')))
+
+      oldState('guard-live-writer')
+      const racePlan = onlyPlan('guard-live-writer')
+      const ready = path.join(archiveRoot, 'ready')
+      const release = path.join(archiveRoot, 'release')
+      const done = startWriter(`import fs from 'node:fs'; import {withStateLock,loadState,saveState} from ${JSON.stringify(stateURL)};
+        await withStateLock('guard-live-writer',async()=>{
+          const s=loadState('guard-live-writer'); s.audit_history_pending=[{id:'late'}]; saveState('guard-live-writer',s);
+          fs.writeFileSync(${JSON.stringify(ready)},'ready'); const until=Date.now()+8000;
+          while(!fs.existsSync(${JSON.stringify(release)})){ if(Date.now()>until)throw new Error('release timeout'); await new Promise(r=>setTimeout(r,10)); }
+        }); console.log('writer release confirmed');`)
+      let pruning
+      try {
+        await waitFor(ready)
+        let settled = false
+        pruning = apply(racePlan).finally(() => { settled = true })
+        await new Promise(r => setTimeout(r, 100))
+        check('P2. 真实 writer 持锁阻断归档且 owner 未移动', !settled && online('guard-live-writer') && fs.existsSync(path.join(RUNS, 'guard-live-writer', '.state.lock')))
+      } finally { fs.writeFileSync(release, 'release') }
+      const writer = await done
+      const race = await pruning
+      check('P2. writer 正常释放后重验欠账仍在线', writer.code === 0 && race.archived.length === 0 && online('guard-live-writer'), writer.output.trim())
+
+      // 确认排队进程已用旧目录身份尝试 wx，再归档并合成同名新目录。
+      oldState('guard-queued')
+      const attempted = path.join(archiveRoot, 'queued-attempt')
+      const queuedFile = path.join(RUNS, 'guard-queued', '.state.lock')
+      let queuedDone
+      const dest = path.join(archiveRoot, 'queued-archived')
+      const archived = await state.archiveStateSession('guard-queued', async () => {
+        queuedDone = startWriter(`import fs from 'node:fs'; import {withStateLock,saveState} from ${JSON.stringify(stateURL)};
+          const real=fs.openSync; fs.openSync=function(file,flags,...rest){ if(file===${JSON.stringify(queuedFile)}&&flags==='wx')fs.writeFileSync(${JSON.stringify(attempted)},'attempt'); return real.call(this,file,flags,...rest) };
+          try {await withStateLock('guard-queued',()=>{saveState('guard-queued',{card:{goal:'OVERWRITE'}}); console.log('UNSAFE ENTERED')}); process.exitCode=1}
+          catch(error){console.log('queued writer rejected: '+error.message)};`)
+        await waitFor(attempted)
+        return true
+      }, () => {
+        fs.renameSync(path.join(RUNS, 'guard-queued'), dest)
+        state.saveState('guard-queued', { ...state.defaultState(), card: { goal: 'replacement' } })
+        return true
+      })
+      const queued = await queuedDone
+      check('P2. 排队 writer 不写同名替换目录', archived && queued.code === 0 && queued.output.includes('session-identity') && state.loadState('guard-queued').card.goal === 'replacement', queued.output.trim())
+      check('P2. 归档正常退出不搬锁不留空壳', fs.existsSync(path.join(dest, 'state.json')) && !fs.existsSync(path.join(dest, '.state.lock')) && !fs.existsSync(queuedFile))
+
+      // EXDEV 使用确定性 rename 错误注入，真实源/目标目录；cp/rm 不参与执行路径。
+      oldState('guard-exdev')
+      const exdevPlan = onlyPlan('guard-exdev')
+      const rename = fs.renameSync
+      let attempts = 0
+      try {
+        fs.renameSync = function(src, dest) {
+          if (src === path.join(RUNS, 'guard-exdev')) { attempts++; throw Object.assign(new Error('synthetic EXDEV'), { code: 'EXDEV' }) }
+          return rename.call(this, src, dest)
+        }
+        const r = await apply(exdevPlan)
+        check('P2. EXDEV 单次失败保源且正常释放锁', attempts === 1 && r.archived.length === 0 && r.archiveFailed.includes('guard-exdev') && online('guard-exdev') && !fs.existsSync(path.join(RUNS, 'guard-exdev', '.state.lock')))
+      } finally { fs.renameSync = rename }
+      oldState('guard-release-failure')
+      const releasePlan = onlyPlan('guard-release-failure')
+      let directoryMoves = 0
+      try {
+        fs.renameSync = function(src, dest) {
+          if (src === path.join(RUNS, 'guard-release-failure', '.state.lock') && dest.includes('.release-'))
+            throw Object.assign(new Error('synthetic owner release failure'), { code: 'EIO' })
+          if (src === path.join(RUNS, 'guard-release-failure')) directoryMoves++
+          return rename.call(this, src, dest)
+        }
+        const r = await apply(releasePlan)
+        check('P2. owner 释放未确认绝不移动目录', directoryMoves === 0 && r.archived.length === 0 && online('guard-release-failure') && fs.existsSync(path.join(RUNS, 'guard-release-failure', '.state.lock')))
+      } finally {
+        fs.renameSync = rename
+        // 仅撤销本测试注入永久故障留下的自身合成 owner，不触碰其他会话/用户锁。
+        fs.rmSync(path.join(RUNS, 'guard-release-failure'), { recursive: true, force: true })
+      }
+      oldState('guard-inside-home')
+      const rejected = await storage.applyPrune(onlyPlan('guard-inside-home'), { apply: true, archiveRoot: path.join(HOME, 'unsafe-archive') })
+      check('P2. 归档根不能位于 FLOW_HOME 内', rejected.archived.length === 0 && online('guard-inside-home'))
+
+      // CLI 真正等待异步执行与审计对比，环境明确继承本测试临时 HOME。
+      oldState('guard-cli')
+      const cli = spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/prune.mjs', import.meta.url)), '--apply', '--sessions-only', '--older-than', '7', '--archive-root', archiveRoot], { env: { ...process.env }, encoding: 'utf8', timeout: 10000 })
+      check('P2. CLI await 异步归档并确认审计完整', cli.status === 0 && !online('guard-cli') && cli.stdout.includes('审计完整性'), cli.stderr.trim())
+      oldState('guard-auto')
+      storage.scheduleAutoPrune({ olderThanDays: 7, archiveRoot, force: true })
+      const autoDeadline = Date.now() + 5000
+      while (online('guard-auto') && Date.now() < autoDeadline) await new Promise(r => setTimeout(r, 10))
+      check('P2. 自动调度等待异步执行且保留两类欠账', !online('guard-auto') && online('guard-active') && online('guard-history'))
+    } finally {
+      for (const sid of guards) fs.rmSync(path.join(RUNS, sid), { recursive: true, force: true })
+      fs.rmSync(archiveRoot, { recursive: true, force: true })
+    }
+  }
   // 确定性共享句柄冲突：只重试本人声明，首/二发布及撤销均须有界。
   {
     const dead = spawnSync(process.execPath, ['-e', '']).pid
@@ -685,7 +869,7 @@ try {
   )
 
   // ---- 2. dry-run 不执行 ----
-  storage.applyPrune(plan, { apply: false })
+  await storage.applyPrune(plan, { apply: false })
   check(
     '2a. dry-run 不移动会话目录',
     fs.existsSync(path.join(RUNS, 'stale-terminal')),
@@ -701,7 +885,7 @@ try {
     '..',
     'carlos-prune-archive-' + Date.now(),
   )
-  const res = storage.applyPrune(plan, { apply: true, archiveRoot })
+  const res = await storage.applyPrune(plan, { apply: true, archiveRoot })
   check(
     '3a. 陈旧终态会话被移出 FLOW_HOME',
     !fs.existsSync(path.join(RUNS, 'stale-terminal')),

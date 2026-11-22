@@ -1,6 +1,7 @@
 // carlos-flow MCP server — stdio transport.
 // Carlos 工作流的机械门禁工具集（留痕 / 派发 / 裁定 / 审计 / 快照还原计划）。
 // 重要：stdout 是 MCP 传输通道，所有日志一律走 stderr。
+import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import {
   existsSync,
@@ -45,6 +46,7 @@ import {
   AUDIT_DIR,
   RUNS_DIR,
   sanitizeId,
+  sanitizeFields,
 } from '../state.js'
 import {
   buildContractPrompt,
@@ -64,23 +66,110 @@ import {
 
 const auditRequests = new AsyncLocalStorage()
 
+// 身份只保存摘要；补记载荷使用 state.audit 已脱敏的回执，不保存原始入参/卡片。
+const auditIdentity = (value) => {
+  const canonical = (v) => Array.isArray(v) ? v.map(canonical) :
+    v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v
+  return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex')
+}
+const pendingAuditEntries = (state) => {
+  const p = state.audit_pending
+  if (!p) return []
+  if (Array.isArray(p.entries)) return p.entries
+  // 老 verdict 标记沿用全门禁重审；无完整载荷的老非 verdict 失败不能猜测补记。
+  return p.kind === 'verdict' ? [] : [p]
+}
+function storeAuditEntries(state, entries) {
+  if (entries.length) state.audit_pending = { kind: 'events', entries }
+  else delete state.audit_pending
+}
+const historicalAuditEntries = (state) => state.audit_history_pending || []
+const auditCardIdentity = (state) => ({ card_ts: state.card_ts, card_identity: auditIdentity(sanitizeFields(state.card)) })
+// 绑定实际接纳/提交的卡快照（按落盘脱敏表示），长操作后不追认届时 latest 卡。
+function bindAuditVersion(sid, state) {
+  const request = auditRequests.getStore()
+  if (request) request.version = { sid, card_ts: state.card_ts, card: structuredClone(sanitizeFields(state.card)) }
+  return state
+}
+const readAuditState = sid => bindAuditVersion(sid, loadState(sid))
+const isCurrentAuditFailure = (entry, state) => {
+  const same = version => entry.card_ts === version.card_ts && entry.card_identity === version.card_identity
+  return same(auditCardIdentity(state)) || !!state.card && (state.audit_scope_ancestors || []).some(same)
+}
+// 仅明确完整换卡/取消调用；scope 延续绝不迁移。无归属/载荷的老标记保守留在活动队列。
+function archiveCardAudit(state) {
+  const entries = pendingAuditEntries(state)
+  const movable = entries.filter(e => e.id && e.event && e.request && isCurrentAuditFailure(e, state))
+  if (!movable.length) return
+  const moved = new Set(movable.map(e => e.id))
+  const history = historicalAuditEntries(state)
+  const known = new Set(history.map(e => e.id))
+  state.audit_history_pending = [...history, ...movable.filter(e => !known.has(e.id))]
+  storeAuditEntries(state, entries.filter(e => !moved.has(e.id)))
+}
+const matchesAuditRequest = (entry, request) => typeof entry.request === 'string' && entry.request === request?.identity
+const isRetryableVerdict = (entry, state, request) => entry.kind === 'verdict' &&
+  entry.card_ts === state.card_ts && entry.card_identity === auditCardIdentity(state).card_identity && matchesAuditRequest(entry, request)
+
+// 原请求重试优先补记，而不是再消费额度/永久 claim 或重跑命令。
+// 锁内追加确认后只移除匹配 ID；换卡仍能补记旧卡历史，但不执行旧业务、不产生新卡证据。
+async function recoverRequestAudit(sid) {
+  const request = auditRequests.getStore()
+  const observed = loadState(sid)
+  const candidates = state => [
+    ...pendingAuditEntries(state).filter(e => matchesAuditRequest(e, request) &&
+      !(request.tool === 'flow_verdict' && isRetryableVerdict(e, state, request))),
+    ...historicalAuditEntries(state).filter(e => matchesAuditRequest(e, request)),
+  ]
+  if (!candidates(observed).length) return null
+  // 等锁期间另一恢复者可能已清除匹配项；本请求仍只做恢复，不能意外降级为业务重放。
+  let recovered
+  await commitState(sid, (latest) => {
+    recovered = { ok: true, audit_recovered: [], business_replayed: false,
+      completed_ok: latest.completed_ok === true, note: '匹配审计已由并发请求补记；本次未执行原业务，请复核 flow_status。' }
+    const entries = pendingAuditEntries(latest)
+    const history = historicalAuditEntries(latest)
+    const matching = candidates(latest)
+    if (!matching.length) return
+    const removed = new Set()
+    for (const entry of matching) {
+      if (!entry.event || !entry.id) throw new Error('旧审计待确认缺少可信补记载荷，需人工核验，不能自动清除')
+      const receipt = appendAudit('resolution', sid, {
+        kind: 'audit_recovery', pending_id: entry.id, card_ts: entry.card_ts,
+        card_identity: entry.card_identity, original_event: entry.event,
+        business_replayed: false, note: '仅补记原未确认事件，不证明原业务重新执行或完整完成；允许未知追加造成重复',
+      })
+      if (!receipt.persisted) throw new Error(`审计补记未确认持久化: ${receipt.error}`)
+      removed.add(entry.id)
+    }
+    if (entries.some(e => removed.has(e.id)))
+      storeAuditEntries(latest, entries.filter(e => !removed.has(e.id)))
+    if (history.some(e => removed.has(e.id))) {
+      const remaining = history.filter(e => !removed.has(e.id))
+      if (remaining.length) latest.audit_history_pending = remaining
+      else delete latest.audit_history_pending
+    }
+    // 补记只改对应队列，不改完成/验证/领取；旧代恢复不能取消新卡的完成状态。
+    recovered = { ok: true, audit_recovered: [...removed], business_replayed: false,
+      completed_ok: latest.completed_ok === true, note: '本次仅补记审计，未重跑业务；请核对 flow_status 与原操作产物，需继续业务时另行调用。' }
+  })
+  return recovered
+}
+
 function audit(...args) {
   const sid = args[1]
-  // 只读版本用于拒绝旧失败补偿；绝不在同步审计 API 内写状态。
-  const before = loadState(sid)
+  // 只读请求版本用于绑定旧事件；绝不在同步审计 API 内写状态。
   const request = auditRequests.getStore()
-  const version =
-    args[2]?.card_ts !== undefined
-      ? before
-      : request?.version?.sid === sid
-        ? request.version
-        : before
+  const version = request?.version?.sid === sid ? request.version : loadState(sid)
   const receipt = appendAudit(...args)
   if (!receipt.persisted) {
     const failure = {
+      id: randomUUID(),
       sid,
       card_ts: args[2]?.card_ts ?? version.card_ts,
-      card: JSON.stringify(version.card),
+      card_identity: auditCardIdentity(version).card_identity,
+      request: request?.identity,
+      event: Object.fromEntries(Object.entries(receipt).filter(([key]) => !['hash', 'prevHash'].includes(key))),
       kind: args[2]?.kind || args[0],
       failed_at: Date.now(),
       error: receipt.error,
@@ -673,4 +762,4 @@ async function invalidateLastFalsify(sid, cardTs, reason, identity) {
 
 
 import { issueStaleOffer, claimStaleOffer, staleCaseIdentity } from '../state.js'
-export { auditRequests, audit, log, findProjectRoot, ok, fail, activationCardGuide, guideError, asStringArray, REPO_ROOT_CACHE, resolveRepoRoot, dispatchDirInsideProject, asRawArray, asObject, cardVerifyCmd, verifyPassed, fingerprintKind, fingerprintFailed, fingerprintError, verifyState, WARN_FINDINGS_LIMIT, collectAxisWarnings, evidenceIdentity, introducedChanges, falsifyInvalidationMarker, falsifyInvalidationHardDeny, hardDenyFalsifyInvalidation, clearHardDenyFalsifyInvalidation, readHardDenyFalsifyInvalidation, readFalsifyInvalidationFailure, markFalsifyInvalidationFailure, clearFalsifyInvalidationFailure, invalidateLastFalsify, spawnSync, existsSync, readFileSync, readdirSync, statSync, realpathSync, mkdirSync, writeFileSync, unlinkSync, createServer, connect, AsyncLocalStorage, serveStdio, PROTOCOL, loadProjectSensitiveConfig, parseCard, validateCard, validateNewFiles, riskTier, isSensitive, pathKey, checkNewFilesBoundary, detectProjectTestCommand, validateAgentMesh, checkCardScopeRules, checkCommandRules, checkGitDiffRules, checkCodePatternRules, checkPhantomDependencies, deriveWizardStatus, generateQASheet, storageOverview, loadState, saveState, defaultState, appendAudit, readAuditDetailed, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, commitState, auditHashMode, workspaceFingerprintAsync, FLOW_HOME, AUDIT_DIR, RUNS_DIR, sanitizeId, buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, runNegativeControl, snapshotIdentity, computeOutputHash, enforceScope, formatError, MAX_DISPATCH, path, issueStaleOffer, claimStaleOffer, staleCaseIdentity }
+export { bindAuditVersion, readAuditState, archiveCardAudit, historicalAuditEntries, auditCardIdentity, isCurrentAuditFailure, auditIdentity, pendingAuditEntries, storeAuditEntries, matchesAuditRequest, isRetryableVerdict, recoverRequestAudit, auditRequests, audit, log, findProjectRoot, ok, fail, activationCardGuide, guideError, asStringArray, REPO_ROOT_CACHE, resolveRepoRoot, dispatchDirInsideProject, asRawArray, asObject, cardVerifyCmd, verifyPassed, fingerprintKind, fingerprintFailed, fingerprintError, verifyState, WARN_FINDINGS_LIMIT, collectAxisWarnings, evidenceIdentity, introducedChanges, falsifyInvalidationMarker, falsifyInvalidationHardDeny, hardDenyFalsifyInvalidation, clearHardDenyFalsifyInvalidation, readHardDenyFalsifyInvalidation, readFalsifyInvalidationFailure, markFalsifyInvalidationFailure, clearFalsifyInvalidationFailure, invalidateLastFalsify, spawnSync, existsSync, readFileSync, readdirSync, statSync, realpathSync, mkdirSync, writeFileSync, unlinkSync, createServer, connect, AsyncLocalStorage, serveStdio, PROTOCOL, loadProjectSensitiveConfig, parseCard, validateCard, validateNewFiles, riskTier, isSensitive, pathKey, checkNewFilesBoundary, detectProjectTestCommand, validateAgentMesh, checkCardScopeRules, checkCommandRules, checkGitDiffRules, checkCodePatternRules, checkPhantomDependencies, deriveWizardStatus, generateQASheet, storageOverview, loadState, saveState, defaultState, appendAudit, readAuditDetailed, getUserMessages, writeUserMessage, pathExists, gitHead, isStale, isBypassed, verifyAuditChain, withStateLock, commitState, auditHashMode, workspaceFingerprintAsync, FLOW_HOME, AUDIT_DIR, RUNS_DIR, sanitizeId, buildContractPrompt, snapshotFiles, readManifest, readManifestAll, writeDispatchPrompt, saveAgentResult, runVerifyCommand, runNegativeControl, snapshotIdentity, computeOutputHash, enforceScope, formatError, MAX_DISPATCH, path, issueStaleOffer, claimStaleOffer, staleCaseIdentity }

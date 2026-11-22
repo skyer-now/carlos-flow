@@ -8,6 +8,19 @@
 
 短锁重验卡身份、pending、额度与 claim，原子消费后仅按同卡同派发计数合并基线。范围检查以卡片项目根为准，显式异仓 cwd 拒绝。负对照失败先按完整旧证据 CAS 作废，再追加审计；新卡提交成功后审计请求绑定新版本。非 verdict 审计待确认不能消费旧证据 PASS；最终 verdict 追加失败可重试全部门禁并重新持久化 resolution，遵守原审计恢复测试，不把待确认状态当已完成。宿主权限、UI、锁实现和长命令锁外原则不变。
 
+### 阶段一增量：审计待确认恢复
+
+- `audit_pending.entries` 按随机事件 ID 保存多个活跃未确认追加：原请求的工具及规范化参数摘要、原卡 `card_ts`/脱敏持久化卡摘要、已脱敏的原审计事件（不含链 hash）、失败时间与错误。入口补偿在短锁内合并最新列表，不覆盖并发失败。同卡失败置 `completed_ok=false`；扩 scope、LOCAL/DIRECTION 和无关成功事件不得清除活跃条目。
+- `audit_history_pending` 是独立的历史未确认事件数组（缺省不存在，读取视为空）。失败补偿抵达时，原卡完整身份既不匹配当前卡、也不在当前任务的 scope 沿革中，将该迟到事件追加历史，不改新卡完成/验证/领取。明确完整换新卡或取消任务，则在清除/替换原身份前的同一短锁内，将具备 ID、请求摘要、事件载荷且身份匹配旧卡或其 scope 祖先的活动条目合并历史，去重保留全部 ID/载荷并移除对应活动项；新卡自身审计失败仍进入活动队列。取消自身事件绑定锁内实际取消的卡，追加失败保留为对应旧卡历史；若原本无卡则绑定空卡身份，后续新卡提交仍可归档完整事件。取消重试优先匹配补记，不能重新取消 B。两种先后顺序都不丢旧事件，也不让旧失败阻塞新任务独立完成。历史不参与当前卡门禁，也不会被 scope 或裁定静默清除。无完整载荷或归属不明的旧活动标记保守保留，不猜测迁移或自动补记。
+- `audit_scope_ancestors` 是同一任务经 `appendScope` 更新前的卡身份列表（`card_ts` 和完整卡摘要，缺省空）。真实 scope 变更时在同一短锁内追加旧身份，因此旧请求在 scope 变更后才补偿，仍按活跃失败关闭门禁。完整新卡提交/触发建卡及取消清除该沿革，并按上述归属规则迁移可确认的旧活动项；`appendScope` 绝不迁移活动项。未采用此协议的外部 writer/人工回滚无法提供同任务沿革保证。`flow_status` 分别返回 `audit_pending` 和 `audit_history_pending`，不将历史混作当前门禁故障。
+- 原工具以相同参数重试时，优先进行**仅审计补记**：短锁内逐条追加 `resolution/audit_recovery`，记录 `pending_id`、原卡身份、`original_event`、`business_replayed:false`；确认追加持久化后只移除对应 ID。补记失败仍报错并保留 pending；清状态失败也报错，之后允许同 ID 重复补记。请求不保存原始参数，只有摘要；参数对象键顺序不影响匹配，数组顺序及实际参数值必须一致。门面与原子工具经过相同入口。
+- 这不是业务重跑或原操作完整成功的证明。尤其 dispatch 已消费 claim/额度、expected 验证已永久领取时，恢复不能再执行该业务：响应明确带 `audit_recovered`、`business_replayed:false`，`completed_ok` 如实反映当前存储值。恢复仅清对应队列条目，不修改完成、验证或领取状态；活跃失败此前的 false 不会被恢复自动翻绿，历史补记成功或失败也不能取消新卡已有完成状态。旧卡请求只能补记旧事件，不能将旧业务重放到当前卡；同一请求存在多个卡代失败时，每条补记分别保留原卡身份。需核对状态与产物再决定后续动作。
+- 最终 `resolution/verdict` 失败是例外：同请求且完整当前卡身份匹配时，仍走原来的**全部门禁重审**，重新确认 resolution 持久化才清匹配 verdict 条目；不能以补记旧 PASS 自动完成。其他活跃 pending（含不同裁定、归属不明的旧卡失败、不同参数事件）仍阻断 PASS。LOCAL/DIRECTION 只保留返工意见，不洗掉别的失败。
+- 老版本仅有 kind/card_ts/error、没有完整事件或请求摘要的非 verdict pending 不可自动推测恢复，保持 fail-closed，需人工核验。旧 verdict 中断标记可按原全门禁重审规则恢复；不同裁定或卡代不会将其删除。此为可选状态字段演进，不改变默认 state/schema 或原26项工具描述/Schema 摘要。
+- 卡身份摘要对卡先采用与 `saveState` 相同的 `sanitizeFields` 再规范化哈希，避免落盘脱敏导致新卡当前失败被误分历史。`bindAuditVersion` 在 handler 实际读取/接纳卡、短锁实际提交 mode/claim/dispatch/axes/bypass、新卡保存以及取消前绑定对应快照；入口 recovery 的 await 后重取接纳快照，不能沿用入口 A 为后续实际接纳的 B 记账。验证/负对照在锁外命令前绑定，之后审计沿用该快照，不在失败时猜测 latest 身份。expected 领取返回的 caseKey 若不再对应命令前快照则不执行，永久领取仍不回滚。原请求参数摘要仍对原参数计算，不以脱敏摘要合并不同请求；测试仅使用合成秘密。
+- 生产身份入口盘点：gate 完整提交在短锁内归档已知旧活动项并建立新卡；appendScope 保存祖先、保留活动项；infra cancel 在清身份前归档并绑定取消事件；trigger 及 CLI 最终 activation 提交都在短锁内再次检查 `prev.card`，已有卡即返回未激活、不保存状态、不归档 B 或追加 activation，不能用锁外空卡观察覆盖新 B。src 其余状态写入（claim/dispatch/verdict、verify/falsify、axes、mode/bypass、审计补偿/恢复）不替换 card/card_ts；axes/bypass 在短锁内重验已接纳卡身份，冲突拒绝写新卡。client/bridge 未发现直接状态写入。verdict 仅按匹配 ID 清当前裁定条目，不丢其他 pending。
+- 边界：依赖可信本地状态存储与遵守协议的 writer，不是防本机任意改文件的认证机制。不是事务 outbox：进程在审计失败与请求退出补偿之间崩溃，或状态与审计介质同时不可写时，无法保证跨进程留下完整事件；失败会报告未确认，不保证硬件掉电 exactly-once。审计回执 unknown 与补记状态保存 unknown 都可能重复，不删除/重写历史链。没有自动重放长命令或放宽永久领取协议。
+
 以下历史 `src/index.js` 实现定位现在按工具域查阅；历史版本说明不重写。阶段验证与已知未完成项见 `docs/STAGE_1_REPORT.md`，不声明已公开发布或完成桌面验收。
 
 
@@ -293,11 +306,11 @@ main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 →
 |---|---|
 | 度量 | 与 `flow_stats` 共用 `src/storage.js`，避免「统计说 4MB、清理删 6MB」 |
 | 默认 | **dry-run**：只打印计划（可归档会话、可迁移备份、节省字节），不动任何文件 |
-| 会话 | 只归档**终态**（`verdict` 非 null）且超过阈值天数的会话；**移动**到 `<FLOW_HOME>-archive/<stamp>/runs/`，随时可搬回 |
+| 会话 | 只归档可确认的已知终态、无活动/历史审计欠账且超过阈值天数的会话；状态未知或计划后身份变化保留；移动至 `<FLOW_HOME>-archive/<stamp>/runs/`，不删除数据 |
 | 保护 | 没有结论的会话永不动；**审计目录一字节不碰**（脚本执行前后自校验文件数与字节，变了就退出码 1） |
 | 备份 | 历史时间戳命名 → 内容寻址（blob 名只带扩展名，跨文件名也去重），manifest 指针同步改写，迁移后仍可还原 |
 | 开关 | `--apply`、`--older-than N`、`--backups-only`、`--sessions-only`、`--archive-root` |
-| 测试 | `test:prune`（17 条：计划只读 / dry-run 不落地 / 只归档终态 / 归档可搬回 / 迁移后仍可还原 / 审计零变动） |
+| 测试 | `test:prune`（当前 61 条：既有回归及两类欠账、身份 CAS、真实排队 writer、owner/EXDEV/未知结果故障矩阵） |
 
 **跨平台门禁（`check:portability`，v2.16.0）**
 
@@ -1000,6 +1013,18 @@ v2.15.0 在 ubuntu CI 上挂的两处（`URL.pathname` 取路径、超时只杀�
 错误提供 `phase` 与 `commitStatus`：rename 前失败为 not-committed，rename 本身异常或其后失败为 unknown；这只是本次保存的提交观测，不是业务重放许可。失败不回滚或删除 target；close/temp 清理错误也显式聚合，不能假称已存或没存。本阶段不实现 receipt 或命令执行去重。
 
 新旧 writer 混跑不受新 gate 全面保护：旧实现仍可能按年龄删除活 owner，或无身份 unlink。未来严格执行能力部署前须使共享 CARLOS_FLOW_HOME 的 writer 全部采用新协议；本补丁不扫描、停止或清理用户进程/业务状态，也不声称 Node 是 OS 沙箱。未知旧空锁须人工核验，不再自动抢占；`test/state-lock.mjs` 旧 4a/4b 因此是安全契约修订，其余旧断言保留。
+
+### 4.7 归档与状态 writer 协调（P2 候选）
+
+`applyPrune` 是异步 API，返回 Promise；CLI 实执行及自动调度都必须 `await` 后消费结果，自动调度在自身异步回调内 await/catch，不把“已调度”当“已归档”。默认 dry-run 不移动会话；实执行报告 `archived`、`archiveFailed`、`archiveErrors`，不能仅凭计划宣称已完成。
+
+计划与执行均排除 `audit_pending` 和 `audit_history_pending` 欠账；旧式/未知标记、坏 JSON、非对象状态及未知终态均保守保留。计划保存精确目录身份、state 文件身份/时间和完整原始 state SHA256。执行取得原状态业务锁后重验，并在 owner 正常退出后的同一 `stateTransition` gate 内再次核对完整身份、实际时间阈值、状态与欠账；不允许旧计划搬走同名新 B，即使其仍是终态且 mtime 被恢复。归档定位不为缺失源重建 session。
+
+`archiveStateSession` 复用原 `withStateLock`/转换 gate，不另造一把互不协调的锁：确认 retire 自身 owner 完成后，仍持原 gate 时同步重验并紧接 `rename`，不带 `.state.lock` 搬目录。普通 writer 在等待后取得 wx 前、业务回调前及退出时核 canonical 路径与目录 dev/ino/birthtime；若原目录已归档或被同名替换，排队 writer 以 `session-identity` 失败关闭，不写替换目录。活 owner 未正常退出或释放失败时不得移动。
+
+归档目标必须在物理 FLOW_HOME/RUNS 之外，使用随机独占批次名，目标已存在则拒绝覆盖。明确 `EXDEV` 直接失败保留源，不降级为 cp+rm；不盲重试 rename。rename 报未知 after-effect，或 rename 已发生后 gate 清理失败，会报告归档未确认：源可能已在归档位置，**不保证失败时源仍在原路径**，也不回滚删除数据。必须核查在线与归档两处，未知结果不能盲目重放；这不是硬件掉电 exactly-once 承诺。
+
+保证针对已持久化状态及遵守本协议的 writer；未持久化的迟到审计补偿、任意外部编辑/目录替换、人工回滚及旧 writer 混跑不在保证内。归档不是事务 outbox，也未为备份、长命令和审计介质引入全局事务。两类已保存欠账不能归档，但不能据此声称尚未保存的未来补偿绝不会迟到。
 
 ---
 

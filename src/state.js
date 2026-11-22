@@ -558,13 +558,26 @@ function canonicalStatePath(file) {
   return fs.realpathSync.native(file)
 }
 
+// 私有归档退出钩子：业务 owner 先正常释放，目录 rename 仍在同一转换 gate 内。
+const archiveExit = Symbol('archiveExit')
+
+// validate 只读重验；move 必须是同步短操作，不持业务 owner 移动含锁的目录。
+// 普通 withStateLock 创建语义不变；归档不创建 session，等待者身份变化则拒绝。
+export async function archiveStateSession(sid, validate, move) {
+  return withStateLock(sid, validate, { [archiveExit]: move })
+}
+
 export async function withStateLock(sid, fn, opts = {}) {
   // 先创建再 realpath，不以字符串路径/盘符大小写或 junction 作为锁身份。
-  fs.mkdirSync(RUNS_DIR, { recursive: true })
+  const archiving = typeof opts[archiveExit] === 'function'
+  if (!archiving) fs.mkdirSync(RUNS_DIR, { recursive: true })
   const runs = canonicalStatePath(RUNS_DIR)
   const requestedDir = path.join(runs, sanitizeId(sid))
-  fs.mkdirSync(requestedDir, { recursive: true })
+  if (!archiving) fs.mkdirSync(requestedDir, { recursive: true })
+  if (archiving && fs.lstatSync(requestedDir).isSymbolicLink())
+    throw new Error('状态归档拒绝 session 路径别名')
   const dir = canonicalStatePath(requestedDir)
+  const sessionIdentity = fs.statSync(dir, { bigint: true })
   const relative = path.relative(runs, dir)
   const runsIdentity = fs.statSync(runs, { bigint: true })
   const parentIdentity = fs.statSync(path.dirname(dir), { bigint: true })
@@ -581,9 +594,17 @@ export async function withStateLock(sid, fn, opts = {}) {
   const ownText = `${process.pid}\n${randomBytes(12).toString('hex')}`
   let acquired = false
   let holder = ''
-  fs.mkdirSync(dir, { recursive: true })
+  const verifySession = () => {
+    const current = fs.statSync(dir, { bigint: true })
+    if (!sessionIdentity.ino || !current.isDirectory() ||
+        current.dev !== sessionIdentity.dev || current.ino !== sessionIdentity.ino ||
+        current.birthtimeNs !== sessionIdentity.birthtimeNs ||
+        canonicalStatePath(requestedDir) !== dir)
+      throw new Error('状态锁 phase=session-identity 等待期间物理 session 已改变，拒绝写入')
+  }
   while (!acquired) {
     await stateTransition(lockFile, gateRoot, async () => {
+      verifySession()
       try {
         // wx 是业务锁的真实排他边界，gate 不跨业务 fn。
         const fd = fs.openSync(lockFile, 'wx')
@@ -643,10 +664,17 @@ export async function withStateLock(sid, fn, opts = {}) {
   }
   const errors = []
   let result
-  try { result = await fn() } catch (error) { errors.push(error) } finally {
+  try { verifySession(); result = await fn() } catch (error) { errors.push(error) } finally {
     try {
-      // 释放使用独立预算，业务执行耗时不消耗释放机会。
-      await stateTransition(lockFile, gateRoot, () => retireStateOwner(lockFile, ownText, 'release'), Date.now() + timeoutMs)
+      // 释放使用独立预算；归档只在 owner 已正常退出且 gate 尚未撤销时移动目录。
+      await stateTransition(lockFile, gateRoot, async () => {
+        verifySession()
+        await retireStateOwner(lockFile, ownText, 'release')
+        if (!errors.length && archiving && result === true) {
+          verifySession()
+          result = opts[archiveExit]()
+        }
+      }, Date.now() + timeoutMs)
     } catch (error) { errors.push(error) }
   }
   if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '), { cause: errors[0] })
