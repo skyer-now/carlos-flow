@@ -1,5 +1,19 @@
 # Carlos Flow 工具契约文档
 
+## v3.0.0 对外工具面（四门面）
+
+对外 MCP 目录默认只暴露四个门面，底层 22 个操作仍是内部实现，通过门面动作路由并经过同一套参数校验：
+
+| 门面 | 主要动作 |
+|---|---|
+| `carlos_task` | submit / claim / dispatch / protocol / add_user_msg / save_result |
+| `carlos_verify` | run / falsify / check_scope / trigger_check / diff_hunks |
+| `carlos_review` | axes / submit / guard / verdict / audit |
+| `carlos_manage` | status / cancel / revert / stats / bypass / mode |
+
+兼容开关：`CARLOS_FLOW_TOOL_SURFACE=legacy` 恢复 26 个底层工具目录（旧客户端、脚本与本文档下方以 `flow_*` 描述的内部契约仍然有效）。
+门面 schema 覆盖底层必填参数与关键参数，转发时剔除门面专属 `action` 字段；装配期会双向校验“每个底层能力都有门面动作”与“门面动作不指向未登记操作”。
+
 ## 阶段一领域化定位（2.28.1，本地准备）
 
 原 26 项（22 原子 + 4 门面）工具的顺序、描述与 inputSchema 固定不变，摘要由 `test/handler-parity.mjs` 对照 42b19d6 固定。真实实现移至 `src/handlers/`：gate 留痕/领取/派发/裁定，verify 验证/负对照，audit 双轴/审计查询，infra 状态/触发/辅助操作，facade 只做明确路由；catalog 拒绝重复、遗漏与未登记工具；shared 不依赖任何领域模块或入口。

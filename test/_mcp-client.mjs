@@ -10,7 +10,9 @@ export function startMcpClient({ entry, cwd, env = {} }) {
   const child = spawn(process.execPath, [entry], {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, ...env },
+    // 测试默认走 legacy 面（26 个底层操作）以覆盖底层契约；v3 的对外默认面
+    // 由 test/facade-surface.test.mjs 显式传 external 覆盖。
+    env: { CARLOS_FLOW_TOOL_SURFACE: 'legacy', ...process.env, ...env },
     windowsHide: true,
   });
 

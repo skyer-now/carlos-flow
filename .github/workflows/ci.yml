@@ -79,6 +79,7 @@ jobs:
           npm run test:worktree
           npm run test:ast
           npm run test:facade
+          npm run check:ast
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home

@@ -28,7 +28,7 @@ process.env.CARLOS_FLOW_HOME = HOME;
 
 // ---- 启动 MCP server ----
 const child = spawn(process.execPath, [join(REPO, "src", "index.js")], {
-  env: { ...process.env, CARLOS_FLOW_HOME: HOME },
+  env: { ...process.env, CARLOS_FLOW_HOME: HOME, CARLOS_FLOW_TOOL_SURFACE: "legacy" },
   stdio: ["pipe", "pipe", "pipe"],
 });
 let buf = "", stderr = "";

@@ -20,6 +20,10 @@ const wsRoot = path.join(sandbox, 'ws')
 fs.mkdirSync(repo, { recursive: true })
 fs.mkdirSync(wsRoot, { recursive: true })
 fs.mkdirSync(flowHome, { recursive: true })
+// dispatch/state 在导入时读取环境：先隔离，避免读写真实用户记忆。
+process.env.CARLOS_FLOW_HOME = flowHome
+process.env.HOME = process.env.USERPROFILE = path.join(sandbox, 'home')
+fs.mkdirSync(process.env.HOME, { recursive: true })
 
 const git = (args, cwd = repo) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true })
 git(['init', '-q'])
@@ -37,6 +41,9 @@ const {
   listTaskWorktrees,
   sanitizeTaskId,
   worktreeIdentity,
+  resolveTaskWorkdir,
+  markTaskRunning,
+  clearTaskRunning,
 } = await import('../src/worktree.js')
 
 after(() => {
@@ -143,6 +150,48 @@ describe('阶段三 · 任务工作区隔离', () => {
       assert.equal(sanitizeTaskId(id), null, '应拒绝：' + id)
     }
     assert.equal(sanitizeTaskId('task '), 'task', '首尾空格按 trim 处理')
+  })
+
+  it('任务卡绑定工作区：只有 ready 且路径一致才生效', () => {
+    const rec = readTaskWorktree('task-b', { flowHome })
+    assert.equal(rec.ok, true)
+    const card = { env: { worktree: { task_id: 'task-b', path: rec.record.path } } }
+    const resolved = resolveTaskWorkdir(card, { flowHome })
+    assert.equal(resolved && resolved.task_id, 'task-b')
+
+    const wrongPath = { env: { worktree: { task_id: 'task-b', path: path.join(wsRoot, 'other') } } }
+    assert.equal(resolveTaskWorkdir(wrongPath, { flowHome }), null, '路径不一致必须拒绝')
+
+    assert.equal(resolveTaskWorkdir({ env: { worktree_task_id: 'task-b' } }, { flowHome }).task_id, 'task-b')
+    assert.equal(resolveTaskWorkdir({ env: {} }, { flowHome }), null, '没有绑定返回 null')
+  })
+
+  it('运行标记阻止清理，清除后可以清理', () => {
+    assert.equal(markTaskRunning('task-b', { flowHome }).ok, true)
+    const blocked = removeTaskWorktree('task-b', { flowHome, force: true })
+    assert.equal(blocked.ok, false)
+    assert.ok(blocked.reason.includes('运行中'))
+    assert.equal(clearTaskRunning('task-b', { flowHome }).ok, true)
+    assert.equal(clearTaskRunning('task-b', { flowHome }).ok, true, '重复清除幂等')
+  })
+
+  it('派发 Prompt 使用任务工作区解析记忆（接线生效）', async () => {
+    const { saveProjectFailureMemory } = await import('../src/failure-memory.js')
+    const { buildContractPrompt } = await import('../src/dispatch.js')
+    const rec = readTaskWorktree('task-b', { flowHome })
+    const saved = saveProjectFailureMemory('工作区专属经验：必须在隔离目录跑测试', {
+      flowHome,
+      cwd: rec.record.path,
+    })
+    assert.equal(saved.ok, true, saved.reason)
+    const card = {
+      goal: '隔离目录执行',
+      scope: ['src/a.js'],
+      verify: { cmd: 'npm test' },
+      env: { worktree: { task_id: 'task-b', path: rec.record.path } },
+    }
+    const prompt = buildContractPrompt('executor', card, '')
+    assert.ok(prompt.includes('工作区专属经验'), '派发必须读到工作区项目的记忆')
   })
 
   it('未登记的工作区不会被清理（不做全局 prune）', () => {

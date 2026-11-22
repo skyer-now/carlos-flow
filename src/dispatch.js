@@ -264,7 +264,7 @@ export function buildContractPrompt(role, card, extra, options = {}) {
   if (isExecutor && card && Array.isArray(card.scope) && card.scope.length > 0) {
     // 项目身份按本次派发的工作目录解析：拿不到真实工作目录就不注入，
     // 绝不回落到 MCP server 的启动目录（那会把记忆写进/读自错误项目）。
-    const dispatchCwd = options.cwd || card.env?.project || card.verify?.cwd || null
+    const dispatchCwd = options.cwd || card.env?.worktree?.path || card.env?.project || card.verify?.cwd || null
     if (dispatchCwd) {
       const guidelines = inferProactiveGuidelines(card.scope, { cwd: dispatchCwd })
       if (guidelines) {

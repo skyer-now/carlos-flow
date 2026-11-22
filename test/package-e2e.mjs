@@ -49,7 +49,8 @@ console.log("\n════ 包级端到端实测 ════\n");
 const tmp = mkdtempSync(join(tmpdir(), "carlos-pkg-e2e-"));
 let pkgRoot
 let server
-const isolatedEnv = { GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(tmp, 'gitconfig') }
+// 包级契约测试覆盖 26 个底层操作；v3 对外默认面由 facade-surface 用例覆盖。
+const isolatedEnv = { GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(tmp, 'gitconfig'), CARLOS_FLOW_TOOL_SURFACE: 'legacy' }
 for (const [key, sub] of Object.entries({ HOME: 'home', USERPROFILE: 'profile', CARLOS_FLOW_HOME: 'flow', npm_config_cache: 'npm-cache' })) {
   isolatedEnv[key] = join(tmp, sub)
   mkdirSync(isolatedEnv[key], { recursive: true })

@@ -224,3 +224,45 @@ export function worktreeIdentity(record = {}) {
   const text = `${record.task_id || ''}\0${record.path || ''}\0${record.base_commit || ''}`
   return createHash('sha256').update(text).digest('hex')
 }
+
+/**
+ * 解析任务卡绑定的工作区。
+ * 只有“已登记、状态 ready、路径一致且真实存在”才返回记录，否则返回 null，
+ * 让调用方回落到原有目录（不回落到登记文件里不可信的路径）。
+ */
+export function resolveTaskWorkdir(card, options = {}) {
+  const ref = card && card.env ? card.env.worktree : null
+  const taskId = (card && card.env && card.env.worktree_task_id) || (ref && typeof ref === 'object' ? ref.task_id : null)
+  if (!taskId) return null
+  const got = readTaskWorktree(taskId, options)
+  if (!got.ok || got.record.status !== 'ready') return null
+  if (!fs.existsSync(got.record.path)) return null
+  if (ref && typeof ref === 'object' && ref.path && path.resolve(ref.path) !== path.resolve(got.record.path)) return null
+  return got.record
+}
+
+/** 运行中标记：存在即拒绝清理。 */
+export function markTaskRunning(taskId, options = {}) {
+  const id = sanitizeTaskId(taskId)
+  if (!id) return { ok: false, reason: '任务标识不合法' }
+  try {
+    const dir = taskDir(options.flowHome, id)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'running'), String(process.pid), 'utf8')
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: `运行标记写入失败：${e && e.code ? e.code : 'UNKNOWN'}` }
+  }
+}
+
+export function clearTaskRunning(taskId, options = {}) {
+  const id = sanitizeTaskId(taskId)
+  if (!id) return { ok: false, reason: '任务标识不合法' }
+  try {
+    fs.unlinkSync(path.join(taskDir(options.flowHome, id), 'running'))
+    return { ok: true }
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { ok: true, missing: true }
+    return { ok: false, reason: `运行标记删除失败：${e && e.code ? e.code : 'UNKNOWN'}` }
+  }
+}

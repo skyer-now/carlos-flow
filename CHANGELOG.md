@@ -1,3 +1,24 @@
+## [3.0.0] - 2026-11-23 — 四门面收敛、AST 断言负对照与任务工作区隔离
+
+### ✨ 新增 | Added
+
+- **对外只暴露四个门面**：`carlos_task` / `carlos_verify` / `carlos_review` / `carlos_manage`，动作表覆盖全部 22 个底层能力；装配期双向校验覆盖关系，缺映射或指向未登记操作直接拒绝启动。`CARLOS_FLOW_TOOL_SURFACE=legacy` 可恢复 26 个底层工具目录。
+- **项目隔离避坑记忆**：项目身份取自 Git 共享目录（同仓库 worktree 复用、不同仓库隔离），按项目分区存放；旧全局记忆只读计数不注入；候选→核实→转正流程；互斥锁 + 原子写 + 预算裁剪 + 统一脱敏。
+- **真实质检单导出**：`node scripts/failure-memory.mjs qa-sheet --session <id> --out <绝对目录>`；缺证据一律标未验证，PASS 由证据派生。
+- **AST 断言负对照**：`scripts/ast-negative-control.mjs`（acorn）比较断言签名，识别删除/弱化/改期望值/新增 skip；`check:ast` 对改动测试文件做 HEAD 前后比对。
+- **任务工作区隔离**：`src/worktree.js` 从明确提交创建 worktree，拒绝脏主工作区隐式迁移、越界与链接逃逸；只清理已登记工作区，不做全局 prune。
+
+### 🔧 修复 | Fixed
+
+- 审计事件按事件 ID 补记，活动/历史欠账分流；归档复用状态转换 gate，排队 writer 核物理目录身份。
+- 质检单不再默认绿：验证失败、负对照缺失/属于旧卡、双轴缺失或任务过期都会压制 PASS。
+- 验证失败会清除 `completed_ok` 与裁定字段，避免 `flow_status` 继续报绿。
+
+### ⚠️ 已知边界 | Known limits
+
+- 原生 `flow_run_verify` 在当前宿主返回“Host固定哈希能力不可用”，正式门禁收据、双轴与裁定未取得；不声明阶段验收 PASS。
+- worktree 已接入验证路径（任务卡绑定工作区时优先在那里执行），派发与裁定之外的流程仍以主工作区为准；acorn 未在 npm 安装产物与 Cindy 随包环境实测。
+
 ## [2.28.1] - 2026-11-21
 
 - 阶段一：按 gate / verify / audit / infra / facade 真实拆分工具实现，catalog 保持原 26 工具顺序、描述与 Schema；入口负责服务与统一路由。

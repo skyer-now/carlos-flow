@@ -23,6 +23,7 @@ import {
   FLOW_HOME,
 } from './shared.js'
 import { collectVerifyFailure } from '../failure-memory.js'
+import { resolveTaskWorkdir, markTaskRunning } from '../worktree.js'
 const TOOLS = [
 {
     name: 'flow_run_verify',
@@ -57,7 +58,10 @@ const TOOLS = [
           state.card.env && typeof state.card.env.project === 'string'
             ? state.card.env.project
             : ''
-        let workdir = a.cwd || cardProject || undefined
+        // 任务卡绑定工作区时优先在那里执行；未登记/不 ready 时回落到原目录。
+        const taskWorktree = resolveTaskWorkdir(state.card, { flowHome: FLOW_HOME })
+        if (taskWorktree) markTaskRunning(taskWorktree.task_id, { flowHome: FLOW_HOME })
+        let workdir = a.cwd || (taskWorktree ? taskWorktree.path : null) || cardProject || undefined
         // 记住「这次验证针对哪张卡」：命令跑完再写状态时，卡片可能已被替换。
         const verifiedIdentity = evidenceIdentity(state)
         const verifiedCardTs = state.card_ts

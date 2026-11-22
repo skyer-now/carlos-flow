@@ -18,16 +18,14 @@ import {
   formatError,
   path,
 } from './handlers/shared.js'
-// 工具面：默认保持 26 个底层操作（兼容已发布的客户端契约）；
-// 设 CARLOS_FLOW_TOOL_SURFACE=external 时只暴露四个门面（v3.0.0 的默认形态）。
+// 工具面（v3）：默认只暴露四个门面；底层 22 个操作仍是内部实现。
+// 兼容开关：CARLOS_FLOW_TOOL_SURFACE=legacy 时恢复 26 个底层工具的对外目录。
 // 分发集合必须始终包含全部底层操作：门面只是“对外可见面”，
 // 其动作仍要经统一校验入口路由到内部实现。把两者混成一个数组会让
-// external 面下所有门面动作都返回 Unknown tool（真实缺陷，已修）。
+// 门面动作返回 Unknown tool（真实缺陷，已修）。
 const ALL_TOOLS = createCatalog(callTool)
-const TOOLS =
-  String(process.env.CARLOS_FLOW_TOOL_SURFACE || '').toLowerCase() === 'external'
-    ? createExternalCatalog(callTool)
-    : ALL_TOOLS
+const LEGACY_SURFACE = String(process.env.CARLOS_FLOW_TOOL_SURFACE || '').toLowerCase() === 'legacy'
+const TOOLS = LEGACY_SURFACE ? ALL_TOOLS : createExternalCatalog(callTool)
 // ---- 工具去重自检 ----------------------------------------------------------
 //
 // TOOLS 数组里出现两个同名工具定义时：

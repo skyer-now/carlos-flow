@@ -60,6 +60,7 @@ import {
   MAX_DISPATCH,
   path,
   issueStaleOffer,
+  FLOW_HOME,
 } from './shared.js'
 const TOOLS = [
 {
@@ -1661,6 +1662,17 @@ const TOOLS = [
           state.completed_ok = latest.completed_ok
           state.verdict_role = latest.verdict_role
         })
+        // 裁定落盘后任务结束：清掉工作区运行标记，允许后续受控清理。
+        {
+          const env = state.card && state.card.env ? state.card.env : null
+          const taskId = env && (env.worktree_task_id || (env.worktree && env.worktree.task_id))
+          if (taskId) {
+            try {
+              const { clearTaskRunning } = await import('../worktree.js')
+              clearTaskRunning(taskId, { flowHome: FLOW_HOME })
+            } catch {}
+          }
+        }
         if (verdict === 'PASS' && state.card && state.card.quote) {
           try {
             const { LearnedRulesManager } = await import('../trigger.js')
