@@ -21,7 +21,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parse } from 'acorn'
+import { parse } from '../vendor/acorn.mjs'
 
 export const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_NODES = 200000

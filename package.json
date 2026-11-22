@@ -103,9 +103,6 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "dependencies": {
-    "acorn": "8.15.0"
-  },
   "files": [
     "ui/narrator.js",
     "settings.html",
@@ -134,6 +131,7 @@
     "INSTALL.md",
     "RELEASE_NOTES.md",
     "check-all.sh",
-    "smoke-test.js"
+    "smoke-test.js",
+    "vendor/"
   ]
 }

@@ -25,14 +25,15 @@
 ## 2. AST 自动负对照
 
 - 新增 `scripts/ast-negative-control.mjs`：
-  - 用 **acorn 8.15.0**（MIT，tarball 约 130KB，纯 JS）解析，不用正则冒充 AST；
+  - 用 **acorn 8.15.0**（MIT，官方 ESM 构建，约 230KB）解析，不用正则冒充 AST；**随包 vendored 到 `vendor/acorn.mjs`**（附 `acorn-LICENSE`），不依赖宿主 `node_modules`；
   - 支持 `assert.*`、`t.assert.*`、`expect(...).toBe/toEqual` 等链式断言；
   - 新增 `scripts/check-ast-assertions.mjs`（`check:ast`）：对 `git diff HEAD` 中改动的测试文件做前后比对，删除断言/改期望值/新增 skip 退出 1，无法判断退出 2。
   - 比较基线/候选的断言签名多重集；签名只含“方法名 + 字面量”，因此重命名变量不会误报，而改期望值（`2`→`3`）会作为 `changed` 被检出；同时识别**弱化**（`strictEqual` → `ok`）与**新增 skip/todo**；
   - 预算：单文件 2MB、AST 节点 20 万；超预算/解析失败/基线无可比较断言一律退出 2（“无法判断”），绝不当作通过；
   - 退出码：0 无退化 / 1 发现退化 / 2 无法判断。
 - 新增 `test/ast-negative-control.test.mjs`（9 项），包含计划要求的真实负例：**候选实现是坏的（排序没生效）但唯一能发现它的断言被删掉，直接跑候选测试仍然退出 0**，AST 比较必须检出（退出 1）。另有 skip 检出、弱化检出、重命名不误报、改期望值检出、语法错误退出 2、无断言退出 2、缺参退出 2。
-- 依赖取舍：`package.json` 增加唯一运行时依赖 `acorn@8.15.0`；`package-lock.json` 同步（同时清理了历史遗留、与 package.json 不一致的 `@modelcontextprotocol/sdk` 条目——源码早已改为自带 MCP stdio 实现）。
+- 依赖取舍：**不新增 npm 依赖**，改为随包携带 acorn；理由是 Cindy 插件以 `.cindy` 形态运行、宿主不保证安装 `node_modules`（已实测本机插件目录无依赖）。
+- 打包实测：`npm pack` 产物解包后**没有 node_modules**，直接运行 `scripts/ast-negative-control.mjs` 仍能检出断言删除（退出 1）与无退化（退出 0）。回执见 `D:/cindy/task-evidence/acorn-pack-verify-20261123-072337/receipt.json`：tarball SHA256 `496b6f53…`、vendored acorn SHA256 `b4c8c702…`、`node_modules_present=false`。
 
 ## 3. 单人任务 Git Worktree 隔离
 
@@ -47,9 +48,9 @@
 
 ## 验证证据
 
-- 证据目录：`D:/cindy/task-evidence/stage3-v3final-20261123-071505/`
-- 完整日志：`full.log`，SHA256 `c0d002e391a8c7747e611c14b1edef17f8089137c67d6caa98a59c7ed11873a3`
-- 开始 `2026-11-23T07:15:06+08:00`，结束 `2026-11-23T07:21:25+08:00`
+- 证据目录：`D:/cindy/task-evidence/stage3-v3vendor-20261123-072413/`
+- 完整日志：`full.log`，SHA256 `8458fec5f49f3f7e82c580962f0c28d504c68c258afe97e51b573659b77f02a1`
+- 开始 `2026-11-23T07:24:13+08:00`，结束 `2026-11-23T07:30:39+08:00`
 - `TEST_ALL_EXIT=0`（`full.log:1775`）、`check:params` 0（`:1798`）、`check:no-dead-handler` 0（`:1818`）、`check:readme` 0（`:1829`）、`check:identity` 0（`:1901`）、`check:ast` 0（`:1907`）、`CHECK_FULL_EXIT=0`（`:1925`）
 - 专项：stage2 25/25、auto-verify-qasheet 7/7、knowledge-mesh 5/5、proactive-guidelines 5/5、worktree 15/15（`full.log:1576`）、AST 9/9（`full.log:1651`）、AST 门禁 6/6（`full.log:1704`）、facade 7/7（`full.log:1767`）
 - 测试隔离 `CARLOS_FLOW_HOME`/`HOME`/`USERPROFILE`/`TMP` 到 D 盘任务目录，日志含 `START`/`TEST_ALL_EXIT`/`CHECK_FULL_EXIT`/`END`。
@@ -57,7 +58,7 @@
 ## 未验证 / 未完成
 
 1. **external 面未覆盖全部动作的端到端调用**：已有“真实 MCP 入口 + 门面调用 + 未知动作失败”的端到端用例，但 22 个动作只做了目录级逐一路由断言，没有全部经 MCP 实测。
-2. **acorn 在 npm 安装产物与 Cindy 随包环境未实测**（计划要求两处分别核实）；本轮只验证了工作区 `node_modules` 下可用。
+2. ~~acorn 在 npm 安装产物与 Cindy 随包环境未实测~~ 已改为随包 vendored 并用无 node_modules 的打包产物实测；未在真实 Cindy 插件进程内再跑一次（逻辑同一文件）（计划要求两处分别核实）；本轮只验证了工作区 `node_modules` 下可用。
 3. **AST 负对照只支持 JS/ESM 断言调用**，不覆盖其它语言与所有作弊方式；`assert.rejects` 等异步断言的参数结构未做专门比对。
 4. **worktree 只接入验证路径**：`flow_dispatch` 仍以卡上项目目录为准；崩溃恢复未做故障注入。
 5. 原生 `flow_run_verify` / `flow_falsify` / 双轴 / 裁定仍因 Host 能力阻断未执行。
