@@ -14,7 +14,7 @@
 
 ### 阶段三实际进度（2026-11-23 00:00）
 
-阶段三三块实现已落地：四门面动作覆盖全部 22 个底层能力（外部面装配期双向校验）、AST 断言敏感性探测（acorn，含“删断言仍退出 0”真实负例）、单人任务 Git worktree 隔离；`test:all` 与 `check:full` 真实退出 0。**未完成**：外部工具面默认值仍是 26 操作（`CARLOS_FLOW_TOOL_SURFACE=external` 才切四门面），v3.0.0 的默认翻转与客户端/测试同步尚未做；acorn 未在 npm 安装产物与 Cindy 随包环境实测；原生门禁仍受 Host 能力阻断。详见 `docs/STAGE_3_REPORT.md`。
+阶段三三块实现已落地：四门面动作覆盖全部 22 个底层能力（外部面装配期双向校验，external 面经真实 MCP 入口验证可路由）、AST 断言敏感性探测（acorn，含“删断言仍退出 0”真实负例与改期望值检出）、单人任务 Git worktree 隔离库；`test:all` 与 `check:full` 真实退出 0。**worktree 尚未接入派发/验证流程。独立审查第二轮发现 external 面门面不可路由、门面 schema 与底层不一致等缺陷，已修并补真实 MCP 端到端与参数覆盖测试。****未完成**：外部工具面默认值仍是 26 操作（`CARLOS_FLOW_TOOL_SURFACE=external` 才切四门面），v3.0.0 的默认翻转与客户端/测试同步尚未做；acorn 未在 npm 安装产物与 Cindy 随包环境实测；原生门禁仍受 Host 能力阻断。详见 `docs/STAGE_3_REPORT.md`。
 
 ### 阶段二实际进度（2026-11-22 22:40）
 

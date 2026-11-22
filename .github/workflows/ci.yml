@@ -75,6 +75,10 @@ jobs:
           npm run test:cas
           npm run test:roll
           npm run test:prune
+          npm run test:stage2
+          npm run test:worktree
+          npm run test:ast
+          npm run test:facade
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home

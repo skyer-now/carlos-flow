@@ -1,7 +1,5 @@
 // facade 领域：真实工具实现与原始契约。
-import {
-  enforceScope,
-} from './shared.js'
+import { fail } from './shared.js'
 export function createFacadeTools(callTool) {
 const TOOLS = [
 {
@@ -30,6 +28,15 @@ const TOOLS = [
         message: { type: 'string', description: '派发附加说明' },
         cwd: { type: 'string', description: '工作目录' },
         text: { type: 'string', description: '用户原话（add_user_msg）' },
+        appendScope: { type: 'array', items: { type: 'string' }, description: '追加授权范围（submit）' },
+        unknowns: { type: 'array', items: { type: 'string' }, description: '未知项（submit）' },
+        assumptions: { type: 'array', items: { type: 'string' }, description: '假设（submit）' },
+        files: { type: 'array', items: { type: 'object' }, description: '关注文件与行号（submit）' },
+        userMessages: { type: 'array', items: { type: 'string' }, description: '用户原话列表（submit）' },
+        cardText: { type: 'string', description: '卡片原文（submit）' },
+        activation: { type: 'boolean', description: '占位卡是否按门禁激活（submit，与底层 boolean 一致）' },
+        reason: { type: 'string', description: '理由（submit/cancel）' },
+        run: { type: 'boolean', description: '派发后立即执行（dispatch）' },
         stdout: { type: 'string', description: '子 Agent 输出（save_result）' },
         stderr: { type: 'string', description: '子 Agent 错误输出（save_result）' },
         code: { type: 'number', description: '退出码（save_result）' },
@@ -65,17 +72,24 @@ const TOOLS = [
       void confirmed
       void message
       void cwd
-      const toolMap = {
-        submit: 'flow_submit_requirement',
-        start: 'flow_submit_requirement',
-        claim: 'flow_claim',
-        dispatch: 'flow_dispatch',
-        protocol: 'flow_protocol',
-        add_user_msg: 'flow_add_user_msg',
-        save_result: 'flow_save_result',
-      }
-      const targetTool = toolMap[action] || 'flow_submit_requirement'
-      return callTool(targetTool, args, context, runtime)
+      void a.text
+      void a.appendScope
+      void a.unknowns
+      void a.assumptions
+      void a.files
+      void a.userMessages
+      void a.cardText
+      void a.activation
+      void a.reason
+      void a.run
+      void a.stdout
+      void a.stderr
+      void a.code
+      const targetTool = FACADE_ACTIONS.carlos_task[action]
+      if (!targetTool) return fail('未知 action：' + action)
+      const forwarded = { ...args }
+      delete forwarded.action
+      return callTool(targetTool, forwarded, context, runtime)
     },
   },
 {
@@ -92,9 +106,11 @@ const TOOLS = [
           description: '操作类型：run/falsify/check_scope/trigger_check/diff_hunks',
         },
         sessionId: { type: 'string', description: '会话 ID' },
-        cmd: { type: 'string', description: '验证命令' },
+        message: { type: 'string', description: '待检查的消息（trigger_check）' },
         paths: { type: 'array', items: { type: 'string' }, description: '待查路径列表' },
         timeoutMs: { type: 'number', description: '超时毫秒数' },
+        isolateHome: { type: 'boolean', description: '隔离 HOME 后执行（run/falsify）' },
+        expected: { type: 'object', description: '向导领取身份（run，不得回退手动执行）' },
         cwd: { type: 'string', description: '工作目录' },
       },
       required: ['action'],
@@ -102,25 +118,19 @@ const TOOLS = [
     handler: async (args, context, runtime) => {
       const a = args || {}
       const action = a.action || 'run'
-      const { sessionId, cmd, paths, timeoutMs, cwd } = a
+      const { sessionId, paths, timeoutMs, cwd } = a
       void sessionId
-      void cmd
       void paths
       void timeoutMs
       void cwd
-      // 代理调用：若 action === 'check_scope' 且提供了 paths，先委托 enforceScope 做预检
-      if (action === 'check_scope' && Array.isArray(paths)) {
-        enforceScope(paths, cwd || process.cwd())
-      }
-      const toolMap = {
-        run: 'flow_run_verify',
-        falsify: 'flow_falsify',
-        check_scope: 'flow_check_scope',
-        trigger_check: 'flow_trigger_check',
-        diff_hunks: 'flow_diff_hunks',
-      }
-      const targetTool = toolMap[action] || 'flow_run_verify'
-      return callTool(targetTool, args, context, runtime)
+      void a.message
+      void a.isolateHome
+      void a.expected
+      const targetTool = FACADE_ACTIONS.carlos_verify[action]
+      if (!targetTool) return fail('未知 action：' + action)
+      const forwarded = { ...args }
+      delete forwarded.action
+      return callTool(targetTool, forwarded, context, runtime)
     },
   },
 {
@@ -138,8 +148,10 @@ const TOOLS = [
         },
         sessionId: { type: 'string', description: '会话 ID' },
         axis: { type: 'string', enum: ['standards', 'spec'], description: '审查轴' },
-        verdict: { type: 'string', enum: ['PASS', 'DIRECTION', 'LOCAL', 'WARN', 'FAIL'], description: '裁定结论' },
-        notes: { type: 'string', description: '审查说明或证据' },
+        verdict: { type: 'string', enum: ['PASS', 'FAIL', 'WARN', 'DIRECTION', 'LOCAL'], description: '裁定/审查结论' },
+        notes: { type: 'string', description: '审查说明' },
+        findings: { type: 'array', items: { type: 'string' }, description: '问题清单（submit）' },
+        evidence: { type: 'string', description: '实跑命令/输出摘要（submit）' },
         role: { type: 'string', description: '裁定角色' },
         cwd: { type: 'string', description: '工作目录' },
         type: { type: 'string', description: '审计事件类型过滤（audit）' },
@@ -159,15 +171,17 @@ const TOOLS = [
       void notes
       void role
       void cwd
-      const toolMap = {
-        axes: 'flow_audit_axes',
-        submit: 'flow_audit_submit',
-        guard: 'flow_audit_guard',
-        verdict: 'flow_verdict',
-        audit: 'flow_audit',
-      }
-      const targetTool = toolMap[action] || 'flow_verdict'
-      return callTool(targetTool, args, context, runtime)
+      void a.findings
+      void a.evidence
+      void a.type
+      void a.limit
+      void a.date
+      void a.verifyChain
+      const targetTool = FACADE_ACTIONS.carlos_review[action]
+      if (!targetTool) return fail('未知 action：' + action)
+      const forwarded = { ...args }
+      delete forwarded.action
+      return callTool(targetTool, forwarded, context, runtime)
     },
   },
 {
@@ -189,6 +203,9 @@ const TOOLS = [
         confirmed: { type: 'boolean', description: '确认授权' },
         cwd: { type: 'string', description: '工作目录' },
         mode: { type: 'string', enum: ['pro', 'guide'], description: '工作流模式（mode）' },
+        includeSnapshots: { type: 'boolean', description: '包含快照信息（status）' },
+        limit: { type: 'number', description: '返回条数/天数（stats）' },
+        inactiveDays: { type: 'number', description: '陈旧会话阈值天数（stats）' },
       },
       required: ['action'],
     },
@@ -201,16 +218,15 @@ const TOOLS = [
       void on
       void confirmed
       void cwd
-      const toolMap = {
-        status: 'flow_status',
-        cancel: 'flow_cancel',
-        revert: 'flow_revert_plan',
-        stats: 'flow_stats',
-        bypass: 'flow_bypass',
-        mode: 'flow_mode',
-      }
-      const targetTool = toolMap[action] || 'flow_status'
-      return callTool(targetTool, args, context, runtime)
+      void a.mode
+      void a.includeSnapshots
+      void a.limit
+      void a.inactiveDays
+      const targetTool = FACADE_ACTIONS.carlos_manage[action]
+      if (!targetTool) return fail('未知 action：' + action)
+      const forwarded = { ...args }
+      delete forwarded.action
+      return callTool(targetTool, forwarded, context, runtime)
     },
   },
 ]

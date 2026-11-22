@@ -103,9 +103,34 @@ function isExpectChain(text) {
 }
 
 /**
- * 提取断言签名：callee(method) + 第一参数源码（归一化空白）。
- * 位置用于报告，不参与匹配（否则改一行缩进就全变“新断言”）。
+ * 提取断言签名：只比较「方法名 + 字面量」。
+ *
+ * 为什么不比较标识符：重命名变量/提取常量是合法重构，用源码文本比较会误报。
+ * 为什么必须比较字面量：把期望值 2 改成 3 恰好能让坏实现变绿，这是最该抓的一类。
  */
+function literalTokens(node, source, out = []) {
+  if (!node || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const child of node) literalTokens(child, source, out)
+    return out
+  }
+  if (node.type === 'Literal') {
+    out.push(node.regex ? 're:' + node.regex.pattern + '/' + node.regex.flags : String(node.value))
+    return out
+  }
+  if (node.type === 'TemplateElement') {
+    out.push(String(node.value.cooked))
+    return out
+  }
+  if (node.type === 'Identifier' || node.type === 'ThisExpression') return out
+  for (const key of Object.keys(node)) {
+    if (key === 'loc' || key === 'start' || key === 'end' || key === 'type') continue
+    const value = node[key]
+    if (value && typeof value === 'object') literalTokens(value, source, out)
+  }
+  return out
+}
+
 function collectSignatures(ast, source) {
   const signatures = []
   const skips = []
@@ -114,15 +139,14 @@ function collectSignatures(ast, source) {
       const text = calleeText(node.callee, source)
       const method = assertionMethod(text)
       if (assertOwner(text) && ASSERT_METHODS.has(method)) {
-        const arg = node.arguments && node.arguments[0]
-        const argText = arg ? normalize(source.slice(arg.start, arg.end)) : ''
-        signatures.push({ kind: 'assert', method, sig: `${text}(${argText})`, line: node.loc?.start?.line || null })
+        const literals = (node.arguments || []).flatMap((arg) => literalTokens(arg, source))
+        signatures.push({ kind: 'assert', method, sig: `${method}|${literals.join(',')}`, literals, line: node.loc?.start?.line || null })
         return
       }
       if (isExpectChain(text)) {
-        const arg = node.arguments && node.arguments[0]
-        const argText = arg ? normalize(source.slice(arg.start, arg.end)) : ''
-        signatures.push({ kind: 'expect', method: text.split('.').pop(), sig: `${text}(${argText})`, line: node.loc?.start?.line || null })
+        const literals = (node.arguments || []).flatMap((arg) => literalTokens(arg, source))
+        const method = text.split('.').pop()
+        signatures.push({ kind: 'expect', method, sig: `${method}|${literals.join(',')}`, literals, line: node.loc?.start?.line || null })
         return
       }
       if (/(?:^|\.)(?:skip|todo)$/.test(text) && node.arguments && node.arguments.length) {
@@ -146,16 +170,26 @@ function countMultiset(list) {
   return map
 }
 
+function methodCounts(list) {
+  const map = new Map()
+  for (const item of list) map.set(item.method, (map.get(item.method) || 0) + 1)
+  return map
+}
+
 function compare(baselineSigs, candidateSigs) {
   const before = countMultiset(baselineSigs)
   const after = countMultiset(candidateSigs)
+  const beforeMethods = methodCounts(baselineSigs)
+  const afterMethods = methodCounts(candidateSigs)
   const removed = []
   for (const [sig, n] of before) {
     const now = after.get(sig) || 0
-    if (now < n) {
-      const hit = baselineSigs.find((s) => s.sig === sig)
-      removed.push({ sig, missing: n - now, line: hit ? hit.line : null, method: hit ? hit.method : null })
-    }
+    if (now >= n) continue
+    const hit = baselineSigs.find((s) => s.sig === sig)
+    const method = hit ? hit.method : null
+    // 同一方法总数没有减少 → 是“期望值/参数被改”而非整条删除
+    const kind = (afterMethods.get(method) || 0) >= (beforeMethods.get(method) || 0) ? 'changed' : 'removed'
+    removed.push({ sig, kind, missing: n - now, line: hit ? hit.line : null, method })
   }
   return removed
 }
@@ -193,15 +227,28 @@ function analyze(baselineFile, candidateFile) {
   }
 
   const removed = compare(baseline.signatures, candidate.signatures)
-  const newSkips = candidate.skips.length - baseline.skips.length
+
+  // skip/todo 按调用名做多重集比较，避免“删一个加一个”按序号切导致错位。
+  const skipCount = (list) => {
+    const map = new Map()
+    for (const s of list) map.set(s.call, (map.get(s.call) || 0) + 1)
+    return map
+  }
+  const beforeSkips = skipCount(baseline.skips)
+  const afterSkips = skipCount(candidate.skips)
+  const addedSkips = []
+  for (const [call, n] of afterSkips) {
+    const prev = beforeSkips.get(call) || 0
+    if (n > prev) addedSkips.push({ call, added: n - prev })
+  }
 
   return {
     ok: true,
-    verdict: removed.length > 0 || newSkips > 0 ? 'assertion-regression' : 'no-regression',
+    verdict: removed.length > 0 || addedSkips.length > 0 ? 'assertion-regression' : 'no-regression',
     baseline_assertions: baseline.signatures.length,
     candidate_assertions: candidate.signatures.length,
     removed,
-    added_skips: newSkips > 0 ? candidate.skips.slice(baseline.skips.length) : [],
+    added_skips: addedSkips,
     limits: { max_file_bytes: MAX_FILE_BYTES, max_nodes: MAX_NODES },
   }
 }

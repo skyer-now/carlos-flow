@@ -20,10 +20,14 @@ import {
 } from './handlers/shared.js'
 // 工具面：默认保持 26 个底层操作（兼容已发布的客户端契约）；
 // 设 CARLOS_FLOW_TOOL_SURFACE=external 时只暴露四个门面（v3.0.0 的默认形态）。
+// 分发集合必须始终包含全部底层操作：门面只是“对外可见面”，
+// 其动作仍要经统一校验入口路由到内部实现。把两者混成一个数组会让
+// external 面下所有门面动作都返回 Unknown tool（真实缺陷，已修）。
+const ALL_TOOLS = createCatalog(callTool)
 const TOOLS =
   String(process.env.CARLOS_FLOW_TOOL_SURFACE || '').toLowerCase() === 'external'
     ? createExternalCatalog(callTool)
-    : createCatalog(callTool)
+    : ALL_TOOLS
 // ---- 工具去重自检 ----------------------------------------------------------
 //
 // TOOLS 数组里出现两个同名工具定义时：
@@ -112,7 +116,8 @@ const TOOL_SCHEMAS = TOOLS.map((t) => ({
 
 // ---- Phase 1-1: 工具参数校验器（required 字段 / 类型 / enum）----
 function validateToolArgs(toolName, args) {
-  const tool = TOOLS.find((t) => t.name === toolName)
+  // 校验也查完整目录：门面动作的目标工具不在对外可见面里，但必须被校验。
+  const tool = ALL_TOOLS.find((t) => t.name === toolName)
   if (!tool || !tool.inputSchema) return { ok: true }
   const schema = tool.inputSchema
   function validate(schema, value, field = 'arguments') {
@@ -221,7 +226,8 @@ function validateToolArgs(toolName, args) {
 
 // ---- CallTool：先校验参数，再分发到工具 handler ----
 async function callTool(toolName, args = {}, context, runtime) {
-  const t = TOOLS.find((x) => x.name === toolName)
+  // 路由与校验一律查完整目录，不受对外可见面影响。
+  const t = ALL_TOOLS.find((x) => x.name === toolName)
   if (!t) {
     return {
       content: [{ type: 'text', text: 'Unknown tool: ' + toolName }],

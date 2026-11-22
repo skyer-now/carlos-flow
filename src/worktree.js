@@ -38,14 +38,14 @@ function realOrNull(p) {
   }
 }
 
-function inside(parent, child) {
-  const rel = path.relative(parent, child)
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
-}
+const WINDOWS_RESERVED = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i
 
 export function sanitizeTaskId(taskId) {
   const s = String(taskId == null ? '' : taskId).trim()
   if (!TASK_ID_RE.test(s) || s.includes('..')) return null
+  // Windows 上尾点/尾空格会与无尾点名字落到同一目录；保留设备名同样不可用。
+  if (/[. ]$/.test(s)) return null
+  if (WINDOWS_RESERVED.test(s.split('.')[0])) return null
   return s
 }
 
@@ -60,14 +60,27 @@ function registrationPath(flowHome, taskId) {
 export function readTaskWorktree(taskId, options = {}) {
   const id = sanitizeTaskId(taskId)
   if (!id) return { ok: false, reason: '任务标识不合法' }
+  let value
   try {
     const raw = fs.readFileSync(registrationPath(options.flowHome, id), 'utf8')
-    const value = JSON.parse(raw)
-    return { ok: true, taskId: id, record: value }
+    value = JSON.parse(raw)
   } catch (e) {
     if (e && e.code === 'ENOENT') return { ok: false, reason: '未登记该任务工作区' }
     return { ok: false, reason: '登记文件读取失败或损坏' }
   }
+  // 登记被手改/写坏时必须拒绝，不能拿 undefined 路径继续走删除流程。
+  const bad = (why) => ({ ok: false, reason: '登记内容不合法：' + why })
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return bad('不是对象')
+  if (value.task_id !== id) return bad('task_id 与登记目录不一致')
+  for (const key of ['repo_root', 'path', 'base_commit', 'root']) {
+    if (typeof value[key] !== 'string' || !value[key]) return bad('缺少 ' + key)
+  }
+  if (!path.isAbsolute(value.path) || !path.isAbsolute(value.repo_root) || !path.isAbsolute(value.root)) {
+    return bad('路径不是绝对路径')
+  }
+  // 登记路径必须就是受控根下的这个任务目录，防止被改成别的仓库的 worktree。
+  if (path.resolve(value.path) !== path.join(path.resolve(value.root), id)) return bad('path 不在受控根的对应任务目录下')
+  return { ok: true, taskId: id, record: value }
 }
 
 export function listTaskWorktrees(options = {}) {
@@ -109,10 +122,14 @@ export function createTaskWorktree(o = {}) {
   if (!rootReal || !fs.statSync(rootReal).isDirectory()) return { ok: false, reason: '工作区根目录不存在或不可用' }
 
   const target = path.join(rootReal, id)
-  if (fs.existsSync(target)) return { ok: false, reason: '目标工作区已存在，拒绝覆盖' }
-  // 路径越界/符号链接逃逸：目标父目录的真实路径必须仍是 rootReal
-  const parentReal = realOrNull(path.dirname(target))
-  if (parentReal !== rootReal) return { ok: false, reason: '目标路径越出工作区根目录（或经符号链接逃逸）' }
+  // lstat 不跟随链接：悬空符号链接也会被发现并拒绝，不能只靠 existsSync。
+  try {
+    fs.lstatSync(target)
+    return { ok: false, reason: '目标工作区已存在（或存在同名链接），拒绝覆盖' }
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') return { ok: false, reason: '目标路径状态不可判定，拒绝创建' }
+  }
+  if (path.dirname(target) !== rootReal) return { ok: false, reason: '目标路径越出工作区根目录' }
 
   const dirty = runGit(['status', '--porcelain'], repoRoot)
   if (!dirty.ok) return { ok: false, reason: '无法读取主工作区状态' }
@@ -133,6 +150,7 @@ export function createTaskWorktree(o = {}) {
     path: target,
     base_ref: baseRef,
     base_commit: commit,
+    root: rootReal,
     created_at: new Date().toISOString(),
     status: 'creating',
   }
@@ -145,8 +163,13 @@ export function createTaskWorktree(o = {}) {
 
   const add = runGit(['worktree', 'add', '--detach', target, commit], repoRoot)
   if (!add.ok) {
-    try { fs.rmSync(taskDir(o.flowHome, id), { recursive: true, force: true }) } catch {}
-    return { ok: false, reason: `git worktree add 失败：${(add.stderr || '').trim().slice(0, 300)}` }
+    // 可能已经建了一半（目录/元数据），保留登记并标记失败：清理路径仍能回收，
+    // 删登记会让孤儿工作区永久无法用本工具清理。
+    const failed = { ...record, status: 'failed', error: (add.stderr || '').trim().slice(0, 300) }
+    try {
+      fs.writeFileSync(registrationPath(o.flowHome, id), JSON.stringify(failed, null, 2), 'utf8')
+    } catch {}
+    return { ok: false, reason: `git worktree add 失败：${failed.error}`, record: failed }
   }
 
   const head = runGit(['rev-parse', 'HEAD'], target)
@@ -200,9 +223,4 @@ export function removeTaskWorktree(taskId, options = {}) {
 export function worktreeIdentity(record = {}) {
   const text = `${record.task_id || ''}\0${record.path || ''}\0${record.base_commit || ''}`
   return createHash('sha256').update(text).digest('hex')
-}
-
-/** 内部：供测试验证目录归属判断，不对外暴露路径细节。 */
-export function isInside(parent, child) {
-  return inside(path.resolve(parent), path.resolve(child))
 }

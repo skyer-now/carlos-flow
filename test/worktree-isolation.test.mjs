@@ -126,6 +126,25 @@ describe('阶段三 · 任务工作区隔离', () => {
     fs.unlinkSync(path.join(flowHome, 'tasks', 'task-b', 'running'))
   })
 
+  it('登记被篡改时拒绝清理，不销毁唯一记录', () => {
+    const dir = path.join(flowHome, 'tasks', 'task-b')
+    const file = path.join(dir, 'worktree.json')
+    const original = fs.readFileSync(file, 'utf8')
+    fs.writeFileSync(file, '{}', 'utf8')
+    const r = removeTaskWorktree('task-b', { flowHome, force: true })
+    assert.equal(r.ok, false)
+    assert.ok(r.reason.includes('登记内容不合法'))
+    assert.equal(fs.existsSync(file), true, '登记文件必须保留')
+    fs.writeFileSync(file, original, 'utf8')
+  })
+
+  it('Windows 保留名与尾点任务标识被拒绝', () => {
+    for (const id of ['CON', 'com1', 'task.']) {
+      assert.equal(sanitizeTaskId(id), null, '应拒绝：' + id)
+    }
+    assert.equal(sanitizeTaskId('task '), 'task', '首尾空格按 trim 处理')
+  })
+
   it('未登记的工作区不会被清理（不做全局 prune）', () => {
     const orphan = path.join(wsRoot, 'orphan')
     fs.mkdirSync(orphan, { recursive: true })

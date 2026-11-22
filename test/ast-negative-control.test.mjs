@@ -117,6 +117,36 @@ assert.ok(1 + 1 === 2)
     assert.ok(r.json.removed.some((x) => x.method === 'strictEqual'))
   })
 
+  it('合法重构（重命名变量）不得误报', () => {
+    const base = write('base-r.mjs', [
+      "import assert from 'node:assert/strict'",
+      'const total = 1 + 1',
+      'assert.equal(total, 2)',
+    ].join('\n'))
+    const renamed = write('cand-r.mjs', [
+      "import assert from 'node:assert/strict'",
+      'const sum = 1 + 1',
+      'assert.equal(sum, 2)',
+    ].join('\n'))
+    const r = run(base, renamed)
+    assert.equal(r.code, 0, r.stderr)
+    assert.equal(r.json.verdict, 'no-regression')
+  })
+
+  it('改期望值让坏实现变绿：必须检出（changed）', () => {
+    const base = write('base-e.mjs', [
+      "import assert from 'node:assert/strict'",
+      'assert.deepEqual(sort([2, 1]), [1, 2])',
+    ].join('\n'))
+    const changed = write('cand-e.mjs', [
+      "import assert from 'node:assert/strict'",
+      'assert.deepEqual(sort([2, 1]), [2, 1])',
+    ].join('\n'))
+    const r = run(base, changed)
+    assert.equal(r.code, 1, r.stderr)
+    assert.ok(r.json.removed.some((x) => x.kind === 'changed'))
+  })
+
   it('语法错误按无法判断处理（退出 2，不是通过）', () => {
     const base = write('base-5.mjs', BASELINE)
     const bad = write('cand-5.mjs', 'test( broken')
