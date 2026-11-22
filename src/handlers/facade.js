@@ -14,8 +14,8 @@ const TOOLS = [
       properties: {
         action: {
           type: 'string',
-          enum: ['submit', 'claim', 'dispatch', 'start'],
-          description: '操作类型：submit/claim/dispatch/start',
+          enum: ['submit', 'claim', 'dispatch', 'start', 'protocol', 'add_user_msg', 'save_result'],
+          description: '操作类型：submit/claim/dispatch/start/protocol/add_user_msg/save_result',
         },
         sessionId: { type: 'string', description: '会话 ID' },
         goal: { type: 'string', description: '任务目标' },
@@ -29,6 +29,10 @@ const TOOLS = [
         confirmed: { type: 'boolean', description: '敏感路径或新文件确认' },
         message: { type: 'string', description: '派发附加说明' },
         cwd: { type: 'string', description: '工作目录' },
+        text: { type: 'string', description: '用户原话（add_user_msg）' },
+        stdout: { type: 'string', description: '子 Agent 输出（save_result）' },
+        stderr: { type: 'string', description: '子 Agent 错误输出（save_result）' },
+        code: { type: 'number', description: '退出码（save_result）' },
       },
       required: ['action'],
     },
@@ -66,6 +70,9 @@ const TOOLS = [
         start: 'flow_submit_requirement',
         claim: 'flow_claim',
         dispatch: 'flow_dispatch',
+        protocol: 'flow_protocol',
+        add_user_msg: 'flow_add_user_msg',
+        save_result: 'flow_save_result',
       }
       const targetTool = toolMap[action] || 'flow_submit_requirement'
       return callTool(targetTool, args, context, runtime)
@@ -81,8 +88,8 @@ const TOOLS = [
       properties: {
         action: {
           type: 'string',
-          enum: ['run', 'falsify', 'check_scope'],
-          description: '操作类型：run/falsify/check_scope',
+          enum: ['run', 'falsify', 'check_scope', 'trigger_check', 'diff_hunks'],
+          description: '操作类型：run/falsify/check_scope/trigger_check/diff_hunks',
         },
         sessionId: { type: 'string', description: '会话 ID' },
         cmd: { type: 'string', description: '验证命令' },
@@ -109,6 +116,8 @@ const TOOLS = [
         run: 'flow_run_verify',
         falsify: 'flow_falsify',
         check_scope: 'flow_check_scope',
+        trigger_check: 'flow_trigger_check',
+        diff_hunks: 'flow_diff_hunks',
       }
       const targetTool = toolMap[action] || 'flow_run_verify'
       return callTool(targetTool, args, context, runtime)
@@ -124,8 +133,8 @@ const TOOLS = [
       properties: {
         action: {
           type: 'string',
-          enum: ['axes', 'submit', 'guard', 'verdict'],
-          description: '操作类型：axes/submit/guard/verdict',
+          enum: ['axes', 'submit', 'guard', 'verdict', 'audit'],
+          description: '操作类型：axes/submit/guard/verdict/audit',
         },
         sessionId: { type: 'string', description: '会话 ID' },
         axis: { type: 'string', enum: ['standards', 'spec'], description: '审查轴' },
@@ -133,6 +142,10 @@ const TOOLS = [
         notes: { type: 'string', description: '审查说明或证据' },
         role: { type: 'string', description: '裁定角色' },
         cwd: { type: 'string', description: '工作目录' },
+        type: { type: 'string', description: '审计事件类型过滤（audit）' },
+        limit: { type: 'number', description: '最多返回条数（audit）' },
+        date: { type: 'string', description: '日期 YYYY-MM-DD（audit）' },
+        verifyChain: { type: 'boolean', description: '是否验证审计链（audit）' },
       },
       required: ['action'],
     },
@@ -151,6 +164,7 @@ const TOOLS = [
         submit: 'flow_audit_submit',
         guard: 'flow_audit_guard',
         verdict: 'flow_verdict',
+        audit: 'flow_audit',
       }
       const targetTool = toolMap[action] || 'flow_verdict'
       return callTool(targetTool, args, context, runtime)
@@ -166,14 +180,15 @@ const TOOLS = [
       properties: {
         action: {
           type: 'string',
-          enum: ['status', 'cancel', 'revert', 'stats', 'bypass'],
-          description: '操作类型：status/cancel/revert/stats/bypass',
+          enum: ['status', 'cancel', 'revert', 'stats', 'bypass', 'mode'],
+          description: '操作类型：status/cancel/revert/stats/bypass/mode',
         },
         sessionId: { type: 'string', description: '会话 ID' },
         reason: { type: 'string', description: '撤销或操作理由' },
         on: { type: 'boolean', description: '免检开关' },
         confirmed: { type: 'boolean', description: '确认授权' },
         cwd: { type: 'string', description: '工作目录' },
+        mode: { type: 'string', enum: ['pro', 'guide'], description: '工作流模式（mode）' },
       },
       required: ['action'],
     },
@@ -192,6 +207,7 @@ const TOOLS = [
         revert: 'flow_revert_plan',
         stats: 'flow_stats',
         bypass: 'flow_bypass',
+        mode: 'flow_mode',
       }
       const targetTool = toolMap[action] || 'flow_status'
       return callTool(targetTool, args, context, runtime)
@@ -200,3 +216,43 @@ const TOOLS = [
 ]
 return TOOLS
 }
+
+/**
+ * 门面动作路由表（阶段三）。
+ *
+ * 冻结口径：每个底层能力都必须能通过**恰好一个**门面动作到达，
+ * 这样“外部只暴露四个门面”不等于“少了能力”。
+ */
+export const FACADE_ACTIONS = Object.freeze({
+  carlos_task: Object.freeze({
+    submit: 'flow_submit_requirement',
+    start: 'flow_submit_requirement',
+    claim: 'flow_claim',
+    dispatch: 'flow_dispatch',
+    protocol: 'flow_protocol',
+    add_user_msg: 'flow_add_user_msg',
+    save_result: 'flow_save_result',
+  }),
+  carlos_verify: Object.freeze({
+    run: 'flow_run_verify',
+    falsify: 'flow_falsify',
+    check_scope: 'flow_check_scope',
+    trigger_check: 'flow_trigger_check',
+    diff_hunks: 'flow_diff_hunks',
+  }),
+  carlos_review: Object.freeze({
+    axes: 'flow_audit_axes',
+    submit: 'flow_audit_submit',
+    guard: 'flow_audit_guard',
+    verdict: 'flow_verdict',
+    audit: 'flow_audit',
+  }),
+  carlos_manage: Object.freeze({
+    status: 'flow_status',
+    cancel: 'flow_cancel',
+    revert: 'flow_revert_plan',
+    stats: 'flow_stats',
+    bypass: 'flow_bypass',
+    mode: 'flow_mode',
+  }),
+})

@@ -25,7 +25,7 @@
     "test:concurrency": "node test/concurrency-e2e.mjs",
     "test:ui": "node test/verify-ui.mjs",
     "test:acceptance": "node test/e2e-acceptance.mjs",
-    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean && npm run test:ui && npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch && npm run test:hardening && npm run test:cas && npm run test:roll && npm run test:prune && npm run test:stage2 && npm run test:unit",
+    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean && npm run test:ui && npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch && npm run test:hardening && npm run test:cas && npm run test:roll && npm run test:prune && npm run test:stage2 && npm run test:unit && npm run test:worktree && npm run test:ast && npm run test:facade",
     "test:mutation": "node scripts/mutation-check.mjs",
     "sync:readme": "node scripts/sync-readme.mjs",
     "check:readme": "node scripts/sync-readme.mjs --check",
@@ -67,13 +67,16 @@
     "test:cas": "node test/verify-cas.mjs",
     "test:roll": "node test/audit-roll.mjs",
     "test:prune": "node test/prune.mjs",
-  "test:stage2": "node test/stage2-failure-memory.test.mjs",
-  "test:unit": "node test/auto-verify-qasheet.test.mjs && node test/knowledge-mesh.test.mjs && node test/proactive-guidelines.test.mjs",
+    "test:stage2": "node test/stage2-failure-memory.test.mjs",
+    "test:unit": "node test/auto-verify-qasheet.test.mjs && node test/knowledge-mesh.test.mjs && node test/proactive-guidelines.test.mjs",
     "prune": "node scripts/prune.mjs",
     "check:portability": "node scripts/check-portability.mjs",
     "bench:latency": "node scripts/bench-latency.mjs",
     "check:templates": "node scripts/check-templates.mjs",
-    "test:clean": "node test/clean-command.mjs"
+    "test:clean": "node test/clean-command.mjs",
+    "test:worktree": "node test/worktree-isolation.test.mjs",
+    "test:ast": "node test/ast-negative-control.test.mjs",
+    "test:facade": "node test/facade-surface.test.mjs"
   },
   "keywords": [
     "carlos",
@@ -98,7 +101,9 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "dependencies": {},
+  "dependencies": {
+    "acorn": "8.15.0"
+  },
   "files": [
     "ui/narrator.js",
     "settings.html",

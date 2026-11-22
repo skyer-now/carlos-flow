@@ -1,5 +1,5 @@
 // MCP 服务入口：目录装配、参数校验、请求补偿与传输。
-import { createCatalog } from './handlers/catalog.js'
+import { createCatalog, createExternalCatalog } from './handlers/catalog.js'
 import {
   auditRequests,
   auditIdentity,
@@ -18,7 +18,12 @@ import {
   formatError,
   path,
 } from './handlers/shared.js'
-const TOOLS = createCatalog(callTool)
+// 工具面：默认保持 26 个底层操作（兼容已发布的客户端契约）；
+// 设 CARLOS_FLOW_TOOL_SURFACE=external 时只暴露四个门面（v3.0.0 的默认形态）。
+const TOOLS =
+  String(process.env.CARLOS_FLOW_TOOL_SURFACE || '').toLowerCase() === 'external'
+    ? createExternalCatalog(callTool)
+    : createCatalog(callTool)
 // ---- 工具去重自检 ----------------------------------------------------------
 //
 // TOOLS 数组里出现两个同名工具定义时：
