@@ -21,6 +21,10 @@ import {
   unboundClaims,
   normalizeQuestion,
   buildAdvisoryPrompt,
+  resolveArtifact,
+  evidenceSimilarity,
+  CANARY_DEFECT,
+  CANARY_TEXT,
   ADVISORY_TTL_MS,
 } from '../advisory.js'
 import { randomBytes } from 'node:crypto'
@@ -67,6 +71,8 @@ const TOOLS = [
           },
         },
         report: { type: 'object', description: '结构化报告/方案（options / recommendation / impact / rollback 等）' },
+        artifact: { type: 'string', enum: ['research', 'plan'], description: '交付物类型：research=调研结论，plan=方案（缺省按 report 结构推断）' },
+        canary: { type: 'boolean', description: '注入一个已知缺陷用于检验审核是否形式化（内部负对照）' },
         cwd: { type: 'string', description: '工作目录，默认 process.cwd()' },
       },
       required: ['question'],
@@ -95,10 +101,24 @@ const TOOLS = [
         }
 
         const claims = normalizeClaims(a.claims)
-        const axesToRun = level === 'dual' ? requiredAxes('dual') : [axisForSingle({ report: a.report })]
+        const artifact = resolveArtifact({ artifact: a.artifact, report: a.report })
+        // 结构化交付物但类型不明：保守升级为 dual，避免猜错后静默降级。
+        let effectiveLevel = level
+        let artifactReason = ''
+        if (level === 'single' && !artifact && a.report) {
+          effectiveLevel = 'dual'
+          artifactReason = '交付物类型不明确，保守升级为双轴'
+        }
+        const chosenArtifact = artifact || (effectiveLevel === 'single' ? 'research' : null)
+        const axesToRun = effectiveLevel === 'dual'
+          ? requiredAxes('dual')
+          : [chosenArtifact === 'plan' ? 'feasibility' : axisForSingle({ report: a.report })]
+        const canary = a.canary === true
         const advisory = {
           id: randomBytes(8).toString('hex'),
-          level,
+          level: effectiveLevel,
+          artifact: chosenArtifact,
+          canary: canary ? { defect: CANARY_DEFECT } : null,
           question,
           question_hash: cls.topic_hash,
           created_at: Date.now(),
@@ -110,21 +130,26 @@ const TOOLS = [
         const cwd = a.cwd || process.cwd()
         const prompts = {}
         for (const axis of axesToRun) {
-          const prompt = buildAdvisoryPrompt(axis, { question, claims, report: a.report })
+          const prompt = buildAdvisoryPrompt(axis, {
+            question,
+            claims,
+            report: a.report,
+            canary: canary && axis === 'feasibility' ? CANARY_TEXT : '',
+          })
           const { file } = writeDispatchPrompt(sid, 'auditor', prompt, cwd)
           prompts[axis] = { prompt, file }
         }
         await commitState(sid, (latest) => {
           latest.advisory = advisory
           latest.advisory_log = appendAdvisoryLog(latest.advisory_log, {
-            level,
+            level: effectiveLevel,
             topic_hash: cls.topic_hash,
             reason: explicit ? '调用方显式指定' : cls.reason,
           })
         })
         audit('decision', sid, {
           kind: 'advisory_axes',
-          level,
+          level: effectiveLevel,
           axes: axesToRun,
           matched_rules: cls.matched_rules,
           downgraded: cls.downgraded === true,
@@ -133,10 +158,12 @@ const TOOLS = [
           ok: true,
           triggered: true,
           advisory_id: advisory.id,
-          level,
+          level: effectiveLevel,
+          artifact: chosenArtifact,
           axes: axesToRun,
           matched_rules: cls.matched_rules,
-          reason: explicit ? '调用方显式指定' : cls.reason,
+          reason: (explicit ? '调用方显式指定' : cls.reason) + (artifactReason ? '；' + artifactReason : ''),
+          canary: canary === true,
           expires_at: advisory.expires_at,
           claims_unbound: unboundClaims(claims).map((c) => c.text),
           prompts,
@@ -244,6 +271,23 @@ const TOOLS = [
         }
         const unbound = unboundClaims(advisory.claims).map((c) => c.text)
         const problems = []
+
+        // canary：审核者拿到的是“已知缺陷”的方案，PASS 却没点出来 → 判定形式化。
+        if (advisory.canary && advisory.axes.feasibility && advisory.axes.feasibility.verdict === 'PASS') {
+          const rec = advisory.axes.feasibility
+          const said = [...(rec.findings || []), String(rec.evidence || '')].join(' ')
+          if (!/回滚|rollback|恢复|不可逆|revert/i.test(said)) {
+            problems.push('canary 未被识别：方案缺少回滚步骤，但审核给出 PASS 且未指出（疑似形式化审核）')
+          }
+        }
+
+        // 两轴互相抄袭：证据高度雷同视为未独立取证。
+        if (need.length === 2 && advisory.axes.evidence && advisory.axes.feasibility) {
+          const sim = evidenceSimilarity(advisory.axes.evidence.evidence, advisory.axes.feasibility.evidence)
+          if (sim.identical || sim.jaccard >= 0.8) {
+            problems.push('两轴证据高度雷同（jaccard=' + sim.jaccard.toFixed(2) + '），需要独立取证')
+          }
+        }
         if (missing.length) problems.push('缺少轴结论：' + missing.join(', '))
         if (failed.length) problems.push('轴判定 FAIL：' + failed.join(', '))
         if (emptyEvidence.length) problems.push('轴证据为空：' + emptyEvidence.join(', '))

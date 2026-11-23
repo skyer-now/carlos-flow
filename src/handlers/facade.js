@@ -169,6 +169,8 @@ const TOOLS = [
         level: { type: 'string', enum: ['none', 'single', 'dual'], description: '互审强度（advisory_axes，缺省按规则判定）' },
         claims: { type: 'array', items: { type: 'object' }, description: '声明清单（advisory_axes）' },
         report: { type: 'object', description: '结构化报告/方案（advisory_axes）' },
+        artifact: { type: 'string', enum: ['research', 'plan'], description: '交付物类型（advisory_axes）' },
+        canary: { type: 'boolean', description: '注入已知缺陷检验审核（advisory_axes，内部用）' },
       },
       required: ['action'],
     },
@@ -193,6 +195,8 @@ const TOOLS = [
       void a.level
       void a.claims
       void a.report
+      void a.artifact
+      void a.canary
       const targetTool = FACADE_ACTIONS.carlos_review[action]
       if (!targetTool) return fail('未知 action：' + action)
       const forwarded = { ...args }

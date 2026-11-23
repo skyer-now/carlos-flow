@@ -153,8 +153,8 @@ describe('P1 · 状态迁移与互审工具', () => {
     })
     const st = loadState(sid)
     const id2 = st.advisory.id
-    await tool('flow_advisory_submit')({ sessionId: sid, advisoryId: id2, axis: 'evidence', verdict: 'PASS', evidence: 'file:line 示例证据' })
-    await tool('flow_advisory_submit')({ sessionId: sid, advisoryId: id2, axis: 'feasibility', verdict: 'PASS', evidence: 'file:line 示例证据' })
+    await tool('flow_advisory_submit')({ sessionId: sid, advisoryId: id2, axis: 'evidence', verdict: 'PASS', evidence: 'src/handlers/gate.js:120 复核了调用方清单' })
+    await tool('flow_advisory_submit')({ sessionId: sid, advisoryId: id2, axis: 'feasibility', verdict: 'PASS', evidence: 'npm run test:all 输出哈希 9f2c；回滚脚本已演练' })
     const blocked = text(await tool('flow_advisory_guard')({ sessionId: sid, advisoryId: id2 }))
     assert.ok(blocked.includes('没有证据引用'), blocked)
     globalThis.__advisoryId = id2
@@ -217,5 +217,61 @@ describe('P1 · 状态迁移与互审工具', () => {
     assert.equal(st.completed_ok, false)
     assert.equal(requiredAxes('none').length, 0)
     assert.ok(ADVISORY_TTL_MS >= 60 * 1000)
+  })
+})
+
+describe('P2 · 公用加固（选轴 / canary / 相似度 / 英文）', () => {
+  it('英文触发词生效，常规查询仍不触发', () => {
+    assert.equal(classifyAdvisory({ text: 'rollback plan for the release' }).level, 'dual')
+    assert.equal(classifyAdvisory({ text: 'review this design for feasibility' }).level, 'dual')
+    assert.equal(classifyAdvisory({ text: 'look up the latest version' }).level, 'none')
+    assert.equal(classifyAdvisory({ text: 'check the file' }).level, 'none')
+  })
+
+  it('显式 artifact=plan 时单轴只要求 feasibility', async () => {
+    const res = json(await tool('flow_advisory_axes')({
+      sessionId: 'adv-plan', question: '核实一下这个 API 的最新行为', artifact: 'plan', report: { options: [{ name: 'A' }] },
+    }))
+    assert.equal(res.level, 'single')
+    assert.deepEqual(res.axes, ['feasibility'])
+    assert.equal(loadState('adv-plan').advisory.artifact, 'plan')
+  })
+
+  it('结构化报告类型不明时保守升级为 dual', async () => {
+    const res = json(await tool('flow_advisory_axes')({
+      sessionId: 'adv-ambiguous', question: '核实一下这个 API 的最新行为', report: { impact: { files: 2 } },
+    }))
+    assert.equal(res.level, 'dual')
+    assert.deepEqual(res.axes, ['evidence', 'feasibility'])
+    assert.ok(String(res.reason).includes('类型不明确'))
+  })
+
+  it('canary：审核 PASS 却没点出“缺回滚”时被拦', async () => {
+    const sid2 = 'adv-canary'
+    const created = json(await tool('flow_advisory_axes')({
+      sessionId: sid2, question: '这个架构方案可行吗', canary: true,
+    }))
+    assert.equal(created.canary, true)
+    await tool('flow_advisory_submit')({ sessionId: sid2, advisoryId: created.advisory_id, axis: 'evidence', verdict: 'PASS', evidence: 'src/a.js:1 复核调用方' })
+    await tool('flow_advisory_submit')({ sessionId: sid2, advisoryId: created.advisory_id, axis: 'feasibility', verdict: 'PASS', findings: ['实现清晰'], evidence: '方案文档第 3 节' })
+    const blocked = text(await tool('flow_advisory_guard')({ sessionId: sid2, advisoryId: created.advisory_id }))
+    assert.ok(blocked.includes('canary'), blocked)
+
+    await tool('flow_advisory_submit')({
+      sessionId: sid2, advisoryId: created.advisory_id, axis: 'feasibility', verdict: 'PASS',
+      findings: ['方案缺少回滚步骤，必须补上'], evidence: '方案文档第 3 节没有回滚章节',
+    })
+    const passed = json(await tool('flow_advisory_guard')({ sessionId: sid2, advisoryId: created.advisory_id }))
+    assert.equal(passed.ok, true, JSON.stringify(passed))
+  })
+
+  it('两轴证据高度雷同被拦', async () => {
+    const sid3 = 'adv-similar'
+    const created = json(await tool('flow_advisory_axes')({ sessionId: sid3, question: '这个架构方案可行吗' }))
+    const same = 'src/handlers/gate.js:1 复核完成 npm run test:all 通过'
+    await tool('flow_advisory_submit')({ sessionId: sid3, advisoryId: created.advisory_id, axis: 'evidence', verdict: 'PASS', evidence: same })
+    await tool('flow_advisory_submit')({ sessionId: sid3, advisoryId: created.advisory_id, axis: 'feasibility', verdict: 'PASS', evidence: same })
+    const blocked = text(await tool('flow_advisory_guard')({ sessionId: sid3, advisoryId: created.advisory_id }))
+    assert.ok(blocked.includes('雷同'), blocked)
   })
 })

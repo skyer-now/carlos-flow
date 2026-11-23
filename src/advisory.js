@@ -11,60 +11,11 @@
  */
 
 import { createHash } from 'node:crypto'
+import { RULES } from './advisory-rules.js'
 
 export const ADVISORY_LEVELS = Object.freeze(['none', 'single', 'dual'])
 
-// 规则顺序即优先级：dual 命中即最高；routine 只在没有 dual 时压到 none。
-const RULES = [
-  {
-    id: 'irreversible',
-    level: 'dual',
-    label: '不可逆或高风险操作',
-    re: /发布|上线|部署|删库|删除数据|清空数据|迁移|回滚|降级|灰度|生产环境|生产库|权限|密钥|凭据|证书|资金|付款|退款|合规|审计/,
-  },
-  {
-    id: 'architecture',
-    level: 'dual',
-    label: '架构 / 选型 / 方案取舍',
-    re: /架构|技术选型|技术栈|重构方案|迁移方案|整体设计|方案取舍|选型|是否值得|要不要换/,
-  },
-  {
-    id: 'commitment',
-    level: 'dual',
-    label: '对外承诺或结论',
-    re: /对外承诺|承诺|保证|合同|报价|SLA|给客户的结论|最终结论/,
-  },
-  {
-    id: 'review_request',
-    level: 'dual',
-    label: '用户明确要求评审',
-    re: /评审|评估|可行性|方案对比|对比方案|帮我判断|风险分析|影响分析/,
-  },
-  {
-    id: 'routine',
-    level: 'none',
-    label: '常规核查',
-    re: /^(查一下|看一下|看看|是什么|怎么用|如何用|语法|格式化|翻译|算一下|列一下|读一下)/,
-  },
-  {
-    id: 'time_sensitive',
-    level: 'single',
-    label: '时效敏感事实',
-    re: /最新|当前版本|最近版本|价格|政策|法规|新闻|截止|时效|今年|本月|这周/,
-  },
-  {
-    id: 'research',
-    level: 'single',
-    label: '调研与来源核实',
-    re: /调研|查证|核实|对比|来源|文献|数据|引用|出处/,
-  },
-  {
-    id: 'diagnosis',
-    level: 'single',
-    label: '排障结论',
-    re: /根因|为什么|故障|排查|定位|复现/,
-  },
-]
+// 触发规则表在 src/advisory-rules.js（中英双语，独立文件便于维护与测试）。
 
 const LEVEL_RANK = { none: 0, single: 1, dual: 2 }
 
@@ -223,6 +174,8 @@ export function buildAdvisoryPrompt(axis, payload = {}) {
     `交付方声明（claims）：`,
     claimLines,
     ``,
+    payload.canary ? `已知风险（交付方自述）：${payload.canary}` : '',
+    payload.canary ? `` : '',
     `交付方结构化报告：`,
     report,
     ``,
@@ -237,3 +190,38 @@ export function buildAdvisoryPrompt(axis, payload = {}) {
     `边界：不得改动任何文件；不得重跑长测；无法核实就写“未验证”，不许猜。`,
   ].join('\n')
 }
+
+
+/**
+ * 解析交付物类型：research | plan。
+ * 显式给出优先；否则按 report 结构推断；推断不出来时返回 null，
+ * 由调用方按“保守升级为 dual”处理，避免猜错后静默降级。
+ */
+export function resolveArtifact(payload = {}) {
+  if (payload.artifact === 'research' || payload.artifact === 'plan') return payload.artifact
+  const report = payload.report
+  if (report && typeof report === 'object') {
+    if (Array.isArray(report.options) || typeof report.recommendation === 'string' || report.rollback) return 'plan'
+    if (Array.isArray(report.claims) || report.sources) return 'research'
+  }
+  return null
+}
+
+/** 证据/结论的文本相似度：用于识别两轴互相抄袭。 */
+export function evidenceSimilarity(a, b) {
+  const norm = (t) => String(t || '').toLowerCase().replace(/s+/g, ' ').trim()
+  const x = norm(a)
+  const y = norm(b)
+  if (!x || !y) return { identical: false, jaccard: 0 }
+  if (x === y) return { identical: true, jaccard: 1 }
+  const tokens = (t) => new Set(t.split(/[^p{L}p{N}_]+/u).filter((w) => w.length > 1))
+  const tx = tokens(x)
+  const ty = tokens(y)
+  let inter = 0
+  for (const t of tx) if (ty.has(t)) inter++
+  const union = tx.size + ty.size - inter
+  return { identical: false, jaccard: union === 0 ? 0 : inter / union }
+}
+
+export const CANARY_DEFECT = 'missing-rollback'
+export const CANARY_TEXT = 'CANARY（交付方自述）：本方案没有提供回滚步骤，失败后只能人工恢复。'

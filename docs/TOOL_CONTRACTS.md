@@ -1,5 +1,9 @@
 # Carlos Flow 工具契约文档
 
+### 调研/方案互审
+
+`flow_advisory_*` 与门面 `carlos_review` 的 advisory 动作详见 `docs/ADVISORY_REVIEW.md`：不改变 T0/T1/T2 路由，不参与 PASS 双轴门禁，只对结构化调研/方案做交付前检查。
+
 ### 验证输出解码（Windows 中文）
 
 `flow_run_verify` / `flow_falsify` 的输出按字节收集后再解码：严格 UTF-8 优先，失败才回退 GB18030（GBK 超集），可用 `CARLOS_VERIFY_ENCODING=utf8|gb18030` 强制指定。命令、shell、退出码与超时行为不变。

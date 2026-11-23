@@ -137,6 +137,7 @@
     "smoke-test.js",
     "vendor/",
     "docs/PORTABILITY.md",
-    "docs/TOOL_CONTRACTS.md"
+    "docs/TOOL_CONTRACTS.md",
+    "docs/ADVISORY_REVIEW.md"
   ]
 }
