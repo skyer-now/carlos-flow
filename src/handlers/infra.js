@@ -212,6 +212,8 @@ const TOOLS = [
           activation_pending: Array.isArray(state.activation_pending)
             ? state.activation_pending
             : [],
+          // 调研/方案互审（v3.1）：与 T2 双轴无关，只用于“回答前是否已复核”。
+          advisory: (await import('../advisory.js')).summarizeAdvisory(state.advisory),
           // 双轴审查证据：主 Agent 落 PASS 前可读它确认两轴状态与 card_ts 绑定。
           // axes_ready = 两轴都有结论且 card_ts 与当前卡一致且无轴 FAIL。
           audit_axes: state.audit_axes,
@@ -696,8 +698,36 @@ const TOOLS = [
         })
 
         // 旁路：只附带“这次内容是否需要调研/方案互审”，不改变 T0/T1/T2 决策与激活。
-        const { classifyAdvisory } = await import('../advisory.js')
-        const advisoryHint = classifyAdvisory({ text: message, state: loadState(sessionId) })
+        const advisoryModule = await import('../advisory.js')
+        const advisoryHint = advisoryModule.classifyAdvisory({ text: message, state: loadState(sessionId) })
+
+        // 实际使用路径：当这条消息不会进入 T2 门禁（未触发，或只是只读调研）时，
+        // 直接把互审准备出来（记录 + 两轴 prompt），Agent 拿到就能派审核者。
+        // 会开卡的 T2 路径不创建，避免和 PASS 双轴重复。
+        let advisoryPrepared = null
+        const willOpenCard = result.shouldTrigger === true &&
+          result.activationPlan && result.activationPlan.activated === true
+        if (advisoryHint.level !== 'none' && !willOpenCard) {
+          const { createAdvisoryRecord } = await import('./advisory.js')
+          const created = await createAdvisoryRecord({
+            sessionId,
+            question: message,
+            level: advisoryHint.level,
+            cwd: a.cwd,
+            state: loadState(sessionId),
+          })
+          if (created.ok && created.triggered) {
+            advisoryPrepared = {
+              advisory_id: created.advisory_id,
+              level: created.level,
+              artifact: created.artifact,
+              axes: created.axes,
+              prompts: created.prompts,
+              expires_at: created.expires_at,
+              claims_unbound: created.claims_unbound,
+            }
+          }
+        }
 
         const base = {
           ok: true,
@@ -707,6 +737,13 @@ const TOOLS = [
             matched_rules: advisoryHint.matched_rules,
             reason: advisoryHint.reason,
             budget: advisoryHint.budget,
+            prepared: !!advisoryPrepared,
+            advisory_id: advisoryPrepared ? advisoryPrepared.advisory_id : null,
+            axes: advisoryPrepared ? advisoryPrepared.axes : [],
+            prompts: advisoryPrepared ? advisoryPrepared.prompts : null,
+            next: advisoryPrepared
+              ? '用 subagent 并行派发只读审核者，完成后分别 flow_advisory_submit，再 flow_advisory_guard 后才交付结论。'
+              : null,
           },
           decision: result.decision,
           score: result.score,

@@ -45,6 +45,92 @@ function axisRecord(advisory, axis) {
   return advisory && advisory.axes ? advisory.axes[axis] : null
 }
 
+
+/**
+ * 创建一次互审记录并生成轴 prompt。
+ * 供 flow_advisory_axes 与 trigger 自动准备共用，避免两套口径。
+ */
+export async function createAdvisoryRecord(input = {}) {
+  const sid = input.sessionId || 'unknown'
+  const question = normalizeQuestion(input.question)
+  if (!question || question.length < 4) return { ok: false, reason: 'question 必填（至少 4 个字符）' }
+  const state = input.state || loadState(sid)
+  const cls = classifyAdvisory({ text: question, state })
+  const explicit = input.level && input.level !== 'none'
+  const level = explicit ? input.level : cls.level
+  if (!['none', 'single', 'dual'].includes(level)) return { ok: false, reason: 'level 只能是 none / single / dual' }
+  if (level === 'none') return { ok: true, triggered: false, level: 'none', matched_rules: cls.matched_rules, reason: cls.reason }
+
+  const claims = normalizeClaims(input.claims)
+  const artifact = resolveArtifact({ artifact: input.artifact, report: input.report })
+  let effectiveLevel = level
+  let artifactReason = ''
+  if (level === 'single' && !artifact && input.report) {
+    effectiveLevel = 'dual'
+    artifactReason = '交付物类型不明确，保守升级为双轴'
+  }
+  const chosenArtifact = artifact || (effectiveLevel === 'single' ? 'research' : null)
+  const axesToRun = effectiveLevel === 'dual'
+    ? requiredAxes('dual')
+    : [chosenArtifact === 'plan' ? 'feasibility' : axisForSingle({ report: input.report })]
+  const canary = input.canary === true
+  const advisory = {
+    id: randomBytes(8).toString('hex'),
+    level: effectiveLevel,
+    artifact: chosenArtifact,
+    canary: canary ? { defect: CANARY_DEFECT } : null,
+    question,
+    question_hash: cls.topic_hash,
+    created_at: Date.now(),
+    expires_at: Date.now() + ADVISORY_TTL_MS,
+    axes: { evidence: null, feasibility: null },
+    required: axesToRun,
+    claims,
+    passed_at: 0,
+  }
+  const cwd = input.cwd || process.cwd()
+  const prompts = {}
+  for (const axis of axesToRun) {
+    const prompt = buildAdvisoryPrompt(axis, {
+      question,
+      claims,
+      report: input.report,
+      canary: canary && axis === 'feasibility' ? CANARY_TEXT : '',
+    })
+    const { file } = writeDispatchPrompt(sid, 'auditor', prompt, cwd)
+    prompts[axis] = { prompt, file }
+  }
+  await commitState(sid, (latest) => {
+    latest.advisory = advisory
+    latest.advisory_log = appendAdvisoryLog(latest.advisory_log, {
+      level: effectiveLevel,
+      topic_hash: cls.topic_hash,
+      reason: explicit ? '调用方显式指定' : cls.reason,
+    })
+  })
+  audit('decision', sid, {
+    kind: 'advisory_axes',
+    level: effectiveLevel,
+    axes: axesToRun,
+    matched_rules: cls.matched_rules,
+    downgraded: cls.downgraded === true,
+  })
+  return {
+    ok: true,
+    triggered: true,
+    advisory_id: advisory.id,
+    level: effectiveLevel,
+    artifact: chosenArtifact,
+    axes: axesToRun,
+    matched_rules: cls.matched_rules,
+    reason: (explicit ? '调用方显式指定' : cls.reason) + (artifactReason ? '；' + artifactReason : ''),
+    canary: canary === true,
+    expires_at: advisory.expires_at,
+    claims_unbound: unboundClaims(claims).map((c) => c.text),
+    prompts,
+  }
+}
+
 const TOOLS = [
   {
     name: 'flow_advisory_axes',
@@ -81,92 +167,29 @@ const TOOLS = [
       try {
         const a = args || {}
         const sid = a.sessionId || 'unknown'
-        const question = normalizeQuestion(a.question)
-        if (!question || question.length < 4) return fail('question 必填（至少 4 个字符），用来绑定本次交付。')
-        const state = loadState(sid)
-        const cls = classifyAdvisory({ text: question, state })
-        const explicit = a.level && a.level !== 'none'
-        const level = explicit ? a.level : cls.level
-        if (!['none', 'single', 'dual'].includes(level)) return fail('level 只能是 none / single / dual')
-
-        if (level === 'none') {
+        const created = await createAdvisoryRecord({
+          sessionId: sid,
+          question: a.question,
+          level: a.level,
+          claims: a.claims,
+          report: a.report,
+          artifact: a.artifact,
+          canary: a.canary,
+          cwd: a.cwd,
+        })
+        if (!created.ok) return fail(created.reason)
+        if (!created.triggered) {
           return ok({
             ok: true,
             triggered: false,
             level: 'none',
-            matched_rules: cls.matched_rules,
-            reason: cls.reason,
+            matched_rules: created.matched_rules,
+            reason: created.reason,
             note: '常规核查不触发互审。如确需审核，显式传 level=single 或 dual。',
           })
         }
-
-        const claims = normalizeClaims(a.claims)
-        const artifact = resolveArtifact({ artifact: a.artifact, report: a.report })
-        // 结构化交付物但类型不明：保守升级为 dual，避免猜错后静默降级。
-        let effectiveLevel = level
-        let artifactReason = ''
-        if (level === 'single' && !artifact && a.report) {
-          effectiveLevel = 'dual'
-          artifactReason = '交付物类型不明确，保守升级为双轴'
-        }
-        const chosenArtifact = artifact || (effectiveLevel === 'single' ? 'research' : null)
-        const axesToRun = effectiveLevel === 'dual'
-          ? requiredAxes('dual')
-          : [chosenArtifact === 'plan' ? 'feasibility' : axisForSingle({ report: a.report })]
-        const canary = a.canary === true
-        const advisory = {
-          id: randomBytes(8).toString('hex'),
-          level: effectiveLevel,
-          artifact: chosenArtifact,
-          canary: canary ? { defect: CANARY_DEFECT } : null,
-          question,
-          question_hash: cls.topic_hash,
-          created_at: Date.now(),
-          expires_at: Date.now() + ADVISORY_TTL_MS,
-          axes: { evidence: null, feasibility: null },
-          required: axesToRun,
-          claims,
-        }
-        const cwd = a.cwd || process.cwd()
-        const prompts = {}
-        for (const axis of axesToRun) {
-          const prompt = buildAdvisoryPrompt(axis, {
-            question,
-            claims,
-            report: a.report,
-            canary: canary && axis === 'feasibility' ? CANARY_TEXT : '',
-          })
-          const { file } = writeDispatchPrompt(sid, 'auditor', prompt, cwd)
-          prompts[axis] = { prompt, file }
-        }
-        await commitState(sid, (latest) => {
-          latest.advisory = advisory
-          latest.advisory_log = appendAdvisoryLog(latest.advisory_log, {
-            level: effectiveLevel,
-            topic_hash: cls.topic_hash,
-            reason: explicit ? '调用方显式指定' : cls.reason,
-          })
-        })
-        audit('decision', sid, {
-          kind: 'advisory_axes',
-          level: effectiveLevel,
-          axes: axesToRun,
-          matched_rules: cls.matched_rules,
-          downgraded: cls.downgraded === true,
-        })
         return ok({
-          ok: true,
-          triggered: true,
-          advisory_id: advisory.id,
-          level: effectiveLevel,
-          artifact: chosenArtifact,
-          axes: axesToRun,
-          matched_rules: cls.matched_rules,
-          reason: (explicit ? '调用方显式指定' : cls.reason) + (artifactReason ? '；' + artifactReason : ''),
-          canary: canary === true,
-          expires_at: advisory.expires_at,
-          claims_unbound: unboundClaims(claims).map((c) => c.text),
-          prompts,
+          ...created,
           next: '用 subagent 并行派发只读审核者，完成后分别 flow_advisory_submit（axis=evidence/feasibility），再 flow_advisory_guard。',
         })
       } catch (e) {

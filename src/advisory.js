@@ -225,3 +225,43 @@ export function evidenceSimilarity(a, b) {
 
 export const CANARY_DEFECT = 'missing-rollback'
 export const CANARY_TEXT = 'CANARY（交付方自述）：本方案没有提供回滚步骤，失败后只能人工恢复。'
+
+
+/** 互审状态摘要（只读）：flow_status 与 guard 共用同一口径。 */
+export function summarizeAdvisory(advisory, now = Date.now()) {
+  if (!advisory || typeof advisory !== 'object') return null
+  const need = Array.isArray(advisory.required) && advisory.required.length
+    ? advisory.required
+    : requiredAxes(advisory.level)
+  const axes = {}
+  for (const axis of ['evidence', 'feasibility']) {
+    const rec = advisory.axes ? advisory.axes[axis] : null
+    axes[axis] = rec && rec.verdict
+      ? {
+          verdict: rec.verdict,
+          findings: Array.isArray(rec.findings) ? rec.findings.length : 0,
+          has_evidence: !!String(rec.evidence || '').trim(),
+          ts: rec.ts || 0,
+        }
+      : null
+  }
+  const missing = need.filter((axis) => !axes[axis])
+  const failed = need.filter((axis) => axes[axis] && axes[axis].verdict === 'FAIL')
+  const emptyEvidence = need.filter((axis) => axes[axis] && axes[axis].verdict !== 'FAIL' && !axes[axis].has_evidence)
+  const unbound = unboundClaims(advisory.claims).map((c) => c.text)
+  const expired = advisoryIsExpired(advisory, now)
+  return {
+    id: advisory.id,
+    level: advisory.level,
+    artifact: advisory.artifact || null,
+    required: need,
+    axes,
+    missing,
+    failed,
+    empty_evidence: emptyEvidence,
+    expired,
+    claims_unbound: unbound,
+    passed: !expired && missing.length === 0 && failed.length === 0 && emptyEvidence.length === 0 && unbound.length === 0,
+    expires_at: advisory.expires_at || 0,
+  }
+}

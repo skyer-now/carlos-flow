@@ -52,6 +52,18 @@
 审核者若给 PASS 且 findings/证据里没有提到回滚/恢复/不可逆，guard 判为“canary 未被识别（疑似形式化审核）”。
 用于自测与抽检，不建议在真实交付里默认开启。
 
+## 实际使用路径（自动准备）
+
+宿主在收到每条用户消息时调用 `flow_trigger_check`，插件会：
+
+1. 判定这条消息是否需要互审；
+2. 如果**不会进入 T2 门禁**（未触发工作流，或只是只读调研），直接把互审记录与两轴 prompt 准备好，返回 `advisory.prepared=true`、`advisory_id`、`axes`、`prompts` 与下一步提示；
+3. 如果**会开卡**（T2 改动），不创建互审，交给 PASS 的 standards/spec 双轴，避免重复审。
+
+`flow_status` 会返回 `advisory` 摘要（id / level / required / axes / missing / failed / expired / claims_unbound / passed），Agent 在交付前读它就能知道还缺哪一轴。
+
+常规核查不产生记录，也不写 prompt 文件。
+
 ## 用法
 
 ```js
