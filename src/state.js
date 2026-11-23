@@ -2177,10 +2177,24 @@ export function hashWorkspaceContent({ diff, files, gitRoot, flowHomeAbs }) {
   // 用户完全可以把它设在**项目内部**（如 <repo>/.flowhome），那就会自我失效。
   // 所以这里按**解析后的绝对路径**排除真正的 FLOW_HOME，
   // 同时保留 .carlos-flow/ 的字面排除以兼容默认布局。
+  //
+  // ⚠️ 比较前必须两边都取规范长名：Windows 上 CARLOS_FLOW_HOME 可能是 8.3 短名
+  // （RUNNER~1），而 gitRoot 是长名（runneradmin）；字符串前缀比较会失效，
+  // 导致状态文件被计入指纹 → 每写一次状态就 STALE。
+  const canon = (p) => {
+    try { return fs.realpathSync.native(p) } catch {
+      try { return fs.realpathSync(p) } catch { return p }
+    }
+  }
+  const flowHomeCanon = canon(flowHomeAbs)
+  const gitRootCanon = canon(gitRoot)
   for (const f of files) {
     const abs = path.resolve(gitRoot, f)
+    const absCanon = canon(abs)
     const inFlowHome =
-      abs === flowHomeAbs || abs.startsWith(flowHomeAbs + path.sep)
+      abs === flowHomeAbs || abs.startsWith(flowHomeAbs + path.sep) ||
+      absCanon === flowHomeCanon || absCanon.startsWith(flowHomeCanon + path.sep) ||
+      abs === gitRootCanon || absCanon === gitRootCanon
     if (inFlowHome) continue
     if (f.startsWith('.carlos-flow/') || f.startsWith('.carlos-flow\\'))
       continue
