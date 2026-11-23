@@ -681,7 +681,9 @@ if (process.platform !== 'win32') {
     // 标记必须在**子进程一启动**就写，而不是等到 closeSync 被调用：
     // 慢 runner（2 核）上子进程启动 + git 采样可能已吃掉大部分超时，
     // 若等到 close 才写标记，marker 不存在并不能证明「回收失败」。
-    fs.writeFileSync(closePreload, `const fs=require('node:fs'),path=require('node:path');try{fs.writeFileSync(${JSON.stringify(childMarker)},JSON.stringify({pid:process.pid}))}catch{};const originalOpen=fs.openSync,originalClose=fs.closeSync;const fds=new Set();fs.openSync=(...a)=>{const fd=originalOpen(...a);if(path.resolve(String(a[0]))===${JSON.stringify(path.resolve(slowFile))})fds.add(fd);return fd};fs.closeSync=fd=>{if(fds.has(fd)){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10000);try{fs.appendFileSync(${JSON.stringify(childMarker)},'LATE')}catch{}}return originalClose(fd)};`)
+    // 比较路径必须两边都 realpath：runner 上 tmpdir 是 8.3 短名（RUNNER~1），
+    // 子进程拿到的 gitRoot 是长名；直接 path.resolve 比较会永远不相等，注入就不生效。
+    fs.writeFileSync(closePreload, `const fs=require('node:fs'),path=require('node:path');try{fs.writeFileSync(${JSON.stringify(childMarker)},JSON.stringify({pid:process.pid}))}catch{};const real=(p)=>{try{return fs.realpathSync(p)}catch{return path.resolve(p)}};const target=real(${JSON.stringify(path.resolve(slowFile))});const originalOpen=fs.openSync,originalClose=fs.closeSync;const fds=new Set();fs.openSync=(...a)=>{const fd=originalOpen(...a);if(real(String(a[0]))===target)fds.add(fd);return fd};fs.closeSync=fd=>{if(fds.has(fd)){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10000);try{fs.appendFileSync(${JSON.stringify(childMarker)},'LATE')}catch{}}return originalClose(fd)};`)
     const priorOptions = process.env.NODE_OPTIONS
     process.env.NODE_OPTIONS = `${priorOptions || ''} --require=${closePreload.replace(/\\/g, '/')}`.trim()
     try {
