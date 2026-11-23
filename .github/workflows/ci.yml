@@ -114,8 +114,18 @@ jobs:
       - name: 行为兑现门禁（承诺 / 参数 / 重复注册）
         run: npm run check:claims && npm run check:params && npm run check:no-dead-handler
       # 专项真实验证：真实 git 仓库 / 真实篡改 / 真实 bridge 隔离 / 真实安装
-      - name: 专项真实验证（scope / 审计链 / bridge 隔离）
-        run: npm run test:scope && npm run test:audit && npm run test:bridge
+      - name: 专项真实验证（scope）
+        run: npm run test:scope
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-identity-home
+      - name: 专项真实验证（审计链）
+        run: npm run test:audit
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-identity-home
+      - name: 专项真实验证（bridge 隔离）
+        run: npm run test:bridge
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-identity-home
