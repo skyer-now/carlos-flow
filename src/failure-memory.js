@@ -122,6 +122,25 @@ function withFileLock(file, fn) {
 }
 
 /**
+ * 把路径归一成规范形态。
+ *
+ * 为什么不能只用 fs.realpathSync：Windows 上若输入是 8.3 短名（如 RUNNER~1），
+ * realpathSync 可能把短名原样保留，而另一路（git 输出、长名 cwd）会给出长名，
+ * 于是同一个 .git 目录算出两个不同身份键 —— 同一仓库被拆成两个记忆分区。
+ * realpathSync.native 走原生 API，总是返回规范长名；不可用时再退回普通实现。
+ */
+function canonicalPath(target) {
+  try {
+    if (typeof fs.realpathSync.native === 'function') return fs.realpathSync.native(target)
+  } catch {}
+  try {
+    return fs.realpathSync(target)
+  } catch {
+    return target
+  }
+}
+
+/**
  * 解析项目身份。
  * Git 仓库用 --git-common-dir：同一仓库的多个 worktree 共享同一身份；
  * 非 Git 目录退化为真实路径，保证不同目录不会互相串记忆。
@@ -152,17 +171,9 @@ export function resolveProjectIdentity(cwd, options = {}) {
   }
   let root
   if (commonDir) {
-    try {
-      root = fs.realpathSync(commonDir)
-    } catch {
-      root = commonDir
-    }
+    root = canonicalPath(commonDir)
   } else {
-    try {
-      root = fs.realpathSync(base)
-    } catch {
-      root = base
-    }
+    root = canonicalPath(base)
   }
   const kind = commonDir ? 'git-common-dir' : 'directory'
   // Windows 路径大小写不敏感：身份键按小写归一，避免同一项目分裂成两个分区。

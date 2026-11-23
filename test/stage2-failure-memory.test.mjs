@@ -67,6 +67,18 @@ describe('阶段二 · 项目隔离失败记忆', () => {
     assert.equal(w.key, a.key, `同一仓库的 worktree 必须共享项目身份（repo=${a.root} worktree=${w.root}）`)
   })
 
+  it('项目身份使用规范长名，路径写法差异不分裂身份', () => {
+    // 真实事故：Windows 上同一 .git 曾被算出短名（RUNNER~1）与长名（runneradmin）两个键，
+    // 导致同一仓库被拆成两个记忆分区。这里锁住两件事：
+    //   1) root 必须是规范长名（realpathSync.native 的结果）；
+    //   2) 带 .. 的等价写法必须得到同一身份。
+    const a = resolveProjectIdentity(repoA)
+    const canonical = fs.realpathSync.native(path.join(repoA, '.git'))
+    assert.equal(a.root, canonical, `身份 root 必须是规范长名（actual=${a.root} expected=${canonical}）`)
+    const viaDotDot = resolveProjectIdentity(path.join(repoA, 'nested', '..'))
+    assert.equal(viaDotDot.key, a.key, `等价写法必须同身份（dotdot=${viaDotDot.root}）`)
+  })
+
   it('经验只注入本项目，不串到其他项目', () => {
     const saved = saveProjectFailureMemory(
       { rule: 'A 项目：写状态前必须先拿短锁', tag: 'lock', source: 'manual' },
