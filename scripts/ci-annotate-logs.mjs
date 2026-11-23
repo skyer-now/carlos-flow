@@ -47,10 +47,16 @@ for (const name of entries) {
 
   // 第一条：失败行（最有用，且通常很短，不会被截断）
   console.log(`::error title=${name}·失败行::${esc(clip(failLines.join('\n')))}`)
-  // 第二条：日志末尾（异常栈、进程退出原因通常在这里）
+  // 第二条：以第一条 not ok 开头的失败块（node:test 把断言错误写在 not ok 之后）
+  const firstFail = lines.findIndex((l) => /^\s*not ok \d+/.test(l))
+  if (firstFail >= 0) {
+    const block = lines.slice(firstFail, firstFail + 24).join('\n')
+    console.log(`::error title=${name}·失败块::${esc(clip(block))}`)
+  }
+  // 第三条：日志末尾（异常栈、进程退出原因通常在这里）
   const tail = lines.filter((l) => l.trim()).slice(-TAIL_LINES).join('\n')
   console.log(`::error title=${name}·末尾::${esc(clip(tail))}`)
-  emitted += 2
+  emitted += 3
 }
 
 const summaryPath = process.env.GITHUB_STEP_SUMMARY
