@@ -51,8 +51,76 @@ jobs:
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
-      - name: 测试·门禁加固链（敏感规则 / 锁 / 负对照 / MCP / 分发 / 存储 / 隔离 / AST / 门面）
-        run: npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch && npm run test:hardening && npm run test:cas && npm run test:roll && npm run test:prune && npm run test:stage2 && npm run test:worktree && npm run test:ast && npm run test:facade && npm run check:ast
+      # 门禁加固链：逐个套件独立成步。
+      # 背景：2026-11-24 v3.1.0 首发失败在这个组里，而 run 摘要只显示「命令退出 1」——
+      # 所有者看不了日志（非仓库 admin），只能靠猜。拆成单步后，失败直接落在套件名上。
+      - name: 测试·敏感规则（只增不减 / 否定式无效 / 坏配置退基线）
+        run: npm run test:sensitive
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·状态锁（退避 / 死锁回收 / fail-closed）
+        run: npm run test:lock
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·负对照还原核对（journal / 链接逃逸 / 故障关闭）
+        run: npm run test:falsify
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·MCP 协议层（握手 / stdout 纯净 / 未知方法）
+        run: npm run test:mcp
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·chip 两段式目录（真实服务端 + main.js）
+        run: npm run test:dispatch
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·门禁加固（超时整树回收 / 输出截断 / 快照去重）
+        run: npm run test:hardening
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·长验证并发合并与证据绑定（CAS）
+        run: npm run test:cas
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·审计分片滚动（流式校验 / 篡改可检出）
+        run: npm run test:roll
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·存储清理（只归档终态 / 可搬回）
+        run: npm run test:prune
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·失败记忆与质检单（项目隔离 / 忠于证据）
+        run: npm run test:stage2
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·任务工作区隔离（worktree / 越界拒绝）
+        run: npm run test:worktree
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·AST 断言敏感性（删断言 / 改期望值必须检出）
+        run: npm run test:ast
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·四门面收敛（动作全覆盖 / 真实路由）
+        run: npm run test:facade
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·断言敏感性门禁（check:ast）
+        run: npm run check:ast
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
