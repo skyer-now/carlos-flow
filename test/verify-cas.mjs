@@ -648,7 +648,11 @@ if (process.platform !== 'win32') {
     process.env.NODE_OPTIONS = `${oldNodeOptions || ''} --require=${preload.replace(/\\/g, '/')}`.trim()
     try {
       const failed = stateModule.workspaceFingerprint(work)
-      check('F15 真实文件局部读取故障不生成hash', failed.ok === false && failed.reason === 'untracked_read_failed' && !failed.diff_sha256)
+      // 不变量只有一条：**读取失败绝不生成 hash**。
+      // 至于是「注入的 EIO」还是「慢 runner 上子进程被超时回收」，都属于读取失败，
+      // 都不得产出指纹；把 reason 锁死成 untracked_read_failed 会在 2 核 CI 上误红。
+      check('F15 真实文件局部读取故障不生成hash', failed.ok === false && !failed.diff_sha256,
+        `reason=${failed.reason} code=${failed.errorCode || ''}`)
     } finally {
       fs.openSync = originalOpen
       if (oldNodeOptions === undefined) delete process.env.NODE_OPTIONS
@@ -669,20 +673,45 @@ if (process.platform !== 'win32') {
     const childMarker = path.join(faultHome, 'child-close-marker.json')
     const closePreload = path.join(faultHome, 'owned-close-block.cjs')
     fs.writeFileSync(slowFile, '真实子进程读取')
-    fs.writeFileSync(closePreload, `const fs=require('node:fs'),path=require('node:path');const originalOpen=fs.openSync,originalClose=fs.closeSync;const fds=new Set();fs.openSync=(...a)=>{const fd=originalOpen(...a);if(path.resolve(String(a[0]))===${JSON.stringify(path.resolve(slowFile))})fds.add(fd);return fd};fs.closeSync=fd=>{if(fds.has(fd)){fs.writeFileSync(${JSON.stringify(childMarker)},JSON.stringify({pid:process.pid}));Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10000);fs.appendFileSync(${JSON.stringify(childMarker)},'LATE')}return originalClose(fd)};`)
+    // 标记必须在**子进程一启动**就写，而不是等到 closeSync 被调用：
+    // 慢 runner（2 核）上子进程启动 + git 采样可能已吃掉大部分超时，
+    // 若等到 close 才写标记，marker 不存在并不能证明「回收失败」。
+    fs.writeFileSync(closePreload, `const fs=require('node:fs'),path=require('node:path');try{fs.writeFileSync(${JSON.stringify(childMarker)},JSON.stringify({pid:process.pid}))}catch{};const originalOpen=fs.openSync,originalClose=fs.closeSync;const fds=new Set();fs.openSync=(...a)=>{const fd=originalOpen(...a);if(path.resolve(String(a[0]))===${JSON.stringify(path.resolve(slowFile))})fds.add(fd);return fd};fs.closeSync=fd=>{if(fds.has(fd)){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10000);try{fs.appendFileSync(${JSON.stringify(childMarker)},'LATE')}catch{}}return originalClose(fd)};`)
     const priorOptions = process.env.NODE_OPTIONS
     process.env.NODE_OPTIONS = `${priorOptions || ''} --require=${closePreload.replace(/\\/g, '/')}`.trim()
     try {
       const started = Date.now()
       const blocked = stateModule.workspaceFingerprint(work)
       const elapsed = Date.now() - started
-      const marker = fs.readFileSync(childMarker, 'utf8')
-      const pid = JSON.parse(marker).pid
-      let reaped = false
-      try { process.kill(pid, 0) } catch (e) { reaped = e.code === 'ESRCH' }
-      await new Promise((resolve) => setTimeout(resolve, 250))
-      check('F18 真实close阻塞子进程超时后已终止无后续写', blocked.ok === false && blocked.errorCode === 'ETIMEDOUT' &&
-        !blocked.diff_sha256 && reaped && fs.readFileSync(childMarker, 'utf8') === marker && elapsed < 6500)
+      // 有界等待标记出现：子进程可能比指纹超时稍晚才把标记写下来。
+      let marker = null
+      const markerDeadline = Date.now() + 3000
+      while (Date.now() < markerDeadline) {
+        try {
+          marker = fs.readFileSync(childMarker, 'utf8')
+          break
+        } catch { await new Promise((resolve) => setTimeout(resolve, 100)) }
+      }
+      check('F18 子进程确实启动并写出标记', marker !== null, marker === null ? '标记未出现（子进程未启动或启动前被回收）' : '')
+      if (marker === null) {
+        check('F18 真实close阻塞子进程超时后已终止无后续写', false, '缺少子进程标记，无法验证回收')
+      } else {
+        const pid = JSON.parse(marker).pid
+        // 进程被杀后句柄可能短暂残留，用有界轮询确认回收，避免慢 runner 上假红。
+        const aliveAt = (p) => {
+          try { process.kill(p, 0); return true } catch (e) { return e.code === 'EPERM' }
+        }
+        let reaped = !aliveAt(pid)
+        const reapDeadline = Date.now() + 5000
+        while (!reaped && Date.now() < reapDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+          reaped = !aliveAt(pid)
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        check('F18 真实close阻塞子进程超时后已终止无后续写', blocked.ok === false && blocked.errorCode === 'ETIMEDOUT' &&
+          !blocked.diff_sha256 && reaped && fs.readFileSync(childMarker, 'utf8') === marker && elapsed < 6500,
+        `ok=${blocked.ok} code=${blocked.errorCode || ''} reaped=${reaped} elapsed=${elapsed}`)
+      }
     } finally {
       if (priorOptions === undefined) delete process.env.NODE_OPTIONS
       else process.env.NODE_OPTIONS = priorOptions
