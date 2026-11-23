@@ -449,7 +449,8 @@ if (process.platform !== 'win32') {
       const running = receiptServer.request('tools/call', { name: 'flow_run_verify', arguments: { sessionId: casSid, ...(change === 'ordinary-verify' ? {} : { expected: { caseKey: offered.caseKey } }) },
         carlosContext: { session_id: casSid, workdir: cwd, workdir_is_local: true, workdir_is_read_only: false },
       })
-      const deadline = Date.now() + 4000
+      // 慢 runner 上子进程启动较慢；只等「已启动」事实，放宽等待不影响断言语义。
+      const deadline = Date.now() + 20000
       while (!fs.existsSync(started) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
       check(`W16 ${change} 真业务已在锁外启动`, fs.existsSync(started))
       await stateModule.commitState(casSid, latest => {

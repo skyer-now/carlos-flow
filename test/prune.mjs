@@ -108,7 +108,9 @@ try {
     const apply = p => storage.applyPrune(p, { apply: true, archiveRoot })
     const online = sid => fs.existsSync(path.join(RUNS, sid, 'state.json'))
     const waitFor = async file => {
-      const deadline = Date.now() + 5000
+      // 慢 runner（2 核）上子进程启动 + 模块加载可能远超 5 秒；
+      // 这里只等握手文件出现，超时值不影响断言语义，放宽到 30 秒避免假红。
+      const deadline = Date.now() + 30000
       while (!fs.existsSync(file)) {
         if (Date.now() >= deadline) throw new Error('测试 writer 文件握手超时')
         await new Promise(r => setTimeout(r, 10))
@@ -263,11 +265,11 @@ try {
 
       // CLI 真正等待异步执行与审计对比，环境明确继承本测试临时 HOME。
       oldState('guard-cli')
-      const cli = spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/prune.mjs', import.meta.url)), '--apply', '--sessions-only', '--older-than', '7', '--archive-root', archiveRoot], { env: { ...process.env }, encoding: 'utf8', timeout: 10000 })
+      const cli = spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/prune.mjs', import.meta.url)), '--apply', '--sessions-only', '--older-than', '7', '--archive-root', archiveRoot], { env: { ...process.env }, encoding: 'utf8', timeout: 60000 })
       check('P2. CLI await 异步归档并确认审计完整', cli.status === 0 && !online('guard-cli') && cli.stdout.includes('审计完整性'), cli.stderr.trim())
       oldState('guard-auto')
       storage.scheduleAutoPrune({ olderThanDays: 7, archiveRoot, force: true })
-      const autoDeadline = Date.now() + 5000
+      const autoDeadline = Date.now() + 30000
       while (online('guard-auto') && Date.now() < autoDeadline) await new Promise(r => setTimeout(r, 10))
       check('P2. 自动调度等待异步执行且保留两类欠账', !online('guard-auto') && online('guard-active') && online('guard-history'))
     } finally {
