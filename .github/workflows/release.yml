@@ -141,20 +141,12 @@ jobs:
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
-      # 失败诊断：把失败套件的原始输出贴到运行摘要。
-      # 背景：仓库所有者没有 admin 权限，下载不了 Actions 日志；
-      # 运行摘要（GITHUB_STEP_SUMMARY）是公开可读的，失败原因必须落在那里。
-      - name: 失败诊断（失败套件原始输出写入运行摘要）
+      # 失败诊断：把失败套件的原始输出转成公开运行注解（::error::）。
+      # 背景：仓库所有者没有 admin 权限，下载不了 Actions 日志（403），
+      # 失败只显示「进程退出码 1」；运行注解是公开可读的，能直接看到失败断言。
+      - name: 失败诊断（失败套件原始输出转成公开运行注解）
         if: failure()
-        run: |
-          echo "## 失败套件原始输出" >> "$GITHUB_STEP_SUMMARY"
-          for f in "$RUNNER_TEMP"/logs/*.log; do
-            [ -e "$f" ] || continue
-            echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            tail -n 150 "$f" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          done
+        run: node scripts/ci-annotate-logs.mjs
       # 单包一致性守卫：身份 / 版本 / 文档 / 产物 必须一致
       - name: 单包一致性检查
         run: node scripts/check-repo-parity.mjs
