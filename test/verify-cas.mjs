@@ -683,7 +683,10 @@ if (process.platform !== 'win32') {
     // 若等到 close 才写标记，marker 不存在并不能证明「回收失败」。
     // 比较路径必须两边都 realpath：runner 上 tmpdir 是 8.3 短名（RUNNER~1），
     // 子进程拿到的 gitRoot 是长名；直接 path.resolve 比较会永远不相等，注入就不生效。
-    fs.writeFileSync(closePreload, `const fs=require('node:fs'),path=require('node:path');try{fs.writeFileSync(${JSON.stringify(childMarker)},JSON.stringify({pid:process.pid}))}catch{};const real=(p)=>{try{return fs.realpathSync(p)}catch{return path.resolve(p)}};const target=real(${JSON.stringify(path.resolve(slowFile))});const originalOpen=fs.openSync,originalClose=fs.closeSync;const fds=new Set();fs.openSync=(...a)=>{const fd=originalOpen(...a);if(real(String(a[0]))===target)fds.add(fd);return fd};fs.closeSync=fd=>{if(fds.has(fd)){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10000);try{fs.appendFileSync(${JSON.stringify(childMarker)},'LATE')}catch{}}return originalClose(fd)};`)
+    // 另加 basename 兜底：文件名在临时目录内唯一，避免路径形态差异让注入静默失效。
+    // 同时把子进程实际打开的路径记进 child-opens.log，失败时能看出“到底有没有读过这个文件”。
+    const childOpens = path.join(faultHome, 'child-opens.log')
+    fs.writeFileSync(closePreload, `const fs=require('node:fs'),path=require('node:path');try{fs.writeFileSync(${JSON.stringify(childMarker)},JSON.stringify({pid:process.pid}))}catch{};const real=(p)=>{try{return fs.realpathSync(p)}catch{return path.resolve(p)}};const target=real(${JSON.stringify(path.resolve(slowFile))});const base=path.basename(target);const log=(s)=>{try{fs.appendFileSync(${JSON.stringify(childOpens)},s+'\\n')}catch{}};const originalOpen=fs.openSync,originalClose=fs.closeSync;const fds=new Set();fs.openSync=(...a)=>{const fd=originalOpen(...a);const p=String(a[0]);log('O:'+p);if(real(p)===target||path.basename(p)===base)fds.add(fd);return fd};fs.closeSync=fd=>{if(fds.has(fd)){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10000);try{fs.appendFileSync(${JSON.stringify(childMarker)},'LATE')}catch{}}return originalClose(fd)};`)
     const priorOptions = process.env.NODE_OPTIONS
     process.env.NODE_OPTIONS = `${priorOptions || ''} --require=${closePreload.replace(/\\/g, '/')}`.trim()
     try {
@@ -730,7 +733,7 @@ if (process.platform !== 'win32') {
         await new Promise((resolve) => setTimeout(resolve, 250))
         check('F18 真实close阻塞子进程超时后已终止无后续写', blocked.ok === false && blocked.errorCode === 'ETIMEDOUT' &&
           !blocked.diff_sha256 && reaped && fs.readFileSync(childMarker, 'utf8') === marker && elapsed < 6500,
-        `ok=${blocked.ok} code=${blocked.errorCode || ''} reaped=${reaped} elapsed=${elapsed}`)
+        `ok=${blocked.ok} code=${blocked.errorCode || ''} reaped=${reaped} elapsed=${elapsed} opens=${(() => { try { return fs.readFileSync(childOpens, 'utf8').split(/\r?\n/).slice(0, 6).join('|') } catch { return '无' } })()}`)
       }
     } finally {
       if (priorOptions === undefined) delete process.env.NODE_OPTIONS
