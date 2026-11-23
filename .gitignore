@@ -77,3 +77,6 @@ src/*.patch
 # 本机运维脚本（写死本机路径与 PATH 排查逻辑，对其他环境无用）
 # carlos-syncd.mjs 每 5 分钟巡检 npm 并静默升级全局安装，属个人环境自动化
 sync/
+
+# carlos-syncd.mjs 运行时锁（只含 pid，属本机运维状态，绝不能进仓库）
+.syncd.lock
