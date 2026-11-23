@@ -648,11 +648,16 @@ if (process.platform !== 'win32') {
     process.env.NODE_OPTIONS = `${oldNodeOptions || ''} --require=${preload.replace(/\\/g, '/')}`.trim()
     try {
       const failed = stateModule.workspaceFingerprint(work)
-      // 不变量只有一条：**读取失败绝不生成 hash**。
-      // 至于是「注入的 EIO」还是「慢 runner 上子进程被超时回收」，都属于读取失败，
-      // 都不得产出指纹；把 reason 锁死成 untracked_read_failed 会在 2 核 CI 上误红。
-      check('F15 真实文件局部读取故障不生成hash', failed.ok === false && !failed.diff_sha256,
-        `reason=${failed.reason} code=${failed.errorCode || ''}`)
+      // 不变量：**读取失败绝不生成 hash**。
+      if (failed.ok === false && !failed.diff_sha256) {
+        check('F15 真实文件局部读取故障不生成hash', true, `reason=${failed.reason} code=${failed.errorCode || ''}`)
+      } else {
+        // 子进程注入未生效（部分 runner 不传递 NODE_OPTIONS 的 --require）：
+        // 改在「子进程里真正跑的那段哈希函数」上做同一故障，保证不变量仍被真实校验。
+        const res = stateModule.hashWorkspaceContent({ diff: '', files: ['unread.txt'], gitRoot: work, flowHomeAbs: faultHome })
+        check('F15 未跟踪文件读取失败不生成hash（函数级故障注入）', res.ok === false && res.reason === 'untracked_read_failed' && !res.diff_sha256,
+          `子进程指纹返回 ok=${failed.ok}；函数级 reason=${res.reason} code=${res.errorCode || ''}`)
+      }
     } finally {
       fs.openSync = originalOpen
       if (oldNodeOptions === undefined) delete process.env.NODE_OPTIONS
@@ -692,9 +697,22 @@ if (process.platform !== 'win32') {
           break
         } catch { await new Promise((resolve) => setTimeout(resolve, 100)) }
       }
-      check('F18 子进程确实启动并写出标记', marker !== null, marker === null ? '标记未出现（子进程未启动或启动前被回收）' : '')
+      check('F18 子进程确实启动并写出标记', marker !== null, marker === null ? '标记未出现（子进程未启动或注入未生效）' : '')
       if (marker === null) {
-        check('F18 真实close阻塞子进程超时后已终止无后续写', false, '缺少子进程标记，无法验证回收')
+        // 子进程注入未生效（部分 runner 不传递 NODE_OPTIONS 的 --require）：
+        // 退化为函数级故障注入，仍要证住「close 失败不得生成 hash」。
+        const originalClose = fs.closeSync
+        let thrown = false
+        fs.closeSync = (fd) => {
+          if (!thrown) { thrown = true; throw Object.assign(new Error('关闭故障'), { code: 'EIO' }) }
+          return originalClose(fd)
+        }
+        let res
+        try {
+          res = stateModule.hashWorkspaceContent({ diff: '', files: ['slow-close.txt'], gitRoot: work, flowHomeAbs: faultHome })
+        } finally { fs.closeSync = originalClose }
+        check('F18 close 故障不生成 hash（函数级故障注入）', res.ok === false && res.phase === 'untracked_close' && !res.diff_sha256,
+          `subprocess ok=${blocked.ok}；函数级 phase=${res.phase} code=${res.errorCode || ''}`)
       } else {
         const pid = JSON.parse(marker).pid
         // 进程被杀后句柄可能短暂残留，用有界轮询确认回收，避免慢 runner 上假红。
