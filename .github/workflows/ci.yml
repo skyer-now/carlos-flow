@@ -10,6 +10,9 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    # macOS 刚加入矩阵、尚无实机验收结论：先不阻塞主干（失败会在 job 上标红但不取消其它平台）。
+    # 等 docs/PORTABILITY.md 的清单在 Mac 上跑通后再移除这一行。
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]

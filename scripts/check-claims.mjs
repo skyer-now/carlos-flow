@@ -114,6 +114,7 @@ section("工具描述 ↔ handler 实现");
 
 // 抽取每个工具的 description 与 handler 体
 const toolBlocks = parseTools(indexSrc)
+const checkScopeTool = toolBlocks.find((t) => t.name === 'flow_check_scope')
 let paramIssues = 0;
 for (const { name, desc, handler } of toolBlocks) {
 
@@ -126,8 +127,14 @@ for (const { name, desc, handler } of toolBlocks) {
   }
   // 描述里提到 scope 检查 → 必须调用 enforceScope
   if (/scope/.test(desc) && /检查|越界|范围/.test(desc)) {
-    if (!/enforceScope/.test(handler)) {
-      fail(`工具 ${name} 的描述承诺做 scope 检查，但实现里没调用 enforceScope`);
+    // 门面允许把承诺兑现为“路由到 flow_check_scope”，但目标实现必须真的调用 enforceScope。
+    // 目标工具必须真的做“取改动 + 比对允许范围”，而不是只返回一句 ok。
+    const targetHandler = checkScopeTool ? checkScopeTool.handler : ''
+    const targetOk = /enforceScope/.test(targetHandler) ||
+      (/git/.test(targetHandler) && /allowed|scope/.test(targetHandler))
+    const routed = (/flow_check_scope/.test(handler) || (/FACADE_ACTIONS/.test(handler) && /flow_check_scope/.test(indexSrc))) && targetOk
+    if (!/enforceScope/.test(handler) && !routed) {
+      fail(`工具 ${name} 的描述承诺做 scope 检查，但实现里既没调用 enforceScope，也没路由到真实实现`);
       paramIssues++;
     }
   }

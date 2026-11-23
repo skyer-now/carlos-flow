@@ -1,0 +1,938 @@
+{
+  "total_count": 7,
+  "jobs": [
+    {
+      "id": 137605256044,
+      "run_id": 45148979830,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/runs/45148979830",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVg7Z288AAAAgCemTbA",
+      "head_sha": "b8841c47268c9fe4dcbfc2b534a6664dc3d65513",
+      "url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/jobs/137605256044",
+      "html_url": "https://github.com/skyer-now/carlos-flow/actions/runs/45148979830/job/137605256044",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-23T09:39:11Z",
+      "started_at": "2026-11-23T09:39:13Z",
+      "completed_at": "2026-11-23T09:39:42Z",
+      "name": "bridge (windows-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-23T09:39:14Z",
+          "completed_at": "2026-11-23T09:39:15Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-23T09:39:15Z",
+          "completed_at": "2026-11-23T09:39:20Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-23T09:39:20Z",
+          "completed_at": "2026-11-23T09:39:24Z"
+        },
+        {
+          "name": "Run npm ci",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-23T09:39:24Z",
+          "completed_at": "2026-11-23T09:39:27Z"
+        },
+        {
+          "name": "Gatekeeper：语法校验 + 真 RPC 往返冒烟测试",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-23T09:39:27Z",
+          "completed_at": "2026-11-23T09:39:39Z"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-11-23T09:39:39Z",
+          "completed_at": "2026-11-23T09:39:39Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-11-23T09:39:39Z",
+          "completed_at": "2026-11-23T09:39:41Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-11-23T09:39:41Z",
+          "completed_at": "2026-11-23T09:39:41Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/skyer-now/carlos-flow/check-runs/137605256044",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000001105,
+      "runner_name": "GitHub Actions 1000001105",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 137605256051,
+      "run_id": 45148979830,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/runs/45148979830",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVg7Z288AAAAgCemTcw",
+      "head_sha": "b8841c47268c9fe4dcbfc2b534a6664dc3d65513",
+      "url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/jobs/137605256051",
+      "html_url": "https://github.com/skyer-now/carlos-flow/actions/runs/45148979830/job/137605256051",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-11-23T09:39:11Z",
+      "started_at": "2026-11-23T09:39:13Z",
+      "completed_at": "2026-11-23T09:39:38Z",
+      "name": "test (macos-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-23T09:39:13Z",
+          "completed_at": "2026-11-23T09:39:14Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-23T09:39:14Z",
+          "completed_at": "2026-11-23T09:39:15Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-23T09:39:15Z",
+          "completed_at": "2026-11-23T09:39:15Z"
+        },
+        {
+          "name": "Check Node.js version",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-23T09:39:15Z",
+          "completed_at": "2026-11-23T09:39:16Z"
+        },
+        {
+          "name": "Run npm ci",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-23T09:39:16Z",
+          "completed_at": "2026-11-23T09:39:16Z"
+        },
+        {
+          "name": "Run npm test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-11-23T09:39:16Z",
+          "completed_at": "2026-11-23T09:39:16Z"
+        },
+        {
+          "name": "E2E (Carlos workflow)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-11-23T09:39:16Z",
+          "completed_at": "2026-11-23T09:39:29Z"
+        },
+        {
+          "name": "P0 gates",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-11-23T09:39:29Z",
+          "completed_at": "2026-11-23T09:39:32Z"
+        },
+        {
+          "name": "Mutant anchors still valid",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-11-23T09:39:32Z",
+          "completed_at": "2026-11-23T09:39:33Z"
+        },
+        {
+          "name": "End-to-end acceptance (npm-package path)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-11-23T09:39:33Z",
+          "completed_at": "2026-11-23T09:39:34Z"
+        },
+        {
+          "name": "A1 验证-代码状态绑定（STALE 必须阻断 PASS）",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 11,
+          "started_at": "2026-11-23T09:39:34Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Trigger engine E2E",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Cross-process concurrency regression",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 13,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "门禁加固回归（敏感规则 / 状态锁 / 负对照还原 / MCP 协议 / 两段式分发）",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 14,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Security audit",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 15,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Build check (no build step for ESM)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 16,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Lint (placeholder)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 17,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 33,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 34,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 35,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/skyer-now/carlos-flow/check-runs/137605256051",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000001100,
+      "runner_name": "GitHub Actions 1000001100",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 137605256106,
+      "run_id": 45148979830,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/runs/45148979830",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVg7Z288AAAAgCemTqg",
+      "head_sha": "b8841c47268c9fe4dcbfc2b534a6664dc3d65513",
+      "url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/jobs/137605256106",
+      "html_url": "https://github.com/skyer-now/carlos-flow/actions/runs/45148979830/job/137605256106",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-11-23T09:39:11Z",
+      "started_at": "2026-11-23T09:39:14Z",
+      "completed_at": "2026-11-23T09:39:24Z",
+      "name": "identity",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-23T09:39:15Z",
+          "completed_at": "2026-11-23T09:39:15Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-23T09:39:15Z",
+          "completed_at": "2026-11-23T09:39:16Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-23T09:39:16Z",
+          "completed_at": "2026-11-23T09:39:17Z"
+        },
+        {
+          "name": "Run npm install",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-23T09:39:17Z",
+          "completed_at": "2026-11-23T09:39:18Z"
+        },
+        {
+          "name": "单包一致性检查（身份 / 版本 / 文档 / 产物）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-23T09:39:18Z",
+          "completed_at": "2026-11-23T09:39:18Z"
+        },
+        {
+          "name": "产物全面体检（对外产物是否正确）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-11-23T09:39:18Z",
+          "completed_at": "2026-11-23T09:39:20Z"
+        },
+        {
+          "name": "模板渲染门禁（Windows 路径渲染必须可解析）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-11-23T09:39:20Z",
+          "completed_at": "2026-11-23T09:39:20Z"
+        },
+        {
+          "name": "跨平台可移植性（路径 / 进程树 / 归一）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-11-23T09:39:20Z",
+          "completed_at": "2026-11-23T09:39:20Z"
+        },
+        {
+          "name": "行为兑现门禁（承诺 / 参数 / 重复注册）",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 9,
+          "started_at": "2026-11-23T09:39:20Z",
+          "completed_at": "2026-11-23T09:39:21Z"
+        },
+        {
+          "name": "专项真实验证（scope / 审计链 / bridge 隔离）",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 10,
+          "started_at": "2026-11-23T09:39:21Z",
+          "completed_at": "2026-11-23T09:39:21Z"
+        },
+        {
+          "name": "产物语言体检（提交信息 / 注释必须中文）",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 11,
+          "started_at": "2026-11-23T09:39:21Z",
+          "completed_at": "2026-11-23T09:39:21Z"
+        },
+        {
+          "name": "语言体检自检（故意放英文必须被抓出）",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-11-23T09:39:21Z",
+          "completed_at": "2026-11-23T09:39:21Z"
+        },
+        {
+          "name": "变异体锚点体检",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 13,
+          "started_at": "2026-11-23T09:39:21Z",
+          "completed_at": "2026-11-23T09:39:21Z"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 25,
+          "started_at": "2026-11-23T09:39:21Z",
+          "completed_at": "2026-11-23T09:39:21Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 26,
+          "started_at": "2026-11-23T09:39:21Z",
+          "completed_at": "2026-11-23T09:39:22Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 27,
+          "started_at": "2026-11-23T09:39:22Z",
+          "completed_at": "2026-11-23T09:39:22Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/skyer-now/carlos-flow/check-runs/137605256106",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000001101,
+      "runner_name": "GitHub Actions 1000001101",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 137605256187,
+      "run_id": 45148979830,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/runs/45148979830",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVg7Z288AAAAgCemT-w",
+      "head_sha": "b8841c47268c9fe4dcbfc2b534a6664dc3d65513",
+      "url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/jobs/137605256187",
+      "html_url": "https://github.com/skyer-now/carlos-flow/actions/runs/45148979830/job/137605256187",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "created_at": "2026-11-23T09:39:11Z",
+      "started_at": "2026-11-23T09:39:13Z",
+      "completed_at": "2026-11-23T09:39:52Z",
+      "name": "test (ubuntu-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-23T09:39:14Z",
+          "completed_at": "2026-11-23T09:39:14Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-23T09:39:14Z",
+          "completed_at": "2026-11-23T09:39:15Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-23T09:39:15Z",
+          "completed_at": "2026-11-23T09:39:16Z"
+        },
+        {
+          "name": "Check Node.js version",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-23T09:39:16Z",
+          "completed_at": "2026-11-23T09:39:16Z"
+        },
+        {
+          "name": "Run npm ci",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-23T09:39:16Z",
+          "completed_at": "2026-11-23T09:39:16Z"
+        },
+        {
+          "name": "Run npm test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-11-23T09:39:16Z",
+          "completed_at": "2026-11-23T09:39:16Z"
+        },
+        {
+          "name": "E2E (Carlos workflow)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-11-23T09:39:16Z",
+          "completed_at": "2026-11-23T09:39:29Z"
+        },
+        {
+          "name": "P0 gates",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-11-23T09:39:29Z",
+          "completed_at": "2026-11-23T09:39:32Z"
+        },
+        {
+          "name": "Mutant anchors still valid",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-11-23T09:39:32Z",
+          "completed_at": "2026-11-23T09:39:33Z"
+        },
+        {
+          "name": "End-to-end acceptance (npm-package path)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-11-23T09:39:33Z",
+          "completed_at": "2026-11-23T09:39:34Z"
+        },
+        {
+          "name": "A1 验证-代码状态绑定（STALE 必须阻断 PASS）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-11-23T09:39:34Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Trigger engine E2E",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:36Z"
+        },
+        {
+          "name": "Cross-process concurrency regression",
+          "status": "completed",
+          "conclusion": "cancelled",
+          "number": 13,
+          "started_at": "2026-11-23T09:39:36Z",
+          "completed_at": "2026-11-23T09:39:50Z"
+        },
+        {
+          "name": "门禁加固回归（敏感规则 / 状态锁 / 负对照还原 / MCP 协议 / 两段式分发）",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 14,
+          "started_at": "2026-11-23T09:39:50Z",
+          "completed_at": "2026-11-23T09:39:50Z"
+        },
+        {
+          "name": "Security audit",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 15,
+          "started_at": "2026-11-23T09:39:50Z",
+          "completed_at": "2026-11-23T09:39:50Z"
+        },
+        {
+          "name": "Build check (no build step for ESM)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 16,
+          "started_at": "2026-11-23T09:39:50Z",
+          "completed_at": "2026-11-23T09:39:50Z"
+        },
+        {
+          "name": "Lint (placeholder)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 17,
+          "started_at": "2026-11-23T09:39:50Z",
+          "completed_at": "2026-11-23T09:39:50Z"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 33,
+          "started_at": "2026-11-23T09:39:50Z",
+          "completed_at": "2026-11-23T09:39:50Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 34,
+          "started_at": "2026-11-23T09:39:50Z",
+          "completed_at": "2026-11-23T09:39:51Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 35,
+          "started_at": "2026-11-23T09:39:51Z",
+          "completed_at": "2026-11-23T09:39:51Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/skyer-now/carlos-flow/check-runs/137605256187",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000001102,
+      "runner_name": "GitHub Actions 1000001102",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 137605256248,
+      "run_id": 45148979830,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/runs/45148979830",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVg7Z288AAAAgCemUOA",
+      "head_sha": "b8841c47268c9fe4dcbfc2b534a6664dc3d65513",
+      "url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/jobs/137605256248",
+      "html_url": "https://github.com/skyer-now/carlos-flow/actions/runs/45148979830/job/137605256248",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-23T09:39:11Z",
+      "started_at": "2026-11-23T09:39:13Z",
+      "completed_at": "2026-11-23T09:39:30Z",
+      "name": "bridge (ubuntu-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-23T09:39:14Z",
+          "completed_at": "2026-11-23T09:39:14Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-23T09:39:14Z",
+          "completed_at": "2026-11-23T09:39:15Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-23T09:39:15Z",
+          "completed_at": "2026-11-23T09:39:16Z"
+        },
+        {
+          "name": "Run npm ci",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-23T09:39:16Z",
+          "completed_at": "2026-11-23T09:39:17Z"
+        },
+        {
+          "name": "Gatekeeper：语法校验 + 真 RPC 往返冒烟测试",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-23T09:39:17Z",
+          "completed_at": "2026-11-23T09:39:28Z"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-11-23T09:39:28Z",
+          "completed_at": "2026-11-23T09:39:28Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-11-23T09:39:28Z",
+          "completed_at": "2026-11-23T09:39:29Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-11-23T09:39:29Z",
+          "completed_at": "2026-11-23T09:39:29Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/skyer-now/carlos-flow/check-runs/137605256248",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000001103,
+      "runner_name": "GitHub Actions 1000001103",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 137605256359,
+      "run_id": 45148979830,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/runs/45148979830",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVg7Z288AAAAgCemUpw",
+      "head_sha": "b8841c47268c9fe4dcbfc2b534a6664dc3d65513",
+      "url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/jobs/137605256359",
+      "html_url": "https://github.com/skyer-now/carlos-flow/actions/runs/45148979830/job/137605256359",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "created_at": "2026-11-23T09:39:11Z",
+      "started_at": "2026-11-23T09:39:13Z",
+      "completed_at": "2026-11-23T09:39:42Z",
+      "name": "test (windows-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-23T09:39:14Z",
+          "completed_at": "2026-11-23T09:39:15Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-23T09:39:15Z",
+          "completed_at": "2026-11-23T09:39:20Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-23T09:39:20Z",
+          "completed_at": "2026-11-23T09:39:25Z"
+        },
+        {
+          "name": "Check Node.js version",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-23T09:39:25Z",
+          "completed_at": "2026-11-23T09:39:26Z"
+        },
+        {
+          "name": "Run npm ci",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-23T09:39:26Z",
+          "completed_at": "2026-11-23T09:39:29Z"
+        },
+        {
+          "name": "Run npm test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-11-23T09:39:29Z",
+          "completed_at": "2026-11-23T09:39:30Z"
+        },
+        {
+          "name": "E2E (Carlos workflow)",
+          "status": "completed",
+          "conclusion": "cancelled",
+          "number": 7,
+          "started_at": "2026-11-23T09:39:30Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "P0 gates",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 8,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "Mutant anchors still valid",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 9,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "End-to-end acceptance (npm-package path)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 10,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "A1 验证-代码状态绑定（STALE 必须阻断 PASS）",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 11,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "Trigger engine E2E",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "Cross-process concurrency regression",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 13,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "门禁加固回归（敏感规则 / 状态锁 / 负对照还原 / MCP 协议 / 两段式分发）",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 14,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "Security audit",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 15,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "Build check (no build step for ESM)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 16,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "Lint (placeholder)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 17,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 33,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:38Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 34,
+          "started_at": "2026-11-23T09:39:38Z",
+          "completed_at": "2026-11-23T09:39:41Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 35,
+          "started_at": "2026-11-23T09:39:41Z",
+          "completed_at": "2026-11-23T09:39:41Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/skyer-now/carlos-flow/check-runs/137605256359",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000001104,
+      "runner_name": "GitHub Actions 1000001104",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 137605259097,
+      "run_id": 45148979830,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/runs/45148979830",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVg7Z288AAAAgCemfWQ",
+      "head_sha": "b8841c47268c9fe4dcbfc2b534a6664dc3d65513",
+      "url": "https://api.github.com/repos/skyer-now/carlos-flow/actions/jobs/137605259097",
+      "html_url": "https://github.com/skyer-now/carlos-flow/actions/runs/45148979830/job/137605259097",
+      "status": "completed",
+      "conclusion": "skipped",
+      "created_at": "2026-11-23T09:39:12Z",
+      "started_at": "2026-11-23T09:39:12Z",
+      "completed_at": "2026-11-23T09:39:11Z",
+      "name": "mutation",
+      "steps": [
+
+      ],
+      "check_run_url": "https://api.github.com/repos/skyer-now/carlos-flow/check-runs/137605259097",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": null,
+      "runner_name": null,
+      "runner_group_id": null,
+      "runner_group_name": null
+    }
+  ]
+}
