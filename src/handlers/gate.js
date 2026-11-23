@@ -1057,6 +1057,13 @@ const TOOLS = [
           })
         }
 
+        // 声明了任务工作区但登记不可用：拒绝派发，避免改动落在主工作区后验证又 fail-closed。
+        if (state.card.env && state.card.env.worktree) {
+          const { resolveTaskWorkdir } = await import('../worktree.js')
+          if (!resolveTaskWorkdir(state.card, { flowHome: FLOW_HOME })) {
+            return fail('任务卡声明的任务工作区未登记或不可用；拒绝派发。')
+          }
+        }
         const prompt = buildContractPrompt(role, state.card, a.message)
 
         const scope = Array.isArray(state.card.scope) ? state.card.scope : []

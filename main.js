@@ -1,7 +1,7 @@
 // main.js —— Carlos 工作流（chip 沙箱入口）
 //
 // 为什么是「两段式目录」（Cindy 插件手册 §3.5）：
-// 本插件有 21 个 flow_* 操作，而宿主对 tools 声明有**硬上限 16 项**；
+// 本插件底层有 22 个操作 + 4 个门面，而宿主对 tools 声明有**硬上限 16 项**；
 // 21 个端点级操作塞进去必然被拒装。手册给的解法是只声明两个元工具
 // `list_tools` / `call_tool`，把目录与分发表放在 main.js 里自己维护。
 //
@@ -177,10 +177,19 @@ async function listTools(msg) {
   // 整个类目一个可用操作都没有，才是真的版本不一致；
   // 部分缺失是“当前工具面不暴露底层名”（例如 external 面只有四个门面），属正常。
   if (tools.length === 0) {
-    return fail(msg, 'CATALOG_DRIFT',
-      '服务端在类目 ' + cat.name + ' 下一个可用操作都没有（声明：' + missing.join('、') +
-      '）。这属于版本不一致，请重新安装插件或升级 carlos-flow 后再试。',
-      { missing: missing });
+    // 整类目在当前工具面全部隐藏（例如默认四门面下没有 trigger）：
+    // 这是“当前面不提供”，不是版本不一致，不能误导用户去重装。
+    return {
+      type: 'tool-result',
+      callId: msg.callId,
+      ok: true,
+      result: {
+        ok: true, category: cat.name, label: cat.label, tool_count: 0,
+        rules: cat.rules, tools: [],
+        note: '该类目的操作在当前工具面不可用（默认四门面面不暴露底层 trigger；legacy 面可用）。',
+        hidden_by_surface: missing,
+      },
+    };
   }
 
   return {

@@ -93,7 +93,7 @@ carlos-flow flow_status '{"sessionId":"test"}'
 
 ### 在 Cindy 桌面端中调用
 Cindy 插件采用高效的两段式目录（支持专用任务向导页 `start_wizard`）：
-- `list_tools` —— 查看 5 大类目（门禁主链、真实验证、审计取证、系统运维、智能触发）；
+- `list_tools` —— 查看 5 大类目（门禁主链、真实验证、审计取证、系统运维、智能触发；默认四门面下智能触发类目不暴露，`legacy` 面可用）；
 - `call_tool` —— 执行具体门禁操作，参数填错或缺失时自动下发大白话自纠指引。
 
 ### 在 OpenCode / Cursor / VS Code 等平台中调用

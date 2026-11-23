@@ -218,3 +218,35 @@ describe('阶段三 · 任务工作区隔离', () => {
     assert.ok(!afterList.includes('task-c'))
   })
 })
+describe('阶段三 · 验证路径绑定任务工作区', () => {
+  it('声明工作区时在隔离目录执行；cwd 不一致时拒绝', async () => {
+    const created = createTaskWorktree({ repoCwd: repo, taskId: 'task-v', root: wsRoot, base, flowHome })
+    assert.equal(created.ok, true, created.reason)
+    const rec = readTaskWorktree('task-v', { flowHome })
+    const sid = 'wt-verify'
+    const dir = path.join(flowHome, 'gate-state', 'runs', sid)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({
+      sessionId: sid,
+      card: {
+        goal: '工作区验证',
+        scope: ['src/a.js'],
+        verify: { cmd: 'node -e "process.exit(0)"' },
+        env: { worktree: { task_id: 'task-v', path: rec.record.path } },
+      },
+      card_ts: Date.now(),
+    }), 'utf8')
+
+    const { TOOLS } = await import('../src/handlers/verify.js')
+    const runVerify = TOOLS.find((t) => t.name === 'flow_run_verify').handler
+
+    const good = await runVerify({ sessionId: sid, cwd: rec.record.path }, {}, undefined)
+    const goodText = good?.content?.[0]?.text || ''
+    assert.ok(!/path is not defined|ReferenceError/.test(goodText), '不得出现未导入标识符错误：' + goodText.slice(0, 200))
+    assert.ok(/"ok": true/.test(goodText), '在绑定工作区执行应成功：' + goodText.slice(0, 200))
+
+    const bad = await runVerify({ sessionId: sid, cwd: repo }, {}, undefined)
+    const badText = bad?.content?.[0]?.text || ''
+    assert.ok(/不一致/.test(badText), '显式 cwd 与工作区不一致必须拒绝：' + badText.slice(0, 200))
+  })
+})

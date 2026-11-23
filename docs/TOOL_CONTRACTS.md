@@ -243,7 +243,7 @@ main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 →
 - 长任务（`flow_run_verify` / `flow_falsify` / `flow_dispatch`）按 45s 发 `tool-progress` 续命，
   避免 330s 工具窗口把慢验证判超时。
 
-**类目划分（21 个操作，`scripts/full-audit.mjs` 校验「恰好覆盖、不多不少」）**
+**类目划分（类目成员同时列出底层操作与门面；运行时按工具面过滤：默认四门面、`legacy` 26 个底层操作。`scripts/full-audit.mjs` 校验类目表覆盖全部声明，不多不少）**
 
 | 类目 | 操作 |
 |---|---|
@@ -251,7 +251,7 @@ main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 →
 | `verify` | run_verify / falsify |
 | `audit` | audit_axes / audit_submit / audit_guard / audit |
 | `infra` | status / stats / protocol / mode / bypass / add_user_msg / save_result / revert_plan / check_scope / diff_hunks |
-| `trigger` | trigger_check |
+| `trigger` | trigger_check（默认面不暴露，legacy 面可用） |
 
 **测试**：`test/cindy-dispatch.mjs`（23 条，真实起服务端 + vm 里跑 main.js）、
 `test/mcp-stdio.mjs`（20 条，协议握手 / stdout 纯净 / 通知不回包 / 未知方法 -32601 / require 可加载）。

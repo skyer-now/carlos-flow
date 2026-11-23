@@ -137,7 +137,10 @@ function literalTokens(node, source, out = []) {
 function valueArgs(args, method) {
   const list = Array.isArray(args) ? args : []
   const messageFrom = (method === 'ok' || method === 'fail') ? 1 : 2
-  return list.length > messageFrom ? list.slice(0, messageFrom) : list
+  // assert.throws(fn, error, message)：第 3 个参数才是消息
+  const throwFamily = method === 'throws' || method === 'doesNotThrow' || method === 'rejects' || method === 'doesNotReject'
+  const limit = throwFamily ? 2 : messageFrom
+  return list.length > limit ? list.slice(0, limit) : list
 }
 
 function collectSignatures(ast, source) {

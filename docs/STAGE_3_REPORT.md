@@ -20,7 +20,7 @@
 - 新增 `FACADE_ACTIONS` 冻结路由表（导出即只读）。
 - `src/handlers/catalog.js` 新增 `createExternalCatalog`：只返回四个门面，并在装配期做**双向覆盖校验**——底层能力没有门面动作、或门面动作指向未登记操作，都直接拒绝启动；同时要求外部面恰好四个。
 - `src/index.js`：对外默认只暴露四个门面（v3），`CARLOS_FLOW_TOOL_SURFACE=legacy` 恢复 26 个底层工具目录。分发与参数校验查的是**完整目录**，对外可见面只影响 `tools/list`，因此门面动作在 external 面下仍能路由（首版实现把两者混成一个数组，导致 external 面全部动作返回 Unknown tool，已修并补端到端测试）。
-- 新增 `test/facade-surface.test.mjs`（7 项）：外部面恰好 4 个且名称固定；22 个能力全部可达且无多余目标；**每个动作真实路由**；schema 枚举与路由表一致；**external 面经真实 MCP 入口**列工具并调用门面（并断言返回目标工具的真实结构）；门面 schema 覆盖底层必填与关键参数、转发时剔除 `action`；未知动作明确失败；内部 26 个操作仍在。
+- 新增 `test/facade-surface.test.mjs`（8 项）：外部面恰好 4 个且名称固定；22 个能力全部可达且无多余目标；**每个动作真实路由**；schema 枚举与路由表一致；**external 面经真实 MCP 入口**列工具并调用门面（并断言返回目标工具的真实结构）；门面 schema 覆盖底层必填与关键参数、转发时剔除 `action`；未知动作明确失败；内部 26 个操作仍在。
 
 ## 2. AST 自动负对照
 
@@ -48,10 +48,10 @@
 
 ## 验证证据
 
-- 证据目录：`D:/cindy/task-evidence/stage3-v3final4-20261123-080423/`
-- 完整日志：`full.log`，SHA256 `9387684f3dee963bb2d25416d29625b3c1586b4eacc989760c0a6ee01731fce7`
-- 开始 `2026-11-23T08:04:23+08:00`，结束 `2026-11-23T08:10:26+08:00`
-- `TEST_ALL_EXIT=0`（`full.log:1793`）、`check:params` 0（`:1816`）、`check:no-dead-handler` 0（`:1836`）、`check:readme` 0（`:1847`）、`check:identity` 0（`:1919`）、`check:ast` 0（`:1925`；本次无改动测试文件，判别力由 `test/check-ast-assertions.test.mjs` 覆盖）、`smoke-test.js` 0（`:1932`）、`CHECK_FULL_EXIT=0`（`:1950`）
+- 证据目录：`D:/cindy/task-evidence/stage3-final-20261123-081826/`
+- 完整日志：`full.log`，SHA256 `fe2c1b72c1a9a03f4e5e6ee9ef2089f4c75a8590e056fd834ce27d9db43a78a7`
+- 开始 `2026-11-23T08:18:26+08:00`，结束 `2026-11-23T08:24:54+08:00`
+- `TEST_ALL_EXIT=0`（`full.log:1806`）、`check:params` 0（`:1829`）、`check:no-dead-handler` 0（`:1849`）、`check:readme` 0（`:1860`）、`check:identity` 0（`:1932`）、`check:ast` 0（`:1938`）、`smoke-test.js` 0（`:1945`）、`CHECK_FULL_EXIT=0`（`:1963`）
 - 专项：stage2 25/25、auto-verify-qasheet 7/7、knowledge-mesh 5/5、proactive-guidelines 5/5、worktree 15/15（`full.log:1576`）、AST 9/9（`:1651`）、AST 门禁 8/8（`:1716`）、facade 8/8（`:1785`）
 - 测试隔离 `CARLOS_FLOW_HOME`/`HOME`/`USERPROFILE`/`TMP` 到 D 盘任务目录，日志含 `START`/`TEST_ALL_EXIT`/`CHECK_FULL_EXIT`/`END`。
 

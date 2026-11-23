@@ -82,8 +82,10 @@ describe('阶段三 · 四门面收敛', () => {
           assert.ok(props[key], `${facadeName} 缺少底层 ${target} 的必填参数：${key}`)
         }
         // 底层声明的每个参数都必须在门面 schema 里可发现（全量包含，不做白名单抽查）
-        for (const key of Object.keys(inner.inputSchema.properties || {})) {
+        for (const [key, schema] of Object.entries(inner.inputSchema.properties || {})) {
           assert.ok(props[key], `${facadeName} 缺少底层 ${target} 的参数：${key}`)
+          // 类型也要一致：schema 驱动的客户端会按门面声明传值
+          assert.equal(props[key].type, schema.type, `${facadeName} 参数 ${key} 类型与底层不一致`)
         }
       }
     }

@@ -1,4 +1,5 @@
 // verify 领域：真实工具实现与原始契约。
+import path from 'node:path'
 import {
   audit,
   readAuditState,

@@ -98,7 +98,7 @@
     },
     {
       "name": "call_tool",
-      "description": "执行一个具体的 Carlos 门禁操作。name 来自 list_tools 的返回（20 个 flow_* 操作之一）；args 按该操作的参数说明传 JSON 对象。收到不认识的 name 会附全部可用操作名；args 不合法或缺必填项时会附该操作的参数 schema 与类目 RULES，照着自纠即可。",
+      "description": "执行一个具体的 Carlos 门禁操作。name 来自 list_tools 的返回（默认面为四个 carlos_* 门面，legacy 面为 22 个 flow_* 底层操作）；args 按该操作的参数说明传 JSON 对象。收到不认识的 name 会附全部可用操作名；args 不合法或缺必填项时会附该操作的参数 schema 与类目 RULES，照着自纠即可。",
       "parameters": {
         "type": "object",
         "properties": {
