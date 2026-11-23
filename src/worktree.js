@@ -198,7 +198,8 @@ export function removeTaskWorktree(taskId, options = {}) {
   if (!got.ok) return got
   const record = got.record
   const id = got.taskId
-  if (fs.existsSync(path.join(taskDir(options.flowHome, id), 'running'))) {
+  // force 是人工确认过的强清，可以覆盖运行标记；否则运行中一律拒绝。
+  if (options.force !== true && fs.existsSync(path.join(taskDir(options.flowHome, id), 'running'))) {
     return { ok: false, reason: '任务仍标记为运行中，拒绝清理' }
   }
   if (fs.existsSync(record.path)) {

@@ -11,7 +11,7 @@
  * - 解析失败、没有可比较断言、超出预算，一律按「无法判断」退出，绝不当作通过。
  *
  * 解析器：acorn 8.15.0（MIT，约 130KB tarball，纯 JS，无原生依赖）。
- * 取舍：这是本仓库唯一的运行时依赖；不用正则冒充 AST，也不用自带残缺解析器。
+ * 取舍：acorn 以 `vendor/acorn.mjs` 随包携带，不声明 npm 依赖（Cindy 插件环境不保证 node_modules）；不用正则冒充 AST，也不用自带残缺解析器。
  *
  * 退出码：
  *   0 = 未发现断言退化
@@ -131,6 +131,15 @@ function literalTokens(node, source, out = []) {
   return out
 }
 
+
+// 断言消息参数不是"判别内容"：assert.ok(v, "消息") / assert.equal(a, b, "消息")。
+// 把消息字面量排除在签名外，避免改文案被误判为断言退化。
+function valueArgs(args, method) {
+  const list = Array.isArray(args) ? args : []
+  const messageFrom = (method === 'ok' || method === 'fail') ? 1 : 2
+  return list.length > messageFrom ? list.slice(0, messageFrom) : list
+}
+
 function collectSignatures(ast, source) {
   const signatures = []
   const skips = []
@@ -139,13 +148,13 @@ function collectSignatures(ast, source) {
       const text = calleeText(node.callee, source)
       const method = assertionMethod(text)
       if (assertOwner(text) && ASSERT_METHODS.has(method)) {
-        const literals = (node.arguments || []).flatMap((arg) => literalTokens(arg, source))
+        const literals = valueArgs(node.arguments, method).flatMap((arg) => literalTokens(arg, source))
         signatures.push({ kind: 'assert', method, sig: `${method}|${literals.join(',')}`, literals, line: node.loc?.start?.line || null })
         return
       }
       if (isExpectChain(text)) {
-        const literals = (node.arguments || []).flatMap((arg) => literalTokens(arg, source))
         const method = text.split('.').pop()
+        const literals = valueArgs(node.arguments, method).flatMap((arg) => literalTokens(arg, source))
         signatures.push({ kind: 'expect', method, sig: `${method}|${literals.join(',')}`, literals, line: node.loc?.start?.line || null })
         return
       }

@@ -28,15 +28,15 @@ const LEGACY_SURFACE = String(process.env.CARLOS_FLOW_TOOL_SURFACE || '').toLowe
 const TOOLS = LEGACY_SURFACE ? ALL_TOOLS : createExternalCatalog(callTool)
 // ---- 工具去重自检 ----------------------------------------------------------
 //
-// TOOLS 数组里出现两个同名工具定义时：
-// 路由用 TOOLS.find((t) => t.name === name) **只取第一个匹配项**，
+// ALL_TOOLS（真实路由集合）里出现两个同名工具定义时：
+// 路由用 ALL_TOOLS.find((t) => t.name === name) **只取第一个匹配项**，
 // 后一份健壮实现就成了永不执行的死代码 —— 而整个过程**没有任何报错**，
 // 属于静默失效，非常危险。
 //
 // 这里在模块加载时做一次硬校验：一旦发现重名就抛出带明确信息的 Error
 // （指出工具名 + 首次/重复出现的索引），让 MCP server 拒绝启动。
 // 正常情况下（无重名）不产生任何副作用，直接返回 true。
-function assertNoDuplicateTools(tools = TOOLS) {
+function assertNoDuplicateTools(tools = ALL_TOOLS) {
   const seen = new Map() // 工具名 -> 首次出现的索引
   const dups = [] // { name, first, second }
   tools.forEach((tool, idx) => {

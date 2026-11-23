@@ -83,6 +83,25 @@ describe('阶段三 · 断言敏感性门禁', () => {
     fs.rmSync(path.join(repo, 'test', 'b.test.mjs'))
   })
 
+  it('整体删除测试文件：判为退化（退出 1）', () => {
+    fs.rmSync(path.join(repo, 'test', 'a.test.mjs'))
+    const r = run()
+    assert.equal(r.code, 1, r.out + r.err)
+    assert.ok(r.out.includes('整体删除'))
+    git(['checkout', '--', 'test/a.test.mjs'])
+  })
+
+  it('重命名并删除断言：仍能检出（退出 1）', () => {
+    fs.renameSync(path.join(repo, 'test', 'a.test.mjs'), path.join(repo, 'test', 'a2.test.mjs'))
+    fs.writeFileSync(path.join(repo, 'test', 'a2.test.mjs'), TEST_FILE.replace(["  assert.deepEqual(out, [1, 2])", ""].join(String.fromCharCode(10)), ''))
+    git(['add', '-A'])
+    const r = run()
+    assert.equal(r.code, 1, r.out + r.err)
+    git(['reset', '-q'])
+    fs.rmSync(path.join(repo, 'test', 'a2.test.mjs'))
+    git(['checkout', '--', 'test/a.test.mjs'])
+  })
+
   it('不在 Git 仓库时明确 SKIP', () => {
     const plain = path.join(sandbox, 'plain')
     fs.mkdirSync(plain, { recursive: true })

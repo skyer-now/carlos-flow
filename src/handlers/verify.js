@@ -23,7 +23,7 @@ import {
   FLOW_HOME,
 } from './shared.js'
 import { collectVerifyFailure } from '../failure-memory.js'
-import { resolveTaskWorkdir, markTaskRunning } from '../worktree.js'
+import { resolveTaskWorkdir, markTaskRunning, clearTaskRunning } from '../worktree.js'
 const TOOLS = [
 {
     name: 'flow_run_verify',
@@ -58,9 +58,16 @@ const TOOLS = [
           state.card.env && typeof state.card.env.project === 'string'
             ? state.card.env.project
             : ''
-        // 任务卡绑定工作区时优先在那里执行；未登记/不 ready 时回落到原目录。
+        // 任务卡声明了工作区就必须在它里面执行：
+        // 登记缺失/不 ready/路径不符时 fail-closed，绝不悄悄回落到主目录后还报 PASS。
+        const declaresWorktree = !!(state.card.env && state.card.env.worktree)
         const taskWorktree = resolveTaskWorkdir(state.card, { flowHome: FLOW_HOME })
-        if (taskWorktree) markTaskRunning(taskWorktree.task_id, { flowHome: FLOW_HOME })
+        if (declaresWorktree && !taskWorktree) {
+          return fail('任务卡声明的任务工作区未登记或不可用；拒绝回落到主目录执行。')
+        }
+        if (taskWorktree && a.cwd && path.resolve(a.cwd) !== path.resolve(taskWorktree.path)) {
+          return fail('显式 cwd 与任务卡绑定的工作区不一致；拒绝在错误目录执行。')
+        }
         let workdir = a.cwd || (taskWorktree ? taskWorktree.path : null) || cardProject || undefined
         // 记住「这次验证针对哪张卡」：命令跑完再写状态时，卡片可能已被替换。
         const verifiedIdentity = evidenceIdentity(state)
@@ -97,10 +104,24 @@ const TOOLS = [
         // ⚠️ 命令必须在**锁外**跑（最长 120s）。若把整段包进 withStateLock，
         // 持锁超过 staleMs（30s）就会被判陈旧并回收，另一个进程随即拿到同一把锁
         // → 两个进程同时写，比不加锁更难复现。
-        const result = await runVerifyCommand(verifiedCmd, workdir, {
-          timeoutMs: a.timeoutMs,
-          isolateHome: a.isolateHome,
-        })
+        let markedRunning = false
+        if (taskWorktree) {
+          const marked = markTaskRunning(taskWorktree.task_id, { flowHome: FLOW_HOME })
+          if (!marked.ok) return fail('任务工作区运行标记写入失败：' + marked.reason)
+          markedRunning = true
+        }
+        let result
+        try {
+          result = await runVerifyCommand(verifiedCmd, workdir, {
+            timeoutMs: a.timeoutMs,
+            isolateHome: a.isolateHome,
+          })
+        } finally {
+          // 失败或异常不保留“运行中”，否则一次失败就会把工作区永久锁死。
+          if (markedRunning && (!result || !result.ok)) {
+            clearTaskRunning(taskWorktree.task_id, { flowHome: FLOW_HOME })
+          }
+        }
         const fingerprint = await workspaceFingerprintAsync(workdir || process.cwd(), runtime)
         const outputHash = computeOutputHash(
           result.exitCode,

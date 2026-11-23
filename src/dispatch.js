@@ -20,6 +20,7 @@ import {
   loadProjectFailureMemory,
   saveProjectFailureMemory,
 } from './failure-memory.js'
+import { resolveTaskWorkdir } from './worktree.js'
 
 export const MAX_DISPATCH = 5
 
@@ -254,6 +255,15 @@ export function buildContractPrompt(role, card, extra, options = {}) {
         newFilesArr.join(', ')
     }
     taskBoundaries = `task boundaries: ${boundaries}`
+  }
+
+  // 任务卡绑定工作区时，明确告诉执行者“在哪个目录工作”，
+  // 避免它按主仓库路径改文件、把快照与报告写回主工作区。
+  const worktreePath = card && card.env && card.env.worktree
+    ? (resolveTaskWorkdir(card, { flowHome: FLOW_HOME })?.path || null)
+    : null
+  if (worktreePath && isExecutor) {
+    taskBoundaries += `；task workspace: ${worktreePath}（所有读写、测试与报告都在此目录）`
   }
 
   let prompt = [objective, outputFormat, toolGuidance, taskBoundaries].join(

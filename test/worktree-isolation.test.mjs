@@ -124,10 +124,9 @@ describe('阶段三 · 任务工作区隔离', () => {
     assert.equal(readTaskWorktree('task-a', { flowHome }).ok, false, '清理后登记必须删除')
   })
 
-  it('运行中标记阻止清理', () => {
-    fs.mkdirSync(path.join(flowHome, 'tasks', 'task-b'), { recursive: true })
+  it('运行中标记阻止清理（force 才可覆盖）', () => {
     fs.writeFileSync(path.join(flowHome, 'tasks', 'task-b', 'running'), '1')
-    const r = removeTaskWorktree('task-b', { flowHome, force: true })
+    const r = removeTaskWorktree('task-b', { flowHome })
     assert.equal(r.ok, false)
     assert.ok(r.reason.includes('运行中'))
     fs.unlinkSync(path.join(flowHome, 'tasks', 'task-b', 'running'))
@@ -166,19 +165,23 @@ describe('阶段三 · 任务工作区隔离', () => {
     assert.equal(resolveTaskWorkdir({ env: {} }, { flowHome }), null, '没有绑定返回 null')
   })
 
-  it('运行标记阻止清理，清除后可以清理', () => {
+  it('运行标记写入后阻止清理，清除后恢复正常', () => {
     assert.equal(markTaskRunning('task-b', { flowHome }).ok, true)
-    const blocked = removeTaskWorktree('task-b', { flowHome, force: true })
+    const blocked = removeTaskWorktree('task-b', { flowHome })
     assert.equal(blocked.ok, false)
     assert.ok(blocked.reason.includes('运行中'))
     assert.equal(clearTaskRunning('task-b', { flowHome }).ok, true)
     assert.equal(clearTaskRunning('task-b', { flowHome }).ok, true, '重复清除幂等')
+    assert.equal(removeTaskWorktree('task-b', { flowHome }).ok, true, '清除标记且工作区干净时可以清理')
   })
 
   it('派发 Prompt 使用任务工作区解析记忆（接线生效）', async () => {
     const { saveProjectFailureMemory } = await import('../src/failure-memory.js')
     const { buildContractPrompt } = await import('../src/dispatch.js')
-    const rec = readTaskWorktree('task-b', { flowHome })
+    const created = createTaskWorktree({ repoCwd: repo, taskId: 'task-p', root: wsRoot, base, flowHome })
+    assert.equal(created.ok, true, created.reason)
+    const rec = readTaskWorktree('task-p', { flowHome })
+    assert.equal(rec.ok, true)
     const saved = saveProjectFailureMemory('工作区专属经验：必须在隔离目录跑测试', {
       flowHome,
       cwd: rec.record.path,
@@ -188,10 +191,13 @@ describe('阶段三 · 任务工作区隔离', () => {
       goal: '隔离目录执行',
       scope: ['src/a.js'],
       verify: { cmd: 'npm test' },
-      env: { worktree: { task_id: 'task-b', path: rec.record.path } },
+      env: { worktree: { task_id: 'task-p', path: rec.record.path } },
     }
     const prompt = buildContractPrompt('executor', card, '')
     assert.ok(prompt.includes('工作区专属经验'), '派发必须读到工作区项目的记忆')
+    assert.ok(prompt.includes('task workspace: ' + rec.record.path), '派发必须告知执行者在哪个目录工作')
+    const auditorPrompt = buildContractPrompt('auditor', card, '')
+    assert.ok(!auditorPrompt.includes('task workspace:'), '只读审查者不需要工作区指令')
   })
 
   it('未登记的工作区不会被清理（不做全局 prune）', () => {

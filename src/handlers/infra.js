@@ -335,6 +335,10 @@ const TOOLS = [
         const a = args || {}
         const sessionId = a.sessionId || 'unknown'
         const state = loadState(sessionId)
+        const cancelledTaskId =
+          state && state.card && state.card.env
+            ? (state.card.env.worktree_task_id || (state.card.env.worktree && state.card.env.worktree.task_id) || null)
+            : null
 
         await commitState(sessionId, (latest) => {
           // 清身份前保留当前卡及 scope 祖先的完整事件；取消自身审计绑定实际取消的卡。
@@ -352,6 +356,14 @@ const TOOLS = [
           latest.completed_ok = false
           latest.stale = false
         })
+
+        // 取消即任务结束：清掉工作区运行标记，允许后续受控清理。
+        if (cancelledTaskId) {
+          try {
+            const { clearTaskRunning } = await import('../worktree.js')
+            clearTaskRunning(cancelledTaskId, { flowHome: FLOW_HOME })
+          } catch {}
+        }
 
         audit('decision', sessionId, {
           kind: 'card_cancelled',

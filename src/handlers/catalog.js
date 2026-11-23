@@ -57,8 +57,8 @@ export function createExternalCatalog(callTool) {
   }
   const missing = ORDER.filter((name) => !name.startsWith('carlos_') && !covered.has(name))
   if (missing.length) throw new Error('门面动作未覆盖底层能力：' + missing.join(', '))
-  const extra = [...covered].filter((name) => !ORDER.includes(name))
-  if (extra.length) throw new Error('门面动作指向未登记操作：' + extra.join(', '))
+  const extra = [...covered].filter((name) => !ORDER.includes(name) || name.startsWith('carlos_'))
+  if (extra.length) throw new Error('门面动作指向未登记操作或另一个门面：' + extra.join(', '))
   if (tools.length !== 4) throw new Error('外部工具面必须恰好四个门面，实际 ' + tools.length)
   return tools
 }

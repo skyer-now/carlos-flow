@@ -37,6 +37,7 @@ const TOOLS = [
         activation: { type: 'boolean', description: '占位卡是否按门禁激活（submit，与底层 boolean 一致）' },
         reason: { type: 'string', description: '理由（submit/cancel）' },
         run: { type: 'boolean', description: '派发后立即执行（dispatch）' },
+        parallel_plan: { type: 'string', description: '并行计划说明（submit）' },
         stdout: { type: 'string', description: '子 Agent 输出（save_result）' },
         stderr: { type: 'string', description: '子 Agent 错误输出（save_result）' },
         code: { type: 'number', description: '退出码（save_result）' },
@@ -82,6 +83,7 @@ const TOOLS = [
       void a.activation
       void a.reason
       void a.run
+      void a.parallel_plan
       void a.stdout
       void a.stderr
       void a.code
@@ -107,6 +109,8 @@ const TOOLS = [
         },
         sessionId: { type: 'string', description: '会话 ID' },
         message: { type: 'string', description: '待检查的消息（trigger_check）' },
+        execute: { type: 'boolean', description: 'false = 只评分不动作（trigger_check）' },
+        complexity: { type: 'string', description: '复杂度档位（trigger_check）' },
         paths: { type: 'array', items: { type: 'string' }, description: '待查路径列表' },
         timeoutMs: { type: 'number', description: '超时毫秒数' },
         isolateHome: { type: 'boolean', description: '隔离 HOME 后执行（run/falsify）' },
@@ -126,6 +130,8 @@ const TOOLS = [
       void a.message
       void a.isolateHome
       void a.expected
+      void a.execute
+      void a.complexity
       const targetTool = FACADE_ACTIONS.carlos_verify[action]
       if (!targetTool) return fail('未知 action：' + action)
       const forwarded = { ...args }

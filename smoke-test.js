@@ -15,12 +15,21 @@ const PORT = Number(process.env.BRIDGE_PORT || 22099)
 // 默认凭证仅供本次测试及其 Bridge 子进程使用，不修改父环境。
 const TOKEN = process.env.CARLOS_BRIDGE_TOKEN || randomUUID()
 
-// 从真实源码解析工具名单；读取、解析或重复名称都必须失败，不能降级兜底。
+// 期望名单必须与当前对外工具面一致：
+//   · 默认（v3）只暴露四个门面；
+//   · CARLOS_FLOW_TOOL_SURFACE=legacy 时是 26 个底层操作。
+// 仍然从真实源码解析（不抄常量），只是按面对外可见性做筛选。
+const EXTERNAL_TOOL_NAMES = ['carlos_task', 'carlos_verify', 'carlos_review', 'carlos_manage']
 function expectedToolNames() {
   const src = readFileSync(new URL('./src/index.js', import.meta.url), 'utf8')
-  const names = parseTools(src).map((tool) => tool.name)
-  if (!names.length || new Set(names).size !== names.length) {
+  const parsed = parseTools(src).map((tool) => tool.name)
+  if (!parsed.length || new Set(parsed).size !== parsed.length) {
     throw new Error('源码工具名单必须非空且名称唯一')
+  }
+  const legacy = String(process.env.CARLOS_FLOW_TOOL_SURFACE || '').toLowerCase() === 'legacy'
+  const names = legacy ? parsed : parsed.filter((name) => EXTERNAL_TOOL_NAMES.includes(name))
+  if (names.length !== (legacy ? parsed.length : EXTERNAL_TOOL_NAMES.length)) {
+    throw new Error('对外工具面与源码声明不一致：' + names.join(', '))
   }
   return names.sort()
 }

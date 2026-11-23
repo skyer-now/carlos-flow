@@ -18,6 +18,9 @@
 //
 // rules 会被**随结果一起下发**（手册要求：只给工具名与说明、把规则留到调用失败
 // 后才说，是不合格的目录）。所以每条都写成「调用前必须知道的一句话」。
+// 类目 members 同时列出底层操作与门面。运行时按 tools/list 的真实可见面过滤：
+// legacy 面看到 26 个底层操作，external 面只看到四个门面——两种面都不报漂移，
+// 只有“整个类目一个可用操作都没有”才判为版本不一致。
 var CATEGORIES = [
   {
     name: 'gate',
@@ -89,7 +92,10 @@ CATEGORIES.forEach(function (c) {
 
 // 长任务：verify / falsify 可能各跑上百秒，期间按 45s 发心跳续命，
 // 免得主机把这次 tool-call 判成超时（窗口默认 330s）。
-var LONG_RUNNING_TOOLS = { flow_run_verify: true, flow_falsify: true, flow_dispatch: true };
+var LONG_RUNNING_TOOLS = {
+  flow_run_verify: true, flow_falsify: true, flow_dispatch: true,
+  carlos_verify: true, carlos_task: true, carlos_review: true,
+};
 var HEARTBEAT_MS = 45000;
 // 单次 Node 请求：沉默窗口 120s（宿主上限），总时长放宽到 15 分钟。
 // 负对照要跑两次命令，120s 的沉默窗口对「两次各 60s」仍然够用。
@@ -122,12 +128,20 @@ function fail(msg, errorCode, message, extra) {
   return out;
 }
 
-function overview() {
+function visibleMembers(cat, catalog) {
+  return cat.members.filter(function (name) { return !!catalog.byName[name]; });
+}
+
+async function overview() {
+  var catalog = await loadTools();
+  var cats = CATEGORIES.map(function (c) {
+    return { cat: c, members: visibleMembers(c, catalog) };
+  }).filter(function (x) { return x.members.length > 0; });
   return {
     ok: true,
-    total: CATEGORIES.reduce(function (n, c) { return n + c.members.length; }, 0),
-    categories: CATEGORIES.map(function (c) {
-      return { name: c.name, label: c.label, count: c.members.length, summary: c.summary };
+    total: cats.reduce(function (n, x) { return n + x.members.length; }, 0),
+    categories: cats.map(function (x) {
+      return { name: x.cat.name, label: x.cat.label, count: x.members.length, summary: x.cat.summary };
     }),
     hint: '传 category 取该类目的工具明细与 RULES，再用 call_tool 执行；不传 category 只看概览。',
   };
@@ -138,7 +152,7 @@ async function listTools(msg) {
   var category = args.category;
 
   if (category === undefined || category === null || category === '') {
-    return { type: 'tool-result', callId: msg.callId, ok: true, result: overview() };
+    return { type: 'tool-result', callId: msg.callId, ok: true, result: await overview() };
   }
 
   var cat = null;
@@ -160,10 +174,12 @@ async function listTools(msg) {
     if (!t) { missing.push(name); return; }
     tools.push({ name: t.name, description: t.description, parameters: t.inputSchema || { type: 'object', properties: {} } });
   });
-  if (missing.length) {
+  // 整个类目一个可用操作都没有，才是真的版本不一致；
+  // 部分缺失是“当前工具面不暴露底层名”（例如 external 面只有四个门面），属正常。
+  if (tools.length === 0) {
     return fail(msg, 'CATALOG_DRIFT',
-      '服务端缺少类目 ' + cat.name + ' 声明的操作：' + missing.join('、') +
-      '。这属于版本不一致（插件清单比服务端新/旧），请重新安装插件或升级 carlos-flow 后再试。',
+      '服务端在类目 ' + cat.name + ' 下一个可用操作都没有（声明：' + missing.join('、') +
+      '）。这属于版本不一致，请重新安装插件或升级 carlos-flow 后再试。',
       { missing: missing });
   }
 
@@ -171,7 +187,11 @@ async function listTools(msg) {
     type: 'tool-result',
     callId: msg.callId,
     ok: true,
-    result: { ok: true, category: cat.name, label: cat.label, tool_count: tools.length, rules: cat.rules, tools: tools },
+    result: {
+      ok: true, category: cat.name, label: cat.label, tool_count: tools.length,
+      rules: cat.rules, tools: tools,
+      hidden_by_surface: missing.length ? missing : undefined,
+    },
   };
 }
 
@@ -249,7 +269,8 @@ async function callToolRequest(msg) {
         '。可重试一次；仍失败请检查插件是否被停用或 Node 进程被系统拦截。');
     }
     var stale = res.result && res.result.structuredContent
-    if (name === 'flow_verdict' && payload.verdict === 'PASS' && res.result.isError === true &&
+    var verdictLike = name === 'flow_verdict' || (name === 'carlos_review' && payload.action === 'verdict')
+    if (verdictLike && payload.verdict === 'PASS' && res.result.isError === true &&
         stale && stale.code === 'VERIFY_STALE' && stale.expected && /^[a-f0-9]{64}$/.test(stale.expected.caseKey) &&
         context && context.session_id === payload.sessionId && context.workdir_is_local === true &&
         context.workdir_is_read_only === false && Number.isFinite(stale.expiresAt) && stale.expiresAt > Date.now()) {

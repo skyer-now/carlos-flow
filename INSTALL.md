@@ -149,7 +149,7 @@ CARLOS_FLOW_HOME = "~/.carlos-flow"
 
 1. `node --check` 校验 `bridge/mcp-bridge.js`、`src/index.js`、`smoke-test.js` 语法；
 2. **真 RPC 往返冒烟测试**：真起一个 Bridge，发 `initialize` + `tools/list`，
-   断言能拿回全部 **22 个工具**。这排除了「进程起来了但转发断了」的假阳性。
+   断言能拿回全部工具（默认 4 个门面；`CARLOS_FLOW_TOOL_SURFACE=legacy` 时为 26 个底层操作）。这排除了「进程起来了但转发断了」的假阳性。
 
 预期输出：
 
@@ -157,7 +157,7 @@ CARLOS_FLOW_HOME = "~/.carlos-flow"
 ✅ initialize 握手成功
 >>> RPC 往返总耗时：341.80ms
 >>> 发现工具数：22
-🎉 深度兼容性验证通过（真 RPC 往返拿到 22 个工具）
+🎉 深度兼容性验证通过（真 RPC 往返拿到当前工具面的全部工具）
 ```
 
 ## 常见问题

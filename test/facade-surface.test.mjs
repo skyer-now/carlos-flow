@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import vm from 'node:vm'
 import { startMcpClient } from './_mcp-client.mjs'
 
 const { createCatalog, createExternalCatalog, EXTERNAL_TOOL_NAMES, FACADE_ACTIONS } =
@@ -80,11 +81,9 @@ describe('阶段三 · 四门面收敛', () => {
         for (const key of inner.inputSchema.required || []) {
           assert.ok(props[key], `${facadeName} 缺少底层 ${target} 的必填参数：${key}`)
         }
-        // 关键能力参数（追加范围/激活/执行/领取身份/触发消息/审查证据/状态与统计选项）
-        for (const key of ['appendScope', 'activation', 'run', 'expected', 'message', 'findings', 'evidence', 'includeSnapshots']) {
-          if (inner.inputSchema.properties && inner.inputSchema.properties[key]) {
-            assert.ok(props[key], `${facadeName} 缺少底层 ${target} 的关键参数：${key}`)
-          }
+        // 底层声明的每个参数都必须在门面 schema 里可发现（全量包含，不做白名单抽查）
+        for (const key of Object.keys(inner.inputSchema.properties || {})) {
+          assert.ok(props[key], `${facadeName} 缺少底层 ${target} 的参数：${key}`)
         }
       }
     }
@@ -112,7 +111,9 @@ describe('阶段三 · 四门面收敛', () => {
     const client = startMcpClient({
       entry: path.join(process.cwd(), 'src', 'index.js'),
       cwd: process.cwd(),
-      env: { CARLOS_FLOW_HOME: MCP_HOME, CARLOS_FLOW_TOOL_SURFACE: 'external' },
+      // 不注入 surface：验证的是“未配置时的默认面”
+      surface: 'default',
+      env: { CARLOS_FLOW_HOME: MCP_HOME },
     })
     try {
       await client.initialize()
@@ -128,6 +129,49 @@ describe('阶段三 · 四门面收敛', () => {
       const unknownText = unknown.result?.content?.[0]?.text || ''
       const unknownFailed = unknown.result?.isError === true || /未知 action|枚举|enum|INVALID/i.test(unknownText)
       assert.ok(unknownFailed, '未知动作必须明确失败，不得静默回退：' + unknownText.slice(0, 200))
+    } finally {
+      client.close()
+    }
+  })
+
+  it('默认面下 chip 目录（main.js）不报漂移且能列出/调用门面', async () => {
+    const client = startMcpClient({
+      entry: path.join(process.cwd(), 'src', 'index.js'),
+      cwd: process.cwd(),
+      surface: 'default',
+      env: { CARLOS_FLOW_HOME: MCP_HOME },
+    })
+    try {
+      await client.initialize()
+      let handler = null
+      const sent = []
+      const cindy = {
+        onHostMessage(cb) { handler = cb },
+        send(msg) { sent.push(msg) },
+        node: {
+          async request(req) {
+            const res = await client.request(req.method, req.params || {})
+            return res.error ? { ok: false, message: JSON.stringify(res.error) } : { ok: true, result: res.result }
+          },
+        },
+      }
+      const sandbox = { cindy, setInterval, clearInterval, console }
+      vm.createContext(sandbox)
+      vm.runInContext(fs.readFileSync(path.join(process.cwd(), 'main.js'), 'utf8'), sandbox, { filename: 'main.js' })
+      const invoke = async (tool, args) => {
+        sent.length = 0
+        await handler({ type: 'tool-call', tool, args, callId: 'c' + Math.random() })
+        return sent[sent.length - 1]
+      }
+      const ov = (await invoke('list_tools', {})).result
+      assert.equal(ov.ok, true, '默认面下概览必须可用')
+      assert.equal(ov.total, 4, '默认面概览只应包含四个门面，实际 ' + ov.total)
+      const gate = (await invoke('list_tools', { category: 'gate' })).result
+      assert.equal(gate.ok, true, '默认面下 gate 类目不得报 CATALOG_DRIFT：' + JSON.stringify(gate).slice(0, 200))
+      assert.ok(gate.tools.some((t) => t.name === 'carlos_task'))
+      const call = await invoke('call_tool', { name: 'carlos_manage', args: { action: 'status', sessionId: 'main-e2e' } })
+      const text = call?.result?.mcpResult?.content?.[0]?.text || ''
+      assert.ok(!/Unknown tool/i.test(text), 'chip call_tool 必须能路由门面：' + text.slice(0, 200))
     } finally {
       client.close()
     }

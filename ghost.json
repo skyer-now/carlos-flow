@@ -3,7 +3,7 @@
   "minCindyVersion": "0.1.139",
   "id": "carlos-flow",
   "name": "Carlos 工作流",
-  "description": "机械门禁 MCP：留痕/派发/验证/负对照/双轴审查/裁定/审计/快照/免检/还原，共 20 个操作。Cindy 内通过 list_tools 翻目录、call_tool 执行（工具面两段式，避免详情被撑大）。",
+  "description": "机械门禁 MCP：留痕/派发/验证/负对照/双轴审查/裁定/审计/快照/免检/还原。v3 对外默认只暴露四个门面（carlos_task / carlos_verify / carlos_review / carlos_manage），底层 22 个操作经门面动作路由；Cindy 内通过 list_tools 翻目录、call_tool 执行。",
   "whenToUse": "需要走 Carlos 工作流门禁时使用：提交任务卡留痕、派发 executor/auditor 子 Agent、跑真实验证命令、证明测试有判别力（负对照）、记录裁定与双轴审计、查询审计流水、免检通道、一键还原计划。启动任务向导时先调用 start_wizard。",
   "version": "3.0.0",
   "kind": "chip",
@@ -85,7 +85,7 @@
     },
     {
       "name": "list_tools",
-      "description": "列出 Carlos 门禁可用的操作。不传 category 返回类目概览（类目名、数量、该类目 RULES）；传 category 返回该类目下全部操作的名称、说明、参数 schema，并在同一份结果里下发该类目 RULES（调用前必读，决定你先做哪一步）。共 20 个操作。",
+      "description": "列出 Carlos 门禁可用的操作。不传 category 返回类目概览（类目名、数量、该类目 RULES）；传 category 返回该类目下全部操作的名称、说明、参数 schema，并在同一份结果里下发该类目 RULES（调用前必读，决定你先做哪一步）。默认面为四个门面，legacy 面为 26 个底层操作。",
       "parameters": {
         "type": "object",
         "properties": {
