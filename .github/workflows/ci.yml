@@ -116,6 +116,9 @@ jobs:
       # 专项真实验证：真实 git 仓库 / 真实篡改 / 真实 bridge 隔离 / 真实安装
       - name: 专项真实验证（scope / 审计链 / bridge 隔离）
         run: npm run test:scope && npm run test:audit && npm run test:bridge
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-identity-home
       # 产物语言体检：提交信息 / 源码注释必须是中文。
       # 2026-11-07 的事故根因正是「对话是中文的、但提交信息是英文的」——
       # 靠人扫「回复」发现不了，必须机器单独检查产物。
