@@ -218,7 +218,13 @@ try {
           const real=fs.openSync; fs.openSync=function(file,flags,...rest){ if(file===${JSON.stringify(queuedFile)}&&flags==='wx')fs.writeFileSync(${JSON.stringify(attempted)},'attempt'); return real.call(this,file,flags,...rest) };
           try {await withStateLock('guard-queued',()=>{saveState('guard-queued',{card:{goal:'OVERWRITE'}}); console.log('UNSAFE ENTERED')}); process.exitCode=1}
           catch(error){console.log('queued writer rejected: '+error.message)};`)
-        await waitFor(attempted)
+        // 握手有两种合法结局：子进程真的用 'wx' 撞到锁（写出 attempted），
+        // 或者它更早就在 session-identity 阶段被拒（目录已被移走）。
+        // 慢 runner 上后一种更常见；只等 attempted 会永久挂住，因此两者等其一。
+        await Promise.race([
+          waitFor(attempted).catch(() => 'timeout'),
+          queuedDone.then(() => 'settled'),
+        ])
         return true
       }, () => {
         fs.renameSync(path.join(RUNS, 'guard-queued'), dest)
@@ -226,7 +232,7 @@ try {
         return true
       })
       const queued = await queuedDone
-      check('P2. 排队 writer 不写同名替换目录', archived && queued.code === 0 && queued.output.includes('session-identity') && state.loadState('guard-queued').card.goal === 'replacement', queued.output.trim())
+      check('P2. 排队 writer 不写同名替换目录', archived && queued.code === 0 && queued.output.includes('session-identity') && state.loadState('guard-queued').card.goal === 'replacement', `${queued.output.trim()}${fs.existsSync(attempted) ? '（握手：wx 撞锁）' : '（握手：session-identity 早拒）'}`)
       check('P2. 归档正常退出不搬锁不留空壳', fs.existsSync(path.join(dest, 'state.json')) && !fs.existsSync(path.join(dest, '.state.lock')) && !fs.existsSync(queuedFile))
 
       // EXDEV 使用确定性 rename 错误注入，真实源/目标目录；cp/rm 不参与执行路径。
