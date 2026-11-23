@@ -14,6 +14,11 @@
 - Windows 验证输出按字节解码（GBK 中文不再乱码），命令语义与退出码不变。
 - Windows 原子写 rename 遇 EBUSY/EPERM 有界重试；worktree 目标路径超 240 字符拒绝。
 - macOS 目录 fsync 不支持（EINVAL）不再误判保存失败。
+- **Windows 8.3 短名路径归一**（发布前的真实阻断，均已修复并有回归用例）：
+  - 项目身份改用 `realpathSync.native` 规范长名，同一仓库不再因短名/长名分裂成两个记忆分区；
+  - 状态目录排除（指纹计算）改按规范长名比较，修掉「写一次状态就 STALE」的自我失效；
+  - 越界前缀排除改按规范长名比较，修掉「正常改动被误判越界、合法 PASS 全被拦」。
+- 发布链路自检：`npm publish` 结果必须经 registry 复核（`scripts/verify-npm-publish.mjs`），命令变绿不再等于包已上线。
 
 ### ⚠️ 已知边界 | Known limits
 

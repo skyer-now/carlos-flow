@@ -237,8 +237,18 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
           else
             echo "❌ npm publish 失败（退出码 ${CODE}）"
+            # 失败原因写进公开注解：所有者无 admin 权限，下载不了 Actions 日志。
+            node scripts/annotate-publish-log.mjs /tmp/publish.log || true
             exit "$CODE"
           fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # 发布后核验：命令退出码变成绿**不等于**包已经上线。
+      # 2026-11-24 v3.1.0 就出现过：publish 步骤绿，但 registry 里根本没有 3.1.0
+      # （409 兜底被误当「已发布」）。这里以 registry 可查为准，查不到就红。
+      - name: 发布后核验（registry 必须能查到本轮版本）
+        if: steps.gate.outputs.publish == 'true'
+        run: node scripts/verify-npm-publish.mjs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       # 创建 GitHub Release（无论 npm 是否是本次发的，都要有 Release 记录）
