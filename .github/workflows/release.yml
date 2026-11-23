@@ -28,26 +28,28 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - run: npm ci
+      - name: 准备测试日志目录
+        run: mkdir -p "$RUNNER_TEMP/logs"
       # 发布前跑**完整**测试套件（与 CI 逐套件对齐，便于失败时在步骤名上直接定位）。
       # 套件组成：smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency + acceptance
       # （含跨进程并发回归——它曾抓出真实的激活闸门竞态绕过，不可省）
       # 为什么拆成多步而不是一句 test:all：run 失败只显示“命令退出 1”，
       # 拆开后失败步骤名直接指出是哪一组，无需下载日志就能定位。
       - name: 测试·基础与门禁主链（smoke / baseline / e2e / p0 / 发布闸 / STALE）
-        run: npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:gate && npm run test:stale
+        run: ( npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:gate && npm run test:stale ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-01.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           # 隔离状态目录：不给的话测试会写 runner 的 ~/.carlos-flow（runner home 可能是共享/缓存的）
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·触发引擎与跨进程并发
-        run: npm run test:trigger && npm run test:concurrency
+        run: ( npm run test:trigger && npm run test:concurrency ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-02.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-concurrency-home
           # 与 CI 一致：并发套件在高负载下偶发假泄漏，允许重跑一次；两次都红才算失败。
           CONCURRENCY_RETRY: 1
       - name: 测试·端到端验收（npm 包到真实可用）
-        run: npm run test:acceptance
+        run: ( npm run test:acceptance ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-03.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
@@ -55,90 +57,104 @@ jobs:
       # 背景：2026-11-24 v3.1.0 首发失败在这个组里，而 run 摘要只显示「命令退出 1」——
       # 所有者看不了日志（非仓库 admin），只能靠猜。拆成单步后，失败直接落在套件名上。
       - name: 测试·敏感规则（只增不减 / 否定式无效 / 坏配置退基线）
-        run: npm run test:sensitive
+        run: ( npm run test:sensitive ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-04.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·状态锁（退避 / 死锁回收 / fail-closed）
-        run: npm run test:lock
+        run: ( npm run test:lock ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-05.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·负对照还原核对（journal / 链接逃逸 / 故障关闭）
-        run: npm run test:falsify
+        run: ( npm run test:falsify ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-06.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·MCP 协议层（握手 / stdout 纯净 / 未知方法）
-        run: npm run test:mcp
+        run: ( npm run test:mcp ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-07.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·chip 两段式目录（真实服务端 + main.js）
-        run: npm run test:dispatch
+        run: ( npm run test:dispatch ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-08.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·门禁加固（超时整树回收 / 输出截断 / 快照去重）
-        run: npm run test:hardening
+        run: ( npm run test:hardening ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-09.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·长验证并发合并与证据绑定（CAS）
-        run: npm run test:cas
+        run: ( npm run test:cas ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-10.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·审计分片滚动（流式校验 / 篡改可检出）
-        run: npm run test:roll
+        run: ( npm run test:roll ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-11.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·存储清理（只归档终态 / 可搬回）
-        run: npm run test:prune
+        run: ( npm run test:prune ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-12.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·失败记忆与质检单（项目隔离 / 忠于证据）
-        run: npm run test:stage2
+        run: ( npm run test:stage2 ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-13.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·任务工作区隔离（worktree / 越界拒绝）
-        run: npm run test:worktree
+        run: ( npm run test:worktree ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-14.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·AST 断言敏感性（删断言 / 改期望值必须检出）
-        run: npm run test:ast
+        run: ( npm run test:ast ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-15.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·四门面收敛（动作全覆盖 / 真实路由）
-        run: npm run test:facade
+        run: ( npm run test:facade ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-16.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·断言敏感性门禁（check:ast）
-        run: npm run check:ast
+        run: ( npm run check:ast ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-17.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·专项真实（越界 / 审计链 / bridge 隔离 / 清理命令）
-        run: npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean
+        run: ( npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-18.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·UI / 单元 / 原子写 / 编码
-        run: npm run test:ui && npm run test:unit && npm run test:atomic && npm run test:encoding
+        run: ( npm run test:ui && npm run test:unit && npm run test:atomic && npm run test:encoding ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-19.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       - name: 测试·互审体系与 Windows 运行时（含变异测试）
-        run: npm run test:advisory && npm run test:advisory-int && npm run test:advisory-mut && npm run test:windows
+        run: ( npm run test:advisory && npm run test:advisory-int && npm run test:advisory-mut && npm run test:windows ) 2>&1 | tee "$RUNNER_TEMP/logs/suite-20.log"
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      # 失败诊断：把失败套件的原始输出贴到运行摘要。
+      # 背景：仓库所有者没有 admin 权限，下载不了 Actions 日志；
+      # 运行摘要（GITHUB_STEP_SUMMARY）是公开可读的，失败原因必须落在那里。
+      - name: 失败诊断（失败套件原始输出写入运行摘要）
+        if: failure()
+        run: |
+          echo "## 失败套件原始输出" >> "$GITHUB_STEP_SUMMARY"
+          for f in "$RUNNER_TEMP"/logs/*.log; do
+            [ -e "$f" ] || continue
+            echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 150 "$f" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
       # 单包一致性守卫：身份 / 版本 / 文档 / 产物 必须一致
       - name: 单包一致性检查
         run: node scripts/check-repo-parity.mjs
