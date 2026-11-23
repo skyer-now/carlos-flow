@@ -20,7 +20,7 @@
 
 ## 阶段一领域化定位（2.28.1，本地准备）
 
-原 26 项（22 原子 + 4 门面）工具的顺序、描述与 inputSchema 固定不变，摘要由 `test/handler-parity.mjs` 对照 42b19d6 固定。真实实现移至 `src/handlers/`：gate 留痕/领取/派发/裁定，verify 验证/负对照，audit 双轴/审计查询，infra 状态/触发/辅助操作，facade 只做明确路由；catalog 拒绝重复、遗漏与未登记工具；shared 不依赖任何领域模块或入口。
+原 26 项（22 原子 + 4 门面）工具的顺序、描述与 inputSchema 保持冻结；v3.1 追加 3 个调研/方案互审内部操作（flow_advisory_*），底层 22 项摘要不变，摘要由 `test/handler-parity.mjs` 对照 42b19d6 固定。真实实现移至 `src/handlers/`：gate 留痕/领取/派发/裁定，verify 验证/负对照，audit 双轴/审计查询，infra 状态/触发/辅助操作，facade 只做明确路由；catalog 拒绝重复、遗漏与未登记工具；shared 不依赖任何领域模块或入口。
 
 门面统一经过 `callTool` 的原子工具 Schema 校验、Host 能力故障检查与同一 AsyncLocalStorage 审计补偿口径，不直接调用底层 handler。参数拒绝新增 `structuredContent={ok:false,code:INVALID_TOOL_ARGUMENTS,tool,error,missing,schema,originalArguments,instructions}`；占位卡 guide 拒绝新增 `ACTIVATION_INCOMPLETE` 与 missing/preservedCard/澄清说明，不生成授权、范围或验收事实。pro 的占位卡文本路径保持原状。
 
@@ -253,7 +253,7 @@ main.js 里再抄一份（抄一份必漂移）；main.js 只维护「操作 →
 |---|---|
 | `gate` | submit_requirement / claim / dispatch / verdict |
 | `verify` | run_verify / falsify |
-| `audit` | audit_axes / audit_submit / audit_guard / audit |
+| `audit` | audit_axes / audit_submit / audit_guard / audit / advisory_axes / advisory_submit / advisory_guard |
 | `infra` | status / stats / protocol / mode / bypass / add_user_msg / save_result / revert_plan / check_scope / diff_hunks |
 | `trigger` | trigger_check（默认面不暴露，legacy 面可用） |
 

@@ -16,9 +16,14 @@ mkdirSync(process.env.HOME, { recursive: true })
 const { createCatalog } = await import('../src/handlers/catalog.js')
 const tools = createCatalog(() => { throw new Error('目录体检不得执行门面') })
 const schemas = tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))
-assert.equal(tools.length, 26)
-assert.equal(createHash('sha256').update(JSON.stringify(schemas)).digest('hex'), '5bddbd3f337bb33ea8451ec0abc8b8591a5ac505ea8c02fc647bdd69ecabb5b0', '42b19d6 的工具顺序、描述、Schema 固定摘要')
-for (const [domain, evidence] of Object.entries({ gate: ['validateCard(', 'snapshotFiles(', '门禁 9/9'], verify: ['runVerifyCommand(', 'runNegativeControl('], audit: ['audit_axis_submitted', 'readAuditDetailed('], infra: ['writeUserMessage(', 'enforceScope('], facade: ['callTool(targetTool, args, context, runtime)'] })) {
+// v3.1 起：底层 22 个操作保持原顺序与契约；4 个门面新增了动作（advisory_*），
+// 另有 3 个内部互审操作追加在末尾。这里分别冻结，避免"门面扩展"把底层契约一起漂移。
+assert.equal(tools.length, 29)
+assert.equal(createHash('sha256').update(JSON.stringify(schemas.slice(0, 22))).digest('hex'), 'a3d83a86451b7fbf85f3b67ecd3e5746b089e0e42a623507c92a814ab0c1993c', '底层 22 个操作的顺序、描述、Schema 固定摘要')
+const facadeNames = tools.slice(22, 26).map((t) => t.name)
+assert.deepEqual(facadeNames, ['carlos_task', 'carlos_verify', 'carlos_review', 'carlos_manage'], '四个门面顺序固定')
+assert.deepEqual(tools.slice(26).map((t) => t.name), ['flow_advisory_axes', 'flow_advisory_submit', 'flow_advisory_guard'], '互审操作追加在末尾')
+for (const [domain, evidence] of Object.entries({ gate: ['validateCard(', 'snapshotFiles(', '门禁 9/9'], verify: ['runVerifyCommand(', 'runNegativeControl('], audit: ['audit_axis_submitted', 'readAuditDetailed('], infra: ['writeUserMessage(', 'enforceScope('], facade: ['callTool(targetTool, forwarded, context, runtime)'] })) {
   const source = readFileSync(path.join(root, 'src/handlers', domain + '.js'), 'utf8')
   for (const token of evidence) assert.ok(source.includes(token), `${domain} 必须拥有真实领域实现 ${token}`)
   assert.ok(!source.includes('toolObj.handler('), '门面不得绕过统一校验')
@@ -37,7 +42,7 @@ const requests = [ { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
   { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
   ...cases.map(([name, args], i) => ({ jsonrpc: '2.0', id: i + 3, method: 'tools/call', params: { name, arguments: { sessionId: 'negative', ...args } } })),
 ]
-const rpc = spawnSync(process.execPath, [path.join(root, 'src/index.js')], { input: requests.map(r => JSON.stringify(r)).join('\n') + '\n', env: process.env, encoding: 'utf8', timeout: 30000, windowsHide: true })
+const rpc = spawnSync(process.execPath, [path.join(root, 'src/index.js')], { input: requests.map(r => JSON.stringify(r)).join('\n') + '\n', env: { ...process.env, CARLOS_FLOW_TOOL_SURFACE: 'legacy' }, encoding: 'utf8', timeout: 30000, windowsHide: true })
 assert.equal(rpc.status, 0, rpc.stderr)
 const replies = rpc.stdout.trim().split('\n').map(line => JSON.parse(line))
 assert.deepEqual(replies.find(r => r.id === 2).result.tools, schemas)
@@ -50,7 +55,12 @@ for (let i = 0; i < cases.length; i++) {
     continue
   }
   assert.equal(result.structuredContent.code, 'INVALID_TOOL_ARGUMENTS')
-  assert.deepEqual(result.structuredContent.originalArguments, { sessionId: 'negative', ...cases[i][1] })
+  // 门面会把专属的 action 字段剔除后再转发（避免污染底层追加范围白名单），
+  // 所以结构化回显里不应再出现 action。
+  const expectedArgs = { sessionId: 'negative', ...cases[i][1] }
+  // 只有转发到内层（tool=flow_*）时才剔除 action；门面自身 Schema 校验仍保留原参数回显。
+  if (String(result.structuredContent.tool || '').startsWith('flow_')) delete expectedArgs.action
+  assert.deepEqual(result.structuredContent.originalArguments, expectedArgs)
   assert.ok(result.structuredContent.schema)
   assert.ok(Array.isArray(result.structuredContent.missing))
 }
@@ -84,7 +94,9 @@ const history = '# 历史 v2.12.0\n旧说明 v2.13.0，示例 v1.2.3\n'
 writeFileSync(path.join(versionFixture, 'TRIGGER_GUIDE.md'), '> **版本**: v0.0.1\n' + history + '**版本**: v0.0.1\n')
 const sync = spawnSync(process.execPath, [path.join(versionFixture, 'scripts/sync-version.mjs')], { encoding: 'utf8', env: process.env, windowsHide: true })
 assert.equal(sync.status, 0, sync.stderr)
-assert.equal(readFileSync(path.join(versionFixture, 'TRIGGER_GUIDE.md'), 'utf8'), '> **版本**: v2.28.1\n' + history + '**版本**: v2.28.1\n', '仅当前版本行更新，历史版本必须逐字保留')
+const currentVersion = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
+const expectedGuide = '> **版本**: v' + currentVersion + String.fromCharCode(10) + history + '**版本**: v' + currentVersion + String.fromCharCode(10)
+assert.equal(readFileSync(path.join(versionFixture, 'TRIGGER_GUIDE.md'), 'utf8'), expectedGuide, '仅当前版本行更新，历史版本必须逐字保留')
 // 故障只注入隔离子进程的真实审计 write，生产代码没有测试开关。
 const { startMcpClient } = await import('./_mcp-client.mjs')
 const faultFile = path.join(home, 'audit-fault.json')

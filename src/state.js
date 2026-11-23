@@ -110,7 +110,7 @@ export function sanitizeId(s) {
 
 // 当前状态文件结构版本号。
 // 改动 defaultState() 的**字段结构**时，必须 +1 并在 migrate() 里加一条迁移。
-export const CURRENT_SCHEMA_VERSION = 4
+export const CURRENT_SCHEMA_VERSION = 5
 
 /**
  * 迁移旧版本的状态文件。
@@ -131,6 +131,9 @@ export const CURRENT_SCHEMA_VERSION = 4
  *
  * v3 → v4：新增 verdict_role（本条 PASS 是谁落的）。
  *   · 旧状态没有这个字段 → 补 null（仅影响可观测性，不影响门禁判定）
+ *
+ * v4 → v5：新增 advisory / advisory_log（调研与方案的轻量互审）。
+ *   · 两者都是可选能力，旧状态补 null / [] 即可；不影响 T2 的卡、双轴与裁定。
  */
 export function migrate(parsed) {
   if (!parsed || typeof parsed !== 'object') return parsed
@@ -171,6 +174,13 @@ export function migrate(parsed) {
     // v3 → v4
     if (out.verdict_role === undefined) out.verdict_role = null
     v = 4
+  }
+
+  if (v < 5) {
+    // v4 → v5
+    if (out.advisory === undefined) out.advisory = null
+    if (!Array.isArray(out.advisory_log)) out.advisory_log = []
+    v = 5
   }
 
   out.schemaVersion = CURRENT_SCHEMA_VERSION
@@ -236,6 +246,14 @@ export function defaultState() {
     // verdict_role 是「实际写下这条裁定时传进来的 role」，直接回答「这条 PASS 是谁落的」。
     // 审计流水里也有 role，但那是日志；这是状态层的持久记录，可用 flow_status 直接查。
     verdict_role: null,
+    // 调研/方案的轻量互审（v5）。结构与 T2 的双轴完全独立：
+    // 它不参与 flow_verdict 的 PASS 门禁，只服务于“回答前的交付检查”。
+    // { id, level, question, question_hash, created_at, expires_at,
+    //   axes: { evidence: null, feasibility: null },
+    //   claims: [{ text, status, evidence_ref }] } | null
+    advisory: null,
+    // 判定日志（有界，最多保留 50 条）：用于冷却与预算，不参与门禁。
+    advisory_log: [],
   }
 }
 

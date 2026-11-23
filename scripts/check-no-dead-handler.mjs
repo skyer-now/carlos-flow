@@ -89,7 +89,7 @@ export function parseTools(src) {
 export function loadImplementationSource(root) {
   const entry = readFileSync(join(root, 'src/index.js'), 'utf8')
   if (!entry.includes("from './handlers/catalog.js'")) return entry
-  const domains = ['gate', 'verify', 'audit', 'infra', 'facade']
+  const domains = ['gate', 'verify', 'audit', 'infra', 'advisory', 'facade']
   const tools = domains.flatMap(domain => parseTools(readFileSync(join(root, `src/handlers/${domain}.js`), 'utf8')))
   // 真实领域体逐个解析；不拼接无关处理器来掩盖丢参或空壳。
   return readFileSync(join(root, 'src/handlers/shared.js'), 'utf8') + '\nconst TOOLS = [\n' +

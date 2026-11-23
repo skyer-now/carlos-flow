@@ -149,11 +149,11 @@ const TOOLS = [
       properties: {
         action: {
           type: 'string',
-          enum: ['axes', 'submit', 'guard', 'verdict', 'audit'],
-          description: '操作类型：axes/submit/guard/verdict/audit',
+          enum: ['axes', 'submit', 'guard', 'verdict', 'audit', 'advisory_axes', 'advisory_submit', 'advisory_guard'],
+          description: '操作类型：axes/submit/guard/verdict/audit/advisory_axes/advisory_submit/advisory_guard',
         },
         sessionId: { type: 'string', description: '会话 ID' },
-        axis: { type: 'string', enum: ['standards', 'spec'], description: '审查轴' },
+        axis: { type: 'string', enum: ['standards', 'spec', 'evidence', 'feasibility'], description: '审查轴' },
         verdict: { type: 'string', enum: ['PASS', 'FAIL', 'WARN', 'DIRECTION', 'LOCAL'], description: '裁定/审查结论' },
         notes: { type: 'string', description: '审查说明' },
         findings: { type: 'array', items: { type: 'string' }, description: '问题清单（submit）' },
@@ -164,6 +164,11 @@ const TOOLS = [
         limit: { type: 'number', description: '最多返回条数（audit）' },
         date: { type: 'string', description: '日期 YYYY-MM-DD（audit）' },
         verifyChain: { type: 'boolean', description: '是否验证审计链（audit）' },
+        advisoryId: { type: 'string', description: '调研/方案互审 ID（advisory_submit/advisory_guard）' },
+        question: { type: 'string', description: '本次调研/方案的问题（advisory_axes）' },
+        level: { type: 'string', enum: ['none', 'single', 'dual'], description: '互审强度（advisory_axes，缺省按规则判定）' },
+        claims: { type: 'array', items: { type: 'object' }, description: '声明清单（advisory_axes）' },
+        report: { type: 'object', description: '结构化报告/方案（advisory_axes）' },
       },
       required: ['action'],
     },
@@ -183,6 +188,11 @@ const TOOLS = [
       void a.limit
       void a.date
       void a.verifyChain
+      void a.advisoryId
+      void a.question
+      void a.level
+      void a.claims
+      void a.report
       const targetTool = FACADE_ACTIONS.carlos_review[action]
       if (!targetTool) return fail('未知 action：' + action)
       const forwarded = { ...args }
@@ -268,6 +278,9 @@ export const FACADE_ACTIONS = Object.freeze({
     guard: 'flow_audit_guard',
     verdict: 'flow_verdict',
     audit: 'flow_audit',
+    advisory_axes: 'flow_advisory_axes',
+    advisory_submit: 'flow_advisory_submit',
+    advisory_guard: 'flow_advisory_guard',
   }),
   carlos_manage: Object.freeze({
     status: 'flow_status',

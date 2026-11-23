@@ -55,7 +55,11 @@ var CATEGORIES = [
       '任一轴 FAIL 硬拦；WARN 不硬拦，但会随裁定一起返回（warn_findings），汇报时不能吞。',
       'flow_audit 只读审计流水，可验证哈希链完整性；它不产生裁定。',
     ],
-    members: ['flow_audit_axes', 'flow_audit_submit', 'flow_audit_guard', 'flow_audit', 'carlos_review'],
+    members: [
+      'flow_audit_axes', 'flow_audit_submit', 'flow_audit_guard', 'flow_audit',
+      'flow_advisory_axes', 'flow_advisory_submit', 'flow_advisory_guard',
+      'carlos_review',
+    ],
   },
   {
     name: 'infra',

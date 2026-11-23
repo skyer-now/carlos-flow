@@ -29,6 +29,9 @@ const LOW_LEVEL = [
   'flow_cancel', 'flow_bypass', 'flow_add_user_msg', 'flow_save_result',
   'flow_revert_plan', 'flow_run_verify', 'flow_falsify', 'flow_check_scope',
   'flow_trigger_check',
+  'flow_advisory_axes',
+  'flow_advisory_submit',
+  'flow_advisory_guard',
 ]
 
 describe('阶段三 · 四门面收敛', () => {
@@ -38,12 +41,12 @@ describe('阶段三 · 四门面收敛', () => {
     assert.deepEqual(tools.map((t) => t.name), [...EXTERNAL_TOOL_NAMES])
   })
 
-  it('22 个底层能力全部可经门面到达，且没有指向未登记操作', () => {
+  it('25 个底层能力全部可经门面到达，且没有指向未登记操作', () => {
     const targets = new Set()
     for (const actions of Object.values(FACADE_ACTIONS)) {
       for (const target of Object.values(actions)) targets.add(target)
     }
-    assert.equal(targets.size, 22, '映射目标数必须等于底层能力数')
+    assert.equal(targets.size, 25, '映射目标数必须等于底层能力数')
     for (const name of LOW_LEVEL) assert.ok(targets.has(name), '缺少门面动作：' + name)
     for (const target of targets) assert.ok(LOW_LEVEL.includes(target), '指向未登记操作：' + target)
   })
@@ -179,9 +182,9 @@ describe('阶段三 · 四门面收敛', () => {
     }
   })
 
-  it('内部目录仍保留 26 个操作（底层实现没有被删除）', () => {
+  it('内部目录仍保留 29 个操作（底层实现没有被删除）', () => {
     const tools = createCatalog(() => {})
-    assert.equal(tools.length, 26)
+    assert.equal(tools.length, 29)
     for (const name of LOW_LEVEL) assert.ok(tools.some((t) => t.name === name), '内部目录缺少：' + name)
   })
 })

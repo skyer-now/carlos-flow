@@ -695,9 +695,19 @@ const TOOLS = [
           complexity: typeof a.complexity === 'number' ? a.complexity : 1.0,
         })
 
+        // 旁路：只附带“这次内容是否需要调研/方案互审”，不改变 T0/T1/T2 决策与激活。
+        const { classifyAdvisory } = await import('../advisory.js')
+        const advisoryHint = classifyAdvisory({ text: message, state: loadState(sessionId) })
+
         const base = {
           ok: true,
           sessionId,
+          advisory: {
+            level: advisoryHint.level,
+            matched_rules: advisoryHint.matched_rules,
+            reason: advisoryHint.reason,
+            budget: advisoryHint.budget,
+          },
           decision: result.decision,
           score: result.score,
           confidence: result.confidence,

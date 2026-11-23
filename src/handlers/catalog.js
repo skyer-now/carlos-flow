@@ -3,6 +3,7 @@ import { TOOLS as verifyTools } from './verify.js'
 import { TOOLS as auditTools } from './audit.js'
 import { TOOLS as infraTools } from './infra.js'
 import { createFacadeTools, FACADE_ACTIONS } from './facade.js'
+import { TOOLS as advisoryTools } from './advisory.js'
 const ORDER = [
   "flow_protocol",
   "flow_submit_requirement",
@@ -29,10 +30,13 @@ const ORDER = [
   "carlos_task",
   "carlos_verify",
   "carlos_review",
-  "carlos_manage"
+  "carlos_manage",
+  "flow_advisory_axes",
+  "flow_advisory_submit",
+  "flow_advisory_guard"
 ]
 export function createCatalog(callTool) {
-  const tools = [...gateTools, ...verifyTools, ...auditTools, ...infraTools, ...createFacadeTools(callTool)]
+  const tools = [...gateTools, ...verifyTools, ...auditTools, ...infraTools, ...advisoryTools, ...createFacadeTools(callTool)]
   if (tools.length !== ORDER.length || tools.some(tool => !ORDER.includes(tool.name)))
     throw new Error('工具目录包含未登记操作或数量不符')
   return ORDER.map(name => {

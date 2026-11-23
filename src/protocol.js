@@ -19,7 +19,8 @@ export const PROTOCOL = {
 | T1 | 只读调研（摸清代码现状） | 派 explore，1 个子 Agent，免门禁 |
 | T2 | 修改代码 / 配置 / 文档 | 留痕 → 派 executor → 派 2 个 auditor（Standards / Spec 双轴），3 个子 Agent；PASS 前两轴必须齐且无 FAIL |
 
-判定口径：要写文件 = T2；要读文件但不写 = T1；两者都不需要 = T0`,
+判定口径：要写文件 = T2；要读文件但不写 = T1；两者都不需要 = T0。
+调研/方案另有轻量互审（classifyAdvisory：常规核查 none、时效/排障 single、高风险/方案决策 dual），它不改变 T0/T1/T2 路由，也不替代 T2 的 PASS 双轴。`,
 
   FOUR_CONTRACT: `四段合同（每段一行，主 Agent 必须在任务卡里写全）：
 1. objective：一句话目标。
