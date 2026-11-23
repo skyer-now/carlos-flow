@@ -55,16 +55,16 @@ describe('阶段二 · 项目隔离失败记忆', () => {
   it('项目身份：同仓库 worktree 复用，不同仓库隔离', () => {
     const a = resolveProjectIdentity(repoA)
     const b = resolveProjectIdentity(repoB)
-    assert.equal(a.kind, 'git-common-dir')
-    assert.notEqual(a.key, b.key, '不同仓库必须是不同项目分区')
+    assert.equal(a.kind, 'git-common-dir', `repoA 身份 kind=${a.kind} root=${a.root}`)
+    assert.notEqual(a.key, b.key, `不同仓库必须是不同项目分区（a=${a.key} b=${b.key} rootA=${a.root} rootB=${b.root}）`)
 
     const wt = path.join(sandbox, 'repo-a-wt')
     const add = spawnSync('git', ['worktree', 'add', '-q', '--detach', wt, 'HEAD'], {
       cwd: repoA, encoding: 'utf8', windowsHide: true,
     })
-    assert.equal(add.status, 0, 'worktree 创建应成功')
+    assert.equal(add.status, 0, `worktree 创建应成功：status=${add.status} stderr=${String(add.stderr || '').trim()}`)
     const w = resolveProjectIdentity(wt)
-    assert.equal(w.key, a.key, '同一仓库的 worktree 必须共享项目身份')
+    assert.equal(w.key, a.key, `同一仓库的 worktree 必须共享项目身份（repo=${a.root} worktree=${w.root}）`)
   })
 
   it('经验只注入本项目，不串到其他项目', () => {
