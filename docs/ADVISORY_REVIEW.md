@@ -52,15 +52,15 @@
 审核者若给 PASS 且 findings/证据里没有提到回滚/恢复/不可逆，guard 判为“canary 未被识别（疑似形式化审核）”。
 用于自测与抽检，不建议在真实交付里默认开启。
 
-## 实际使用路径（自动准备）
+## 实际使用路径（只提示，按需创建）
 
 宿主在收到每条用户消息时调用 `flow_trigger_check`，插件会：
 
-1. 判定这条消息是否需要互审；
-2. 如果**不会进入 T2 门禁**（未触发工作流，或只是只读调研），直接把互审记录与两轴 prompt 准备好，返回 `advisory.prepared=true`、`advisory_id`、`axes`、`prompts` 与下一步提示；
-3. 如果**会开卡**（T2 改动），不创建互审，交给 PASS 的 standards/spec 双轴，避免重复审。
+1. 判定这条消息是否需要互审，返回 `advisory.level`、`matched_rules`、`reason` 与下一步提示；
+2. **不自动创建记录、不写 prompt**（避免每条消息都落盘）；
+3. 由 Agent 在决定交付前显式调用 `carlos_review{action:"advisory_axes"}` 创建；会开卡的 T2 消息不需要互审，交给 PASS 的 standards/spec 双轴。
 
-`flow_status` 会返回 `advisory` 摘要（id / level / required / axes / missing / failed / expired / claims_unbound / passed），Agent 在交付前读它就能知道还缺哪一轴。
+`flow_status` 会返回 `advisory` 摘要（id / level / required / axes / missing / failed / expired / claims_unbound / passed / passed_at / receipt），Agent 在交付前读它就能知道还缺哪一轴。guard 通过后落持久复核收据（`passed_at` + 证据摘要哈希），不复制证据正文。
 
 常规核查不产生记录，也不写 prompt 文件。
 
@@ -91,5 +91,6 @@ carlos_review { action: 'advisory_guard', sessionId, advisoryId }
 ## 已知未做
 
 - 宿主出口钩子（强制拦截自由文本）未实现；
-- 证据引用目前是自由文本，尚未与“真实工具调用/命令哈希”自动核对；
-- canary 目前按调用方显式开启，未做自动随机抽样。
+- 证据引用已支持离线核验（`path:line` verified、URL external、自由文本 unverified），但尚未与“真实工具调用/命令哈希”自动绑定；
+- canary 目前按调用方显式开启，未做自动随机抽样；
+- 互审 prompt 只保留最近 20 份 / 7 天（按内容标记清理，不动 T2 审计 prompt）。

@@ -701,33 +701,8 @@ const TOOLS = [
         const advisoryModule = await import('../advisory.js')
         const advisoryHint = advisoryModule.classifyAdvisory({ text: message, state: loadState(sessionId) })
 
-        // 实际使用路径：当这条消息不会进入 T2 门禁（未触发，或只是只读调研）时，
-        // 直接把互审准备出来（记录 + 两轴 prompt），Agent 拿到就能派审核者。
-        // 会开卡的 T2 路径不创建，避免和 PASS 双轴重复。
-        let advisoryPrepared = null
-        const willOpenCard = result.shouldTrigger === true &&
-          result.activationPlan && result.activationPlan.activated === true
-        if (advisoryHint.level !== 'none' && !willOpenCard) {
-          const { createAdvisoryRecord } = await import('./advisory.js')
-          const created = await createAdvisoryRecord({
-            sessionId,
-            question: message,
-            level: advisoryHint.level,
-            cwd: a.cwd,
-            state: loadState(sessionId),
-          })
-          if (created.ok && created.triggered) {
-            advisoryPrepared = {
-              advisory_id: created.advisory_id,
-              level: created.level,
-              artifact: created.artifact,
-              axes: created.axes,
-              prompts: created.prompts,
-              expires_at: created.expires_at,
-              claims_unbound: created.claims_unbound,
-            }
-          }
-        }
+        // 只提示，不自动建记录/写 prompt：由 Agent 在决定交付前显式调用
+        // carlos_review{action:'advisory_axes'}，避免每条消息都落盘。
 
         const base = {
           ok: true,
@@ -737,13 +712,13 @@ const TOOLS = [
             matched_rules: advisoryHint.matched_rules,
             reason: advisoryHint.reason,
             budget: advisoryHint.budget,
-            prepared: !!advisoryPrepared,
-            advisory_id: advisoryPrepared ? advisoryPrepared.advisory_id : null,
-            axes: advisoryPrepared ? advisoryPrepared.axes : [],
-            prompts: advisoryPrepared ? advisoryPrepared.prompts : null,
-            next: advisoryPrepared
-              ? '用 subagent 并行派发只读审核者，完成后分别 flow_advisory_submit，再 flow_advisory_guard 后才交付结论。'
-              : null,
+            prepared: false,
+            advisory_id: null,
+            axes: [],
+            prompts: null,
+            next: advisoryHint.level === 'none'
+              ? null
+              : '如需互审，调用 carlos_review{action:"advisory_axes"} 生成两轴合同；常规核查不需要。',
           },
           decision: result.decision,
           score: result.score,

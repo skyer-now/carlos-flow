@@ -165,6 +165,7 @@ export function buildAdvisoryPrompt(axis, payload = {}) {
   const axisName = axis === 'feasibility' ? 'Spec/可行性轴（方案合理性、技术可行性、影响与回滚）' : 'Evidence/调研轴（是否真的查了、来源是否支撑结论）'
   return [
     `role: auditor（只读复核，零文件改动）`,
+    `kind: advisory（调研/方案互审）`,
     `axis: ${axisName}`,
     ``,
     `objective: 独立复核下面这份${axis === 'feasibility' ? '方案' : '调研结论'}，不要替交付方补理由。`,
@@ -262,6 +263,8 @@ export function summarizeAdvisory(advisory, now = Date.now()) {
     expired,
     claims_unbound: unbound,
     passed: !expired && missing.length === 0 && failed.length === 0 && emptyEvidence.length === 0 && unbound.length === 0,
+    passed_at: advisory.passed_at || 0,
+    receipt: advisory.passed_hash || null,
     expires_at: advisory.expires_at || 0,
   }
 }

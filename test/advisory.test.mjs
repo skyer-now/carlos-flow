@@ -275,3 +275,34 @@ describe('P2 · 公用加固（选轴 / canary / 相似度 / 英文）', () => {
     assert.ok(blocked.includes('雷同'), blocked)
   })
 })
+
+
+describe('P1 · 长期可用性（清理 / 引用核验 / 收据）', () => {
+  it('只清理互审 prompt，不动其它 prompt', async () => {
+    const { pruneAdvisoryPrompts, ADVISORY_MARKER } = await import('../src/advisory-evidence.js')
+    const dir = path.join(home, 'prompts')
+    fs.mkdirSync(dir, { recursive: true })
+    const mk = (name, body, ageMs) => {
+      const file = path.join(dir, name)
+      fs.writeFileSync(file, body, 'utf8')
+      const t = new Date(Date.now() - ageMs)
+      fs.utimesSync(file, t, t)
+    }
+    mk('1_auditor.prompt.txt', ADVISORY_MARKER + String.fromCharCode(10) + '旧互审', 5000)
+    mk('2_auditor.prompt.txt', ADVISORY_MARKER + String.fromCharCode(10) + '次新互审', 3000)
+    mk('3_auditor.prompt.txt', ADVISORY_MARKER + String.fromCharCode(10) + '最新互审', 1000)
+    mk('4_auditor.prompt.txt', 'Standards 轴' + String.fromCharCode(10) + 'T2 审计 prompt', 5000)
+    const res = pruneAdvisoryPrompts(dir, { keep: 1, maxAgeMs: 60 * 60 * 1000 })
+    assert.equal(res.removed, 2)
+    const left = fs.readdirSync(dir).sort()
+    assert.deepEqual(left, ['3_auditor.prompt.txt', '4_auditor.prompt.txt'])
+  })
+
+  it('证据引用离线核验：path:line / URL / 自由文本', async () => {
+    const { verifyEvidenceRef } = await import('../src/advisory-evidence.js')
+    assert.equal(verifyEvidenceRef('src/advisory.js:1').status, 'verified')
+    assert.equal(verifyEvidenceRef('src/not-exists.js:1').status, 'unverified')
+    assert.equal(verifyEvidenceRef('https://example.com/x').status, 'external')
+    assert.equal(verifyEvidenceRef('我印象里是对的').status, 'unverified')
+  })
+})

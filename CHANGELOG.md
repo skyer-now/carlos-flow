@@ -1,3 +1,27 @@
+## [3.1.0] - 2026-11-23 — 调研/方案互审接入实际路径与长期可用性加固
+
+### ✨ 新增 | Added
+
+- **调研/方案互审**：`flow_advisory_axes / submit / guard`（门面 `carlos_review` 的 advisory 动作）。Evidence 轴核“是否真的查了、来源是否支撑结论”，Feasibility 轴核“方案合理性、技术可行性、影响面与回滚”。
+- **触发判定**：纯规则中英双语（`src/advisory-rules.js`），常规核查 `none`、时效/排障 `single`、高风险/方案决策 `dual`；返回 `matched_rules` 可解释；同主题 30 分钟冷却、24h dual 上限 6 次。
+- **实际路径**：`flow_trigger_check` 只给提示（`advisory.level` + 下一步），不自动建记录/写 prompt；`flow_status` 返回 `advisory` 摘要（missing / failed / passed / passed_at / receipt）。
+- **证据约束**：PASS 必须带证据；`done/verified` 声明的 `evidence_ref` 支持离线核验（`path:line` verified、URL external、自由文本 unverified）；两轴证据高度雷同视为未独立取证。
+- **canary**：方案轴可注入“缺少回滚”的已知缺陷，审核 PASS 未指出时判为形式化审核。
+- **长期可用性**：guard 通过后落持久复核收据（`passed_at` + 证据摘要哈希）；互审 prompt 按内容标记清理（保留最近 20 份 / 7 天），不动 T2 审计 prompt。
+
+### 🔧 修复 | Fixed
+
+- Windows 验证输出按字节解码（GBK 中文不再乱码），命令语义与退出码不变。
+- Windows 原子写 rename 遇 EBUSY/EPERM 有界重试；worktree 目标路径超 240 字符拒绝。
+- macOS 目录 fsync 不支持（EINVAL）不再误判保存失败。
+
+### ⚠️ 已知边界 | Known limits
+
+- 插件拦不住自由文本回答；要强制拦截需宿主出口钩子。
+- 互审默认只对 `dual` 强制，`single` 仅提示。
+- 个人偏好画像/历史挖掘未实现（按约定暂不做）。
+- 原生 `flow_run_verify` 在当前宿主仍受固定哈希能力阻断，正式门禁 PASS 未取得。
+
 ## [3.0.0] - 2026-11-23 — 四门面收敛、AST 断言负对照与任务工作区隔离
 
 ### ✨ 新增 | Added

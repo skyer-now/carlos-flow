@@ -11,6 +11,8 @@ import {
   loadState,
   commitState,
   writeDispatchPrompt,
+  RUNS_DIR,
+  sanitizeId,
 } from './shared.js'
 import {
   classifyAdvisory,
@@ -27,7 +29,9 @@ import {
   CANARY_TEXT,
   ADVISORY_TTL_MS,
 } from '../advisory.js'
-import { randomBytes } from 'node:crypto'
+import { pruneAdvisoryPrompts, verifyEvidenceRef } from '../advisory-evidence.js'
+import { randomBytes, createHash } from 'node:crypto'
+import path from 'node:path'
 
 const AXES = new Set(['evidence', 'feasibility'])
 const VERDICTS = new Set(['PASS', 'WARN', 'FAIL'])
@@ -86,6 +90,7 @@ export async function createAdvisoryRecord(input = {}) {
     axes: { evidence: null, feasibility: null },
     required: axesToRun,
     claims,
+    cwd: input.cwd || process.cwd(),
     passed_at: 0,
   }
   const cwd = input.cwd || process.cwd()
@@ -100,6 +105,7 @@ export async function createAdvisoryRecord(input = {}) {
     const { file } = writeDispatchPrompt(sid, 'auditor', prompt, cwd)
     prompts[axis] = { prompt, file }
   }
+  pruneAdvisoryPrompts(path.join(RUNS_DIR, sanitizeId(sid), 'dispatch'))
   await commitState(sid, (latest) => {
     latest.advisory = advisory
     latest.advisory_log = appendAdvisoryLog(latest.advisory_log, {
@@ -256,7 +262,7 @@ const TOOLS = [
     name: 'flow_advisory_guard',
     description:
       '【调研/方案互审】交付前自查：该级别的轴是否齐、是否 FAIL、证据是否为空、声明是否都有引用、是否过期。' +
-      '不通过时返回 missing / unbound_claims / expired，按提示补齐后重试；不修改任何状态。',
+      '不通过时返回 missing / unbound_claims / expired，按提示补齐后重试；通过时落一条持久复核收据（advisory.passed_at + 证据摘要哈希）。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -295,6 +301,18 @@ const TOOLS = [
         const unbound = unboundClaims(advisory.claims).map((c) => c.text)
         const problems = []
 
+        // 证据引用核验：done/verified 的声明必须能被离线核验（path:line）或至少是外部链接。
+        const unverifiedClaims = []
+        for (const claim of Array.isArray(advisory.claims) ? advisory.claims : []) {
+          if (claim.status !== 'done' && claim.status !== 'verified') continue
+          const ref = String(claim.evidence_ref || '').trim()
+          if (!ref) continue // 已在 unbound 里报过
+          const checked = verifyEvidenceRef(ref, { cwd: advisory.cwd })
+          if (checked.status === 'unverified') {
+            unverifiedClaims.push(claim.text + '（' + checked.reason + '）')
+          }
+        }
+
         // canary：审核者拿到的是“已知缺陷”的方案，PASS 却没点出来 → 判定形式化。
         if (advisory.canary && advisory.axes.feasibility && advisory.axes.feasibility.verdict === 'PASS') {
           const rec = advisory.axes.feasibility
@@ -315,13 +333,33 @@ const TOOLS = [
         if (failed.length) problems.push('轴判定 FAIL：' + failed.join(', '))
         if (emptyEvidence.length) problems.push('轴证据为空：' + emptyEvidence.join(', '))
         if (unbound.length) problems.push('声明没有证据引用：' + unbound.join('；'))
+        if (unverifiedClaims.length) problems.push('声明证据无法离线核验：' + unverifiedClaims.join('；'))
         if (problems.length) {
           return fail('互审未通过：' + problems.join(' | ') + '。补齐后重试 flow_advisory_guard。')
         }
+        // 通过后落持久收据：只记录摘要哈希，不复制证据正文。
+        const receiptHash = createHash('sha256')
+          .update(JSON.stringify({
+            id: advisory.id,
+            level: advisory.level,
+            axes: need.map((axis) => [axis, advisory.axes[axis] && advisory.axes[axis].verdict]),
+            claims: (advisory.claims || []).map((c) => [c.text, c.status, c.evidence_ref]),
+          }))
+          .digest('hex')
+        const passedAt = Date.now()
+        await commitState(sid, (latest) => {
+          if (!latest.advisory || latest.advisory.id !== advisoryId) return
+          latest.advisory.passed_at = passedAt
+          latest.advisory.passed_hash = receiptHash
+        })
+        audit('resolution', sid, { kind: 'advisory_passed', advisoryId, level: advisory.level, receipt: receiptHash })
+
         return ok({
           ok: true,
           advisoryId,
           level: advisory.level,
+          passed_at: passedAt,
+          receipt: receiptHash,
           axes: { evidence: advisory.axes.evidence, feasibility: advisory.axes.feasibility },
           warnings,
           claims: advisory.claims.length,
