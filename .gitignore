@@ -80,3 +80,6 @@ sync/
 
 # carlos-syncd.mjs 运行时锁（只含 pid，属本机运维状态，绝不能进仓库）
 .syncd.lock
+
+# 临时排查/迁移脚本（.tmp-*.mjs / .tmp-*.cjs），跑完即删，绝不入库
+.tmp-*

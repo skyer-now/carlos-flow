@@ -62,6 +62,19 @@ import {
   issueStaleOffer,
   FLOW_HOME,
 } from './shared.js'
+
+/**
+ * 卡过期时的报错文案：必须带「哪张卡 + 何时提交」——
+ * 长任务（如一次发布跨几小时）里，只说「请重新提交」会让人以为卡丢了，
+ * 无法判断到底是过期、被换卡、还是状态目录不对。
+ */
+function staleCardMessage(state) {
+  const goal = state && state.card && state.card.goal ? `「${String(state.card.goal).slice(0, 40)}」` : ''
+  const ts = Number(state && state.card_ts) || 0
+  const when = ts ? new Date(ts).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : '未知时间'
+  return `留痕已过期（stale）：卡片${goal}提交于 ${when}，已超过 4 小时有效期。请重新提交任务卡后继续。`
+}
+
 const TOOLS = [
 {
     name: 'flow_submit_requirement',
@@ -813,7 +826,7 @@ const TOOLS = [
         }
         if (isStale(state)) {
           return fail(
-            guideError(state, '留痕已过期（stale），请重新提交任务卡。'),
+            guideError(state, staleCardMessage(state)),
           )
         }
         if (state.dispatch_count >= MAX_DISPATCH) {
@@ -921,7 +934,7 @@ const TOOLS = [
           return fail(guideError(state, '没有留痕，不允许派发。'))
         if (isStale(state))
           return fail(
-            guideError(state, '留痕已过期（stale），请重新提交任务卡。'),
+            guideError(state, staleCardMessage(state)),
           )
         if (state.dispatch_count >= MAX_DISPATCH)
           return fail(

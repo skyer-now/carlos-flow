@@ -251,6 +251,12 @@ jobs:
         run: node scripts/verify-npm-publish.mjs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # 发布后实测安装：从 registry 真装本轮版本，再用真实 MCP 握手验证。
+      # 为什么入流水线：发布基线写了「发布后必须实测安装」，
+      # 只在人/Agent 记忆里执行等于没执行（v3.1.0 落地时就是手工验的）。
+      - name: 发布后实测安装（真实 tarball + MCP 握手 + 产物洁净）
+        if: steps.gate.outputs.publish == 'true'
+        run: node scripts/verify-release-install.mjs
       # 创建 GitHub Release（无论 npm 是否是本次发的，都要有 Release 记录）
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
