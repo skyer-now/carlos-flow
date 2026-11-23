@@ -144,7 +144,8 @@ const walk = (dir, depth = 0) => {
   let entries = [];
   try { entries = readdirSync(dir); } catch { return out; }
   for (const e of entries) {
-    if (e === "node_modules" || e === ".git") continue;
+    // vendor/ 是第三方源码（acorn），注释语言不由本项目约束。
+    if (e === "node_modules" || e === ".git" || e === "vendor") continue;
     const full = join(dir, e);
     let st;
     try { st = statSync(full); } catch { continue; }

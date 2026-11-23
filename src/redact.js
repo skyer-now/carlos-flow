@@ -46,9 +46,11 @@ export function redact(text) {
   // UNC（\\server\share\...）与盘符路径：只保留最后一段
   s = s.replace(/\\\\[^\s"'<>|]+/g, (m) => `<绝对路径>/${baseName(m)}`)
   s = s.replace(/[A-Za-z]:\\[^\s"'<>|]+/g, (m) => `<绝对路径>/${baseName(m)}`)
+  // 盘符 + 正斜杠（D:/a/b）也要按整段路径处理，否则会留下“D:”前缀。
+  s = s.replace(/(?<![A-Za-z])[A-Za-z]:\/[^\s"'<>|]+/g, (m) => `<绝对路径>/${baseName(m)}`)
 
-  // 其余 POSIX 绝对路径（至少两段且带文件名）：同样只留文件名
-  s = s.replace(/(^|[\s"'(=:])\/(?:[\w.@+-]+\/)+[\w.@+-]+\.[A-Za-z0-9]{1,8}/g, (m, lead) => {
+  // 其余 POSIX 绝对路径（至少两段）：只留最后一段；不要求带扩展名（/tmp/cf-home/flow 也要脱敏）。
+  s = s.replace(/(^|[\s"'(=:])\/(?:[\w.@+-]+\/)+[\w.@+-]+/g, (m, lead) => {
     return `${lead}<绝对路径>/${baseName(String(m).slice(lead.length))}`
   })
 

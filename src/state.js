@@ -248,9 +248,9 @@ export function defaultState() {
     verdict_role: null,
     // 调研/方案的轻量互审（v5）。结构与 T2 的双轴完全独立：
     // 它不参与 flow_verdict 的 PASS 门禁，只服务于“回答前的交付检查”。
-    // { id, level, question, question_hash, created_at, expires_at,
-    //   axes: { evidence: null, feasibility: null },
-    //   claims: [{ text, status, evidence_ref }] } | null
+    // 记录形状：互审编号、强度（single/dual）、问题原文与主题哈希、创建与过期时间、
+    // 两轴结论（evidence / feasibility，初始为空）、以及交付方声明清单（文本、状态、证据引用）。
+    // 未创建互审时为 null。
     advisory: null,
     // 判定日志（有界，最多保留 50 条）：用于冷却与预算，不参与门禁。
     advisory_log: [],
@@ -2010,13 +2010,12 @@ function* fingerprintSteps(cwd) {
     const repo = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], gitOptions)
     let discoveryAbsent = true
     try {
-      let current = path.resolve(dir)
+      // 先把符号链接解析掉：macOS 的 os.tmpdir() 是 /var/...（真实路径 /private/var/...），
+      // 若按原样逐级 lstat，第一层就撞到符号链接，会被误判成“无法确定是否非仓库”。
+      let current
+      try { current = fs.realpathSync(dir) } catch { current = path.resolve(dir) }
       if (!fs.statSync(current).isDirectory()) discoveryAbsent = false
       while (discoveryAbsent) {
-        if (fs.lstatSync(current).isSymbolicLink()) {
-          discoveryAbsent = false
-          break
-        }
         try {
           fs.lstatSync(path.join(current, '.git'))
           discoveryAbsent = false
@@ -2031,8 +2030,11 @@ function* fingerprintSteps(cwd) {
       if (process.env.GIT_DIR || process.env.GIT_WORK_TREE || process.env.GIT_COMMON_DIR)
         discoveryAbsent = false
     } catch { discoveryAbsent = false }
+    // 非仓库的 fatal 文案有两种：普通目录是 “or any of the parent directories”，
+    // 跨挂载点时是 “or any parent up to mount point /mnt” + “Stopping at filesystem boundary”。
+    // 只认 fatal 前缀与 status 128，其它错误（权限、损坏）仍然判为 git_command_failed。
     if (discoveryAbsent && !repo.error && !repo.signal && repo.status === 128 &&
-        /^fatal: not a git repository \(or any of the parent directories\): \.git\s*$/.test(String(repo.stderr || '').trim())) {
+        /^fatal: not a git repository \(or (?:any of the parent directories|any parent up to mount point [^)]*)\)/i.test(String(repo.stderr || '').trim())) {
       return { mode: 'pro', mode_ts: 0, claimed_profile: null, ok: false, reason: 'not_a_git_repo' }
     }
     return failed('head', head)
