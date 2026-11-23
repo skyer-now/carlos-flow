@@ -66,6 +66,13 @@ jobs:
           npm run test:ast
           npm run test:facade
           npm run check:ast
+          # 互审体系（含变异测试）与 Windows 运行时：必须进 CI ——
+          # 这两个套件此前只在发布流水线跑，等于没被日常守护；
+          # v3.1.0 首发失败就是在这个盲区里发生的。
+          npm run test:advisory
+          npm run test:advisory-int
+          npm run test:advisory-mut
+          npm run test:windows
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home

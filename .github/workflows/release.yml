@@ -28,12 +28,48 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - run: npm ci
-      # 发布前跑**完整**测试套件，而不是只跑 smoke。
+      # 发布前跑**完整**测试套件（与 CI 逐套件对齐，便于失败时在步骤名上直接定位）。
       # 套件组成：smoke + e2e-carlos + p0-gates + trigger-e2e + concurrency + acceptance
       # （含跨进程并发回归——它曾抓出真实的激活闸门竞态绕过，不可省）
-      - run: npm run test:all
+      # 为什么拆成多步而不是一句 test:all：run 失败只显示“命令退出 1”，
+      # 拆开后失败步骤名直接指出是哪一组，无需下载日志就能定位。
+      - name: 测试·基础与门禁主链（smoke / baseline / e2e / p0 / 发布闸 / STALE）
+        run: npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:gate && npm run test:stale
         env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           # 隔离状态目录：不给的话测试会写 runner 的 ~/.carlos-flow（runner home 可能是共享/缓存的）
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·触发引擎与跨进程并发
+        run: npm run test:trigger && npm run test:concurrency
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-concurrency-home
+          # 与 CI 一致：并发套件在高负载下偶发假泄漏，允许重跑一次；两次都红才算失败。
+          CONCURRENCY_RETRY: 1
+      - name: 测试·端到端验收（npm 包到真实可用）
+        run: npm run test:acceptance
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·门禁加固链（敏感规则 / 锁 / 负对照 / MCP / 分发 / 存储 / 隔离 / AST / 门面）
+        run: npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch && npm run test:hardening && npm run test:cas && npm run test:roll && npm run test:prune && npm run test:stage2 && npm run test:worktree && npm run test:ast && npm run test:facade && npm run check:ast
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·专项真实（越界 / 审计链 / bridge 隔离 / 清理命令）
+        run: npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·UI / 单元 / 原子写 / 编码
+        run: npm run test:ui && npm run test:unit && npm run test:atomic && npm run test:encoding
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
+          CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
+      - name: 测试·互审体系与 Windows 运行时（含变异测试）
+        run: npm run test:advisory && npm run test:advisory-int && npm run test:advisory-mut && npm run test:windows
+        env:
+          CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-release-home
       # 单包一致性守卫：身份 / 版本 / 文档 / 产物 必须一致
       - name: 单包一致性检查

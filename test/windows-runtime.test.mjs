@@ -26,8 +26,8 @@ describe('Windows 运行时与环境健壮性测试', () => {
     const pid = proc.pid
     assert.ok(pid, '进程必须成功启动并获取 PID')
 
-    // 等待 100ms 确保孙子进程被创建
-    await new Promise((r) => setTimeout(r, 100))
+    // 等待片刻，让 cmd.exe 真正拉起孙进程（runner 较慢时 100ms 不够）
+    await new Promise((r) => setTimeout(r, 500))
 
     // 执行 Windows 整树强制终止命令
     const killRes = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
@@ -37,15 +37,23 @@ describe('Windows 运行时与环境健壮性测试', () => {
 
     assert.equal(killRes.status, 0, 'taskkill /T /F 应当成功执行')
 
-    // 确认进程已退出
-    let running = true
-    try {
-      // 在 Windows 下通过 process.kill(pid, 0) 探测
-      process.kill(pid, 0)
-    } catch {
-      running = false
+    // 确认进程已退出。taskkill 返回后进程句柄可能短暂残留，
+    // 因此在有界时间内轮询（避免在慢 runner 上出现假红）。
+    const alive = () => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch (e) {
+        return !!(e && e.code === 'EPERM')
+      }
     }
-    assert.equal(running, false, '主子进程必须已完全终止')
+    let running = alive()
+    const deadline = Date.now() + 10000
+    while (running && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200))
+      running = alive()
+    }
+    assert.equal(running, false, '主子进程必须已完全终止（10 秒内）')
   })
 
   it('深层目录与路径读写健壮性验证', () => {
