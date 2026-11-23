@@ -255,7 +255,10 @@ try {
       let directoryMoves = 0
       try {
         fs.renameSync = function(src, dest) {
-          if (src === path.join(RUNS, 'guard-release-failure', '.state.lock') && dest.includes('.release-'))
+          // 用后缀比对：runner 上 tmpdir 可能是 8.3 短名（RUNNER~1），
+          // 锁路径在状态层可能被解析成长名，直接用字符串相等会漏注入。
+          const srcKey = String(src).split(path.sep).join('/')
+          if (srcKey.endsWith('guard-release-failure/.state.lock') && String(dest).includes('.release-'))
             throw Object.assign(new Error('synthetic owner release failure'), { code: 'EIO' })
           if (src === path.join(RUNS, 'guard-release-failure')) directoryMoves++
           return rename.call(this, src, dest)
