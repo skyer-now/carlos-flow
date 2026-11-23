@@ -3,6 +3,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { spawnSync } from 'node:child_process'
+
+// 目录 fsync 在部分平台不受支持（Darwin 常见 EINVAL），不能把它当成持久化失败：
+// 文件已 rename 成功，这里只是“目录项耐久性尽力而为”。其它错误照旧上抛。
+const DIR_SYNC_UNSUPPORTED = new Set(['EINVAL', 'ENOTSUP', 'ENOSYS'])
+function isUnsupportedDirSync(error) {
+  return !!error && DIR_SYNC_UNSUPPORTED.has(error.code)
+}
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
@@ -339,7 +346,8 @@ export function saveState(sid, state) {
         try { fs.fsyncSync(directory) } catch (error) { directoryErrors.push(error) } finally {
           try { fs.closeSync(directory) } catch (error) { directoryErrors.push(error) }
         }
-        if (directoryErrors.length) throw new AggregateError(directoryErrors, directoryErrors.map(error => error.message).join('; '), { cause: directoryErrors[0] })
+        const fatal = directoryErrors.filter((error) => !isUnsupportedDirSync(error))
+        if (fatal.length) throw new AggregateError(fatal, fatal.map(error => error.message).join('; '), { cause: fatal[0] })
         const parent = path.dirname(current)
         if (parent === current) break
         current = parent
@@ -788,7 +796,9 @@ function writeReceiptFile(file, value) {
     try {
       dirFd = fs.openSync(path.dirname(file), 'r')
       fs.fsyncSync(dirFd)
-    } catch (error) { errors.push(error) } finally {
+    } catch (error) {
+      if (!isUnsupportedDirSync(error)) errors.push(error)
+    } finally {
       if (dirFd !== undefined) try { fs.closeSync(dirFd) } catch (error) { errors.push(error) }
     }
   }

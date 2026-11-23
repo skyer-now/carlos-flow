@@ -16,7 +16,7 @@
 
 1. **临时目录 realpath**：`os.tmpdir()` 在 macOS 是 `/var/folders/...`，真实路径是 `/private/var/...`。凡是把 tmpdir 路径与「实现里存的 realpath」直接比较的地方都必须先 `fs.realpathSync`（worktree 测试已按此修正）。
 2. **大小写不敏感卷（APFS 默认）**：`pathKey` 在 darwin 上保留大小写，因此 `src/A.js` 与 `src/a.js` 会被当成不同路径。方向是 fail-closed（可能多报越界，不会少报），但授权书写与落盘书写不一致时可能误拦。若需要更精确，应检测卷的大小写敏感性，而不是按平台判断。
-3. **目录 fsync**：macOS 上对目录 `fsync` 可能返回 `EINVAL`/`EBADF`；实现里是 best-effort（失败不改变已成功的 rename），极端掉电语义弱于 Windows 的 `FlushFileBuffers`。需要更强保证时要用 `F_FULLFSYNC`。
+3. **目录 fsync**：macOS/Darwin 的 `fsync(dir)` 常返回 `EINVAL`。原实现会把这种“平台不提供该能力”当成持久化失败，导致每次状态保存都报“提交未确认”。现已把 `EINVAL`/`ENOTSUP`/`ENOSYS` 视为不支持并继续（rename 已成功），其它错误仍上抛；对应回归用例 `test/verify-cas.mjs` 的 P9 只在 POSIX 上执行。极端掉电的目录项耐久仍弱于 Linux，需要更强保证时要用 `F_FULLFSYNC`。
 4. **文件可执行位**：Windows 提交时 `core.fileMode` 不跟踪 exec bit。本仓库已用 `git update-index --chmod=+x` 标记 CLI 与脚本；npm 安装时也会给 `bin` 设置可执行位。直接 clone 后如遇 `Permission denied`，执行 `chmod +x client/carlos.js scripts/*.mjs`。
 5. **Node 版本**：要求 Node >= 22（`engines`）。Cindy 自带运行时的话以宿主为准；自行安装时建议 Homebrew `node@22`。
 6. **Cindy 插件形态**：`main.js` 跑在宿主沙箱里，只用 `cindy` API，本身与平台无关；插件安装目录由宿主决定（macOS 在 `~/Library/Application Support/...`），不要写死路径。

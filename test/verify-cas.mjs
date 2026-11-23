@@ -346,6 +346,23 @@ if (process.platform !== 'win32') {
     error.cause?.cause?.errors?.[0]?.message === '目录同步首因' && error.cause.cause.errors[1].message === '目录关闭次因')
 }
 
+// macOS 等平台的目录 fsync 可能返回 EINVAL/ENOTSUP：rename 已成功，
+// 这属于“平台不提供目录项耐久”，不能把状态保存判成失败。
+if (process.platform !== 'win32') {
+  const sid = 'dir-sync-unsupported'
+  saveState(sid, defaultState())
+  const realFsync = fs.fsyncSync
+  let syncCount = 0
+  fs.fsyncSync = (...args) => {
+    syncCount++
+    if (syncCount >= 2) throw Object.assign(new Error('目录同步不支持'), { code: 'EINVAL' })
+    return realFsync(...args)
+  }
+  let error
+  try { saveState(sid, { ...defaultState(), task_id: 'after-unsupported' }) } catch (cause) { error = cause } finally { fs.fsyncSync = realFsync }
+  check('P9 目录 fsync 不受支持（EINVAL）时不判失败', !error && loadState(sid).task_id === 'after-unsupported', error ? String(error.message) : '')
+}
+
 // receipt 永久领取矩阵：真实文件，不以 KV 或 state 投影充当权威。
 {
   const { issueStaleOffer, claimStaleOffer, staleCaseIdentity } = stateModule
