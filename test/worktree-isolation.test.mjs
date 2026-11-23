@@ -71,7 +71,10 @@ describe('阶段三 · 任务工作区隔离', () => {
     assert.equal(head.stdout.trim(), base)
     const saved = readTaskWorktree('task-a', { flowHome })
     assert.equal(saved.ok, true)
-    assert.equal(saved.record.path, path.join(wsRoot, 'task-a'))
+    // macOS 的 tmpdir 是 /var/folders/...（realpath 为 /private/var/...），
+    // 实现存的是 realpath，所以比较也要走 realpath。
+    const wsRootReal = fs.realpathSync(wsRoot)
+    assert.equal(saved.record.path, path.join(wsRootReal, 'task-a'))
     assert.equal(worktreeIdentity(saved.record).length, 64)
   })
 

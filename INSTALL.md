@@ -2,6 +2,8 @@
 
 本指南说明如何把 Carlos Flow 接入 Cursor、VS Code、Windsurf 等编程平台。
 
+> macOS 支持与验收清单见 `docs/PORTABILITY.md`。
+
 ## 准备工作
 
 1. 确认已安装 **Node.js 18+**（`node -v`）。

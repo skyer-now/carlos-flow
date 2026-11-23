@@ -132,6 +132,8 @@
     "RELEASE_NOTES.md",
     "check-all.sh",
     "smoke-test.js",
-    "vendor/"
+    "vendor/",
+    "docs/PORTABILITY.md",
+    "docs/TOOL_CONTRACTS.md"
   ]
 }
