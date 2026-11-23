@@ -847,6 +847,44 @@ export function writeDispatchPrompt(sid, role, message, cwd) {
 // 头尾（结论 + 报错尾部堆栈），中间多半是重复日志。
 //
 // 策略：头部 + 尾部 + 中间折叠，并**如实记录原始字节数**（截断不能静默）。
+// 验证命令输出解码。
+//
+// 背景（Windows 实测）：cmd.exe 默认代码页是 936（GBK），npm / node / 编译器
+// 的中文报错会以 GBK 字节写出。旧实现直接 d.toString()（UTF-8）解码，中文全成
+// 乱码，既影响人看证据，也让失败分类拿到的是乱码文本。
+//
+// 做法（不改命令、不改 shell、不加 chcp —— 避免影响用户命令语义）：
+//   1. 先按严格 UTF-8 解码：正常 UTF-8 输出行为完全不变；
+//   2. 严格 UTF-8 失败时才按 GB18030（GBK 超集）解码；
+//   3. 两者都不可用（Node 无 full-icu）时退回 UTF-8 容错解码。
+// 可用 CARLOS_VERIFY_ENCODING=utf8|gb18030 强制指定。
+export function decodeOutputBytes(buffer) {
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || [])
+  if (buf.length === 0) return ''
+  const forced = String(process.env.CARLOS_VERIFY_ENCODING || '').toLowerCase()
+  const decodeUtf8 = (fatal) => new TextDecoder('utf-8', { fatal }).decode(buf)
+  if (forced === 'utf8') return decodeUtf8(false)
+  if (forced === 'gb18030') {
+    try { return new TextDecoder('gb18030').decode(buf) } catch { return decodeUtf8(false) }
+  }
+  // BOM 优先
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return decodeUtf8(false).replace(/^﻿/, '')
+  }
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    try { return new TextDecoder('utf-16le').decode(buf) } catch { return decodeUtf8(false) }
+  }
+  try {
+    return decodeUtf8(true)
+  } catch {
+    try {
+      return new TextDecoder('gb18030').decode(buf)
+    } catch {
+      return decodeUtf8(false)
+    }
+  }
+}
+
 export const OUTPUT_KEEP_BYTES = 256 * 1024 // 头尾各留 256KB
 
 export function truncateOutput(text, keepBytes = OUTPUT_KEEP_BYTES) {
@@ -1060,10 +1098,11 @@ async function executeVerifyCommand(cmd, cwd, options, env) {
     const lengths = { stdout: 0, stderr: 0 }
     const CAP = OUTPUT_KEEP_BYTES * 4
     const collect = (which, d) => {
-      const text = d.toString()
-      lengths[which] += Buffer.byteLength(text, 'utf8')
+      const buf = Buffer.isBuffer(d) ? d : Buffer.from(d)
+      lengths[which] += buf.length
       if (lengths[which] > CAP) return // 已远超上限：只计数，不再占内存
-      chunks[which].push(text)
+      // 存原始字节：跨 chunk 的多字节字符必须拼完再解码，逐块 toString 会切碎中文。
+      chunks[which].push(buf)
     }
     child.stdout.on('data', (d) => collect('stdout', d))
     child.stderr.on('data', (d) => collect('stderr', d))
@@ -1082,8 +1121,8 @@ async function executeVerifyCommand(cmd, cwd, options, env) {
       clearTimeout(timeout)
       clearInterval(progress)
       options.signal?.removeEventListener('abort', cancel)
-      const out = truncateOutput(chunks.stdout.join(''))
-      const rawErr = chunks.stderr.join('')
+      const out = truncateOutput(decodeOutputBytes(Buffer.concat(chunks.stdout)))
+      const rawErr = decodeOutputBytes(Buffer.concat(chunks.stderr))
       let errText
       if (result.stderrText !== undefined) errText = result.stderrText
       else if (result.formatStderr) errText = formatError(String(rawErr))

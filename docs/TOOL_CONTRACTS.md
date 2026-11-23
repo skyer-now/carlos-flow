@@ -1,5 +1,9 @@
 # Carlos Flow 工具契约文档
 
+### 验证输出解码（Windows 中文）
+
+`flow_run_verify` / `flow_falsify` 的输出按字节收集后再解码：严格 UTF-8 优先，失败才回退 GB18030（GBK 超集），可用 `CARLOS_VERIFY_ENCODING=utf8|gb18030` 强制指定。命令、shell、退出码与超时行为不变。
+
 ## v3.0.0 对外工具面（四门面）
 
 对外 MCP 目录默认只暴露四个门面，底层 22 个操作仍是内部实现，通过门面动作路由并经过同一套参数校验：
