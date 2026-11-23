@@ -162,3 +162,6 @@ npm run test:mutation       # 20 类变异体必须 20/20 全部被抓住
 - 发布前必须自动校验审计记录并归档。
 - 必须自动更新 CHANGELOG 并合并 Release Notes。
 - 执行发布命令必须通过全量 CI 门禁。
+- **发布说明必须在打 tag 之前定稿**：GitHub Release 正文取的是打 tag 那一刻的 `RELEASE_NOTES.md`，发版后再补文档不会回写历史 Release（v3.1.0 实证：补记后页面与实际内容不一致，需人工同步一次）。
+- **`npm publish` 变绿不等于已上线**：以 registry 可查为准（`scripts/verify-npm-publish.mjs`），查不到即判失败。
+- **发布后必须实测安装**：真实安装本轮版本 → MCP `initialize` 回对版本号 → `tools/list` 回对工具面。
