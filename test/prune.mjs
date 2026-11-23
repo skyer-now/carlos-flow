@@ -232,7 +232,9 @@ try {
         return true
       })
       const queued = await queuedDone
-      check('P2. 排队 writer 不写同名替换目录', archived && queued.code === 0 && queued.output.includes('session-identity') && state.loadState('guard-queued').card.goal === 'replacement', `${queued.output.trim()}${fs.existsSync(attempted) ? '（握手：wx 撞锁）' : '（握手：session-identity 早拒）'}`)
+      check('P2. 排队 writer 不写同名替换目录', archived && queued.code === 0 && !queued.output.includes('UNSAFE ENTERED') &&
+        (queued.output.includes('session-identity') || queued.output.includes('获取状态锁超时')) &&
+        state.loadState('guard-queued').card.goal === 'replacement', `${queued.output.trim()}${fs.existsSync(attempted) ? '（握手：wx 撞锁）' : '（握手：早拒/等锁超时）'}`)
       check('P2. 归档正常退出不搬锁不留空壳', fs.existsSync(path.join(dest, 'state.json')) && !fs.existsSync(path.join(dest, '.state.lock')) && !fs.existsSync(queuedFile))
 
       // EXDEV 使用确定性 rename 错误注入，真实源/目标目录；cp/rm 不参与执行路径。
@@ -259,7 +261,8 @@ try {
           return rename.call(this, src, dest)
         }
         const r = await apply(releasePlan)
-        check('P2. owner 释放未确认绝不移动目录', directoryMoves === 0 && r.archived.length === 0 && online('guard-release-failure') && fs.existsSync(path.join(RUNS, 'guard-release-failure', '.state.lock')))
+        check('P2. owner 释放未确认绝不移动目录', directoryMoves === 0 && r.archived.length === 0 && online('guard-release-failure') && fs.existsSync(path.join(RUNS, 'guard-release-failure', '.state.lock')),
+          `moves=${directoryMoves} archived=${r.archived.length} online=${online('guard-release-failure')} lock=${fs.existsSync(path.join(RUNS, 'guard-release-failure', '.state.lock'))} failed=${(r.archiveFailed || []).join(',')}`)
       } finally {
         fs.renameSync = rename
         // 仅撤销本测试注入永久故障留下的自身合成 owner，不触碰其他会话/用户锁。
