@@ -1,3 +1,12 @@
+# 当前平台范围调整（本地准备，未发布）
+
+- 当前仅声明 Windows 支持；CI（含 identity、bridge、mutation）及 release 的 runner 均为 `windows-latest`，矩阵仅保留 Windows，移除 macOS `continue-on-error`。
+- macOS / Linux 验证暂停；保留通用路径与进程树安全代码及静态门禁，不将其作为其它操作系统的支持或实机验证证据。
+- 使用 `defaults.run.shell: bash` 保留工作流脚本语义；触发条件、权限、版本与 `RELEASE_PAUSED` 值不变。
+- 本次文档同步不代表全量 Windows CI、安装、真实变异或发布完成；下面保留的旧版说明仅用于历史追溯。
+
+---
+
 # Carlos Flow v2.28.1 本地发布准备
 
 - 工具实现按真实领域模块拆分，保持原 26 项目录、描述、Schema 与宿主权限/UI。

@@ -20,6 +20,10 @@
 
 ---
 
+## Operating system support
+
+Currently, only **Windows** is supported. CI and release workflows use only `windows-latest`; macOS / Linux validation is paused and support is not claimed. Retained generic path and process safety code does not mean those systems have been validated. See [platform support notes](docs/PORTABILITY.md). Developer-tool adapters do not imply real-host acceptance of every combination.
+
 ## 💡 Why Carlos Flow?
 
 When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or Cindy), you often face:
@@ -27,14 +31,14 @@ When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or
 * **Verification Theater**: The AI self-reports "all tests passed" without actually running any test command.
 * **Complex Errors & Hard Rollbacks**: Mysterious error dumps with no plain explanation on how to revert.
 
-**Carlos Flow is a plug-and-play universal workflow gate and smart guide** that works across all developer platforms.
+**Carlos Flow is a workflow gate and smart guide for AI coding on Windows**, providing mechanical guardrails and plain-language guidance for existing developer tools.
 
 ---
 
 ## 🌟 Highlights
 
-### 1. Cross-Platform & Zero Disruptions
-* Works out of the box with Cindy, OpenCode, Cursor, Cline, VS Code, and Claude Desktop.
+### 1. Developer-Tool Adapters on Windows
+* Configuration adapters are provided for Cindy, OpenCode, Cursor, Cline, VS Code, and Claude Desktop; individual hosts still require validation.
 * Pure background assistance without console popups or resident background bloat.
 
 ### 2. Mechanical Guardrails (Fail-Closed)

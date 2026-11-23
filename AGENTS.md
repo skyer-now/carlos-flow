@@ -84,7 +84,9 @@
    - 随包 Node 程序不能依赖 node_modules（Forge 打包会跳过），
      所以协议层是自研的 `src/mcp-stdio.mjs`，不是 SDK。
 
-6.2 **只用跨平台写法（v2.16.0 起有门禁）**
+6.2 **当前仅支持 Windows；保留通用安全写法（v2.16.0 起有门禁）**
+   - CI（含 identity、mutation、release）仅使用 `windows-latest`，矩阵只保留 Windows，不得用 `continue-on-error` 掩盖失败。
+   - macOS / Linux 支持声明与验证暂停；保留 POSIX 路径、进程树回收等通用安全代码，静态检查通过不等于其它系统已验证。
    - 取模块所在目录必须 `fileURLToPath(import.meta.url)`，**禁止** `URL.pathname`
      （POSIX 上会变成相对路径，spawn 成功却永远连不上）。
    - 结束外部命令必须整棵树：Windows `taskkill /T /F`、POSIX `detached:true` + `kill(-pid)`；
@@ -117,7 +119,7 @@ npm run test:hardening      # 超时整树回收 / 输出截断 / 快照去重 /
 npm run test:cas            # 长验证并发合并 + 旧卡证据不得复用
 npm run test:roll           # 审计按大小滚动 + 流式校验 + 篡改可检出
 npm run test:prune          # 存储清理：只归档终态、可搬回、审计零变动
-npm run check:portability   # 跨平台：禁止 URL.pathname、进程树回收、路径归一
+npm run check:portability   # 通用安全静态检查：路径与进程树（不代表 macOS/Linux 已验证）
 npm run test:lang           # 产物语言体检的自检
 npm run test:package        # 包级端到端（真实 tarball + 干净安装 + 真实 MCP 握手）
 npm run check:full          # 对外产物全面体检

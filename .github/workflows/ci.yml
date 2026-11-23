@@ -7,15 +7,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Windows 是当前唯一支持与验证的平台；保留各步骤原有的 bash 语义。
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
-    # macOS 刚加入矩阵、尚无实机验收结论：先不阻塞主干（失败会在 job 上标红但不取消其它平台）。
-    # 等 docs/PORTABILITY.md 的清单在 Mac 上跑通后再移除这一行。
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest]
     steps:
       - uses: actions/checkout@v4
       # 必须固定 Node 版本：package.json 要求 >=22，而 runner 默认 Node 会随平台漂移
@@ -99,7 +101,7 @@ jobs:
   # 这个诉求更重要：单一包对外是一个统一的六平台产品，任何一处版本号 /
   # 文档 / 清单不一致都会直接暴露给用户。
   identity:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -153,14 +155,13 @@ jobs:
   # 现在起，Bridge 必须真起一遍、真发一遍 initialize + tools/list，
   # 断言拿回全部 19 个工具，否则本 job 变红。
   #
-  # 为什么还要跑 windows-latest：黑控制台窗口是 Windows 专属问题，
-  # windowsHide 只有在 Windows 上跑才有意义；ubuntu 只验协议链路。
+  # Windows 上同时验证协议链路与防黑窗行为；其它操作系统验证暂停。
   bridge:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     defaults:
       run:
         shell: bash
@@ -182,7 +183,7 @@ jobs:
   # 耗时较长，不在每次 push 跑；手动触发或发布前跑。
   mutation:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - run: node --version && npm --version
