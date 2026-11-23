@@ -630,14 +630,20 @@ if (process.platform !== 'win32') {
     }
     const unread = path.join(work, 'unread.txt')
     fs.writeFileSync(unread, '真实自有内容')
+    // macOS 的 TMPDIR 是 /var/...（真实路径 /private/var/...），git 返回的 root 是 realpath；
+    // 比较前统一解析符号链接，否则故障注入命中不了、F15 会误判成“没有报错”。
+    const realOrResolve = (p) => {
+      try { return fs.realpathSync(p) } catch { return path.resolve(p) }
+    }
+    const unreadReal = realOrResolve(unread)
     const originalOpen = fs.openSync
     fs.openSync = (...args) => {
-      if (path.resolve(String(args[0])) === path.resolve(unread))
+      if (realOrResolve(String(args[0])) === unreadReal)
         throw Object.assign(new Error('自有未跟踪读取故障'), { code: 'EIO' })
       return originalOpen(...args)
     }
     const preload = path.join(faultHome, 'owned-read-fault.cjs')
-    fs.writeFileSync(preload, `const fs=require('node:fs'),path=require('node:path');const original=fs.openSync;fs.openSync=(...args)=>{if(path.resolve(String(args[0]))===${JSON.stringify(path.resolve(unread))})throw Object.assign(new Error('owned read EIO'),{code:'EIO'});return original(...args)};`)
+    fs.writeFileSync(preload, `const fs=require('node:fs'),path=require('node:path');const real=(p)=>{try{return fs.realpathSync(p)}catch{return path.resolve(p)}};const target=${JSON.stringify(unreadReal)};const original=fs.openSync;fs.openSync=(...args)=>{if(real(String(args[0]))===target)throw Object.assign(new Error('owned read EIO'),{code:'EIO'});return original(...args)};`)
     const oldNodeOptions = process.env.NODE_OPTIONS
     process.env.NODE_OPTIONS = `${oldNodeOptions || ''} --require=${preload.replace(/\\/g, '/')}`.trim()
     try {
