@@ -2389,7 +2389,18 @@ function flowHomePrefix(cwd) {
   if (!home) return ''
   const top = gitTopLevel(cwd)
   if (!top) return ''
-  const rel = path.relative(top, path.resolve(home))
+  // 比较前两边都取规范长名：Windows 上 CARLOS_FLOW_HOME 可能是 8.3 短名（RUNNER~1），
+  // 而 git 给出的仓库根是长名（runneradmin）。不归一的话 path.relative 会算出
+  // “../../runneradmin/...” 这种跨盘似的路径，前缀排除静默失效，
+  // 于是状态目录（.flowhome/...）被当成越界改动，正常的 PASS 全被拦住。
+  const canon = (p) => {
+    try { return fs.realpathSync.native(p) } catch {
+      try { return fs.realpathSync(p) } catch { return p }
+    }
+  }
+  const topCanon = canon(path.resolve(top))
+  const homeCanon = canon(path.resolve(home))
+  const rel = path.relative(topCanon, homeCanon)
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return ''
   // 路径键用**平台感知**的那一把（card.js 的 pathKey）：
   // win32 上大小写不敏感、其它平台敏感 —— 无条件小写会在 POSIX 上
