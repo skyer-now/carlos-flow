@@ -1,4 +1,5 @@
 import { redact } from '../src/redact.js'
+import { writeFileAtomic } from '../src/fs-atomic.js'
 
 /**
  * 完工电子质检交付单生成器 (QA Sheet Generator)
@@ -153,7 +154,6 @@ export function generateQASheet(state = {}, notes = '', options = {}) {
  * - 原子写入并返回 sha256，导出是否成功由返回值如实报告。
  */
 export async function exportQASheet(state = {}, options = {}) {
-  const fs = await import('node:fs')
   const path = await import('node:path')
   const { createHash } = await import('node:crypto')
   const outDir = options.outDir
@@ -164,19 +164,9 @@ export async function exportQASheet(state = {}, options = {}) {
   const sessionId = clipText(options.sessionId || state.sessionId || 'unknown', 80).replace(/[^\w.-]+/g, '-') || 'unknown'
   const body = redactSheet(generateQASheet(state, options.notes || '', { stale: options.stale === true }))
   const file = path.join(outDir, `carlos-qa-sheet-${sessionId}.md`)
-  const tmp = path.join(outDir, `.carlos-qa-sheet-${process.pid}-${Date.now()}.tmp`)
   try {
-    fs.mkdirSync(outDir, { recursive: true })
-    const fd = fs.openSync(tmp, 'w')
-    try {
-      fs.writeFileSync(fd, body, 'utf8')
-      fs.fsyncSync(fd)
-    } finally {
-      fs.closeSync(fd)
-    }
-    fs.renameSync(tmp, file)
+    writeFileAtomic(file, body, { encoding: 'utf8' })
   } catch (e) {
-    try { fs.unlinkSync(tmp) } catch {}
     return { ok: false, reason: `写入失败：${e && e.code ? e.code : 'UNKNOWN'}` }
   }
   const sha256 = createHash('sha256').update(body, 'utf8').digest('hex')

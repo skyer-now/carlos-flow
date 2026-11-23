@@ -17,7 +17,7 @@ export const PROTOCOL = {
 |---|---|---|
 | T0 | 讨论 / 解释 / 概念澄清 | 直接答，不派发、不填卡，0 个子 Agent，无门禁 |
 | T1 | 只读调研（摸清代码现状） | 派 explore，1 个子 Agent，免门禁 |
-| T2 | 修改代码 / 配置 / 文档 | 留痕 → 派 executor → 派 auditor，2 个子 Agent，机械门禁 + 独立复核 |
+| T2 | 修改代码 / 配置 / 文档 | 留痕 → 派 executor → 派 2 个 auditor（Standards / Spec 双轴），3 个子 Agent；PASS 前两轴必须齐且无 FAIL |
 
 判定口径：要写文件 = T2；要读文件但不写 = T1；两者都不需要 = T0`,
 

@@ -14,6 +14,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { redact } from './redact.js'
+import { writeJsonAtomic } from './fs-atomic.js'
 
 export { redact }
 
@@ -53,28 +54,8 @@ function clip(text, max = MAX_TEXT) {
 }
 
 function atomicWriteJson(file, value) {
-  const dir = path.dirname(file)
-  fs.mkdirSync(dir, { recursive: true })
-  const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`)
-  const body = JSON.stringify(value, null, 2)
-  let fd = null
-  try {
-    fd = fs.openSync(tmp, 'w')
-    fs.writeFileSync(fd, body, 'utf8')
-    fs.fsyncSync(fd)
-    fs.closeSync(fd)
-    fd = null
-    fs.renameSync(tmp, file)
-  } catch (e) {
-    if (fd !== null) { try { fs.closeSync(fd) } catch {} }
-    try { fs.unlinkSync(tmp) } catch {}
-    throw e
-  }
-  // rename 后尽力刷目录项；失败不影响已成功的 rename，但不能因此谎报未写。
-  try {
-    const dfd = fs.openSync(dir, 'r')
-    try { fs.fsyncSync(dfd) } finally { fs.closeSync(dfd) }
-  } catch {}
+  // Windows 上 rename 可能被 Defender/索引器短暂占用：共享层有有界重试。
+  return writeJsonAtomic(file, value)
 }
 
 // 读路径也做上限：被外部放大的文件不整份读入内存。

@@ -203,6 +203,15 @@ describe('阶段三 · 任务工作区隔离', () => {
     assert.ok(!auditorPrompt.includes('task workspace:'), '只读审查者不需要工作区指令')
   })
 
+  it('Windows 上过长的目标路径被拒绝并给出可操作提示', () => {
+    if (process.platform !== 'win32') return
+    const longRoot = path.join(wsRoot, 'r'.repeat(190))
+    fs.mkdirSync(longRoot, { recursive: true })
+    const r = createTaskWorktree({ repoCwd: repo, taskId: 'task-long', root: longRoot, base, flowHome })
+    assert.equal(r.ok, false)
+    assert.ok(/MAX_PATH|路径过长/.test(r.reason), r.reason)
+  })
+
   it('未登记的工作区不会被清理（不做全局 prune）', () => {
     const orphan = path.join(wsRoot, 'orphan')
     fs.mkdirSync(orphan, { recursive: true })

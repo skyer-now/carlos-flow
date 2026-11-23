@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { writeJsonAtomic } from './fs-atomic.js'
 
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/
 
@@ -130,6 +131,13 @@ export function createTaskWorktree(o = {}) {
     if (!e || e.code !== 'ENOENT') return { ok: false, reason: '目标路径状态不可判定，拒绝创建' }
   }
   if (path.dirname(target) !== rootReal) return { ok: false, reason: '目标路径越出工作区根目录' }
+  // Windows 默认 MAX_PATH=260：给 git 元数据与后续文件名留余量，超限直接拒绝并给出可操作提示。
+  if (process.platform === 'win32' && target.length > 240) {
+    return {
+      ok: false,
+      reason: '目标工作区路径过长（' + target.length + ' > 240），Windows 上会撞 MAX_PATH；请换更短的工作区根目录，或开启系统 LongPathsEnabled。',
+    }
+  }
 
   const dirty = runGit(['status', '--porcelain'], repoRoot)
   if (!dirty.ok) return { ok: false, reason: '无法读取主工作区状态' }
@@ -156,7 +164,7 @@ export function createTaskWorktree(o = {}) {
   }
   try {
     fs.mkdirSync(taskDir(o.flowHome, id), { recursive: true })
-    fs.writeFileSync(registrationPath(o.flowHome, id), JSON.stringify(record, null, 2), 'utf8')
+    writeJsonAtomic(registrationPath(o.flowHome, id), record)
   } catch (e) {
     return { ok: false, reason: `登记写入失败：${e && e.code ? e.code : 'UNKNOWN'}` }
   }
@@ -167,7 +175,7 @@ export function createTaskWorktree(o = {}) {
     // 删登记会让孤儿工作区永久无法用本工具清理。
     const failed = { ...record, status: 'failed', error: (add.stderr || '').trim().slice(0, 300) }
     try {
-      fs.writeFileSync(registrationPath(o.flowHome, id), JSON.stringify(failed, null, 2), 'utf8')
+      writeJsonAtomic(registrationPath(o.flowHome, id), failed)
     } catch {}
     return { ok: false, reason: `git worktree add 失败：${failed.error}`, record: failed }
   }
@@ -180,7 +188,7 @@ export function createTaskWorktree(o = {}) {
 
   record.status = 'ready'
   try {
-    fs.writeFileSync(registrationPath(o.flowHome, id), JSON.stringify(record, null, 2), 'utf8')
+    writeJsonAtomic(registrationPath(o.flowHome, id), record)
   } catch (e) {
     return { ok: false, reason: `登记更新失败：${e && e.code ? e.code : 'UNKNOWN'}`, record }
   }
