@@ -70,21 +70,7 @@ jobs:
           CONCURRENCY_RETRY: 1
       # 门禁加固五件套：项目级敏感规则（只增不减）/ 状态锁退避与陈旧回收 / 负对照还原核对 / 零依赖 MCP 协议 / chip 两段式分发
       - name: 门禁加固回归（敏感规则 / 状态锁 / 负对照还原 / MCP 协议 / 两段式分发）
-        run: |
-          npm run test:sensitive
-          npm run test:lock
-          npm run test:falsify
-          npm run test:mcp
-          npm run test:dispatch
-          npm run test:hardening
-          npm run test:cas
-          npm run test:roll
-          npm run test:prune
-          npm run test:stage2
-          npm run test:worktree
-          npm run test:ast
-          npm run test:facade
-          npm run check:ast
+        run: npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch && npm run test:hardening && npm run test:cas && npm run test:roll && npm run test:prune && npm run test:stage2 && npm run test:worktree && npm run test:ast && npm run test:facade && npm run check:ast
         env:
           CARLOS_FLOW_MCP_ROOT: ${{ github.workspace }}
           CARLOS_FLOW_HOME: ${{ runner.temp }}/carlos-flow-home
@@ -126,16 +112,10 @@ jobs:
       - name: 跨平台可移植性（路径 / 进程树 / 归一）
         run: npm run check:portability
       - name: 行为兑现门禁（承诺 / 参数 / 重复注册）
-        run: |
-          npm run check:claims
-          npm run check:params
-          npm run check:no-dead-handler
+        run: npm run check:claims && npm run check:params && npm run check:no-dead-handler
       # 专项真实验证：真实 git 仓库 / 真实篡改 / 真实 bridge 隔离 / 真实安装
       - name: 专项真实验证（scope / 审计链 / bridge 隔离）
-        run: |
-          npm run test:scope
-          npm run test:audit
-          npm run test:bridge
+        run: npm run test:scope && npm run test:audit && npm run test:bridge
       # 产物语言体检：提交信息 / 源码注释必须是中文。
       # 2026-11-07 的事故根因正是「对话是中文的、但提交信息是英文的」——
       # 靠人扫「回复」发现不了，必须机器单独检查产物。
