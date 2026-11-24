@@ -1111,6 +1111,7 @@ async function executeVerifyCommand(cmd, cwd, options, env) {
     let settled = false
     let timeout
     let progress
+    let heartbeatProgress
     const cancel = () => {
       killProcessTree(child)
       finish({ ok: false, exitCode: -1, stderrText: '验证命令已取消' })
@@ -1120,6 +1121,7 @@ async function executeVerifyCommand(cmd, cwd, options, env) {
       settled = true
       clearTimeout(timeout)
       clearInterval(progress)
+      if (heartbeatProgress) clearInterval(heartbeatProgress)
       options.signal?.removeEventListener('abort', cancel)
       const out = truncateOutput(decodeOutputBytes(Buffer.concat(chunks.stdout)))
       const rawErr = decodeOutputBytes(Buffer.concat(chunks.stderr))
@@ -1151,6 +1153,15 @@ async function executeVerifyCommand(cmd, cwd, options, env) {
         return Number.isFinite(n) && n >= 200 ? n : 120000
       })()
     const started = Date.now()
+    if (typeof options.sendProgress === 'function' && options.progressToken !== undefined) {
+      const progressIntervalMs = Number(process.env.CARLOS_PROGRESS_INTERVAL_MS) || 2500
+      heartbeatProgress = setInterval(() => {
+        try {
+          const elapsedSec = Math.floor((Date.now() - started) / 1000)
+          options.sendProgress(elapsedSec, undefined, `验证命令运行中 (${elapsedSec}s)`)
+        } catch {}
+      }, progressIntervalMs)
+    }
     progress = setInterval(() => {
       try {
         process.stderr.write(

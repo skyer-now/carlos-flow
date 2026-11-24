@@ -23,6 +23,16 @@ export function startMcpClient({ entry, cwd, env = {}, surface = 'legacy' }) {
   const stderr = [];
   let nextId = 1;
   const noise = [];
+  const client = {
+    child,
+    request,
+    notify,
+    initialize,
+    close,
+    stderr,
+    noise,
+    onMessage: null,
+  };
 
   child.stdout.on("data", (d) => {
     buf += d.toString("utf8");
@@ -38,7 +48,10 @@ export function startMcpClient({ entry, cwd, env = {}, surface = 'legacy' }) {
         noise.push(line); // stdout 里出现非协议内容 = 违规
         continue;
       }
-      if (msg.id === undefined || msg.id === null) continue; // 通知
+      if (msg.id === undefined || msg.id === null) {
+        if (typeof client.onMessage === "function") client.onMessage(msg);
+        continue; // 通知
+      }
       const w = waiting.get(msg.id);
       if (!w) continue;
       waiting.delete(msg.id);
@@ -88,5 +101,5 @@ export function startMcpClient({ entry, cwd, env = {}, surface = 'legacy' }) {
     });
   }
 
-  return { child, request, notify, initialize, close, stderr, noise };
+  return client;
 }

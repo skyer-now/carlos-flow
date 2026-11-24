@@ -117,6 +117,8 @@ const TOOLS = [
           result = await runVerifyCommand(verifiedCmd, workdir, {
             timeoutMs: a.timeoutMs,
             isolateHome: a.isolateHome,
+            sendProgress: context?.sendProgress,
+            progressToken: context?.progressToken,
           })
         } finally {
           // 失败或异常不保留“运行中”，否则一次失败就会把工作区永久锁死。
@@ -227,7 +229,12 @@ const TOOLS = [
             sessionId,
             state.card.verify.cmd,
             workdir,
-            { timeoutMs: a.timeoutMs, isolateHome: a.isolateHome },
+            {
+              timeoutMs: a.timeoutMs,
+              isolateHome: a.isolateHome,
+              sendProgress: context?.sendProgress,
+              progressToken: context?.progressToken,
+            },
           )
         } catch (e) {
           // 负对照**抛异常**（如参数非法、工作区不可读）同样必须作废既有 last_falsify。

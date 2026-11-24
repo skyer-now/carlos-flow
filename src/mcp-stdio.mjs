@@ -160,10 +160,31 @@ export class StdioServer {
         try {
           // 关联位置而非 Host 授权；只转交白名单，不接纳 arguments 内的自报上下文。
           const c = params.carlosContext
+          const rawProgressToken = params?._meta?.progressToken
+          const progressToken = (typeof rawProgressToken === 'string' && rawProgressToken.length > 0) ||
+            (typeof rawProgressToken === 'number' && Number.isFinite(rawProgressToken))
+              ? rawProgressToken
+              : undefined
+          const sendProgress = progressToken !== undefined
+            ? (progress, total, msg) => {
+                const notif = {
+                  jsonrpc: "2.0",
+                  method: "notifications/progress",
+                  params: {
+                    progressToken,
+                    progress: typeof progress === 'number' ? progress : 0,
+                    ...(typeof total === 'number' ? { total } : {}),
+                    ...(typeof msg === 'string' && msg ? { message: msg } : {}),
+                  },
+                }
+                this.write(notif)
+              }
+            : undefined
           const context = c && typeof c === 'object' ? {
             session_id: c.session_id, workdir: c.workdir,
             workdir_is_local: c.workdir_is_local, workdir_is_read_only: c.workdir_is_read_only,
-          } : undefined
+            ...(progressToken !== undefined ? { progressToken, sendProgress } : {}),
+          } : (progressToken !== undefined ? { progressToken, sendProgress } : undefined)
           result = await this.callTool(name, args, context, runtime)
         } catch (e) {
           // 工具内部抛错 → 按 MCP 约定以「工具结果 + isError」返回，
