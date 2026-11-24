@@ -1,4 +1,4 @@
-// Presentation only: callers must finish evidence/state work before calling this.
+// 仅用于协议展示层：调用方必须在调用本模块前完成证据与状态提交。
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'

@@ -1,3 +1,32 @@
+## [3.2.0] - 2026-11-24 — 通信优化全量演进 (P1 输出保护 / P2 Progress 协议通知 / P3 复合事务)
+
+### ✨ 新增 | Added
+
+- **P1 输出保护与工件落盘 (Output Protection)**：
+  - `src/verify-output.js` 落地单流 4KB UTF-8 摘要安全折叠，按 Unicode 字符边界计算，彻底避免超大输出撑爆大模型上下文或打爆 IPC 传输通道。
+  - 私有工件落盘（POSIX 0700/0600，Windows 剥离继承设置独立 ACL），新增 `pruneArtifacts` 实现 30 份 / 7 天自动轮转清理，防止磁盘无界膨胀。
+  - 确保证据不变性：`output_hash` 与状态提交严格在展示层之前完成，摘要折叠 100% 保持原始指纹不变。
+  - 存储故障优雅降级：目录受阻或越界时自动回退原始文本并附带全中文告警。
+- **P2 MCP Progress 协议心跳通知 (Heartbeat Notifications)**：
+  - `src/mcp-stdio.mjs` 协议层接通 `params._meta.progressToken`，在长耗时验证期间周期发送标准 `notifications/progress` 通知。
+  - 严格边界安全：无 Token 保持完全静默；支持数字 `0` 边界 Token；命令退出在 `finish()` 中确定性销毁定时器。
+  - `src/handlers/verify.js` 将 Progress 上下文完整透传至 `runVerifyCommand` 与 `runNegativeControl`。
+- **P3 复合事务与快捷编排 (`pipeline_start`)**：
+  - `carlos_task` 门面扩展 `action: "pipeline_start"`，依次原子串联 `submit → claim → dispatch`，单次调用即可完成留痕、认领与派发。
+  - 阶段短路拦截：前序步骤校验不通过立即中断，不产生后续未授权状态。
+  - 分步回执快照与恢复指引：派发阶段受阻时保留前序成功快照，并提示无需重提任务卡。
+
+### 🔧 修复 | Fixed
+
+- 修复 `test/_mcp-client.mjs` 支持通知消息监听。
+- 完善 `FACADE_ACTIONS` 路由表与 Schema 枚举一致性，确保 25 个底层操作与门面动作严格双向覆盖。
+
+### ⚠️ 已知边界 | Known limits
+
+- 插件拦不住自由文本回答；要强制拦截需宿主出口钩子。
+- 互审默认只对 `dual` 强制，`single` 仅提示。
+- 原生 `flow_run_verify` 在当前宿主仍受固定哈希能力阻断，正式门禁 PASS 未取得。
+
 ## [3.1.0] - 2026-11-23 — 调研/方案互审接入实际路径与长期可用性加固
 
 ### ✨ 新增 | Added
@@ -398,6 +427,12 @@
 > Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), versioning follows [SemVer](https://semver.org/)
 
 ---
+
+## [3.2.0] - 2026-11-24 — 通信优化全量演进 (P1 输出保护 / P2 Progress 协议通知 / P3 复合事务)
+
+### ✨ 新增 | Added
+
+- （待补充）
 
 ## [2.27.0] - 2026-11-21 — 增加 WorkBuddy、Codex、Trae、Qoder 模板与 init 兼容初始化支持
 

@@ -8,19 +8,15 @@
 
 **Languages:** [English Documentation](README.en.md) | [中文说明](README.zh.md)
 
-## Stage one (2.28.1, local preparation)
-
-`src/index.js` assembles the service and validated routing. Real implementations live in `src/handlers/{gate,verify,audit,infra,facade}.js`; shared request compensation and the catalog preserve the original 26-tool order, descriptions and schemas. Facades also use argument validation. Structured recovery preserves supplied arguments/card facts and requires clarification rather than inventing authorization, scope or acceptance facts. Host permissions and UI remain unchanged. See [the stage report](docs/STAGE_1_REPORT.md) for verification and outstanding work; this is not a public release or installation.
-
 ---
 
-> **Mechanical Safety Gate & Plain-Language Guide for AI Coding Agents**
+> **Mechanical Safety Gate & Plain-Language Guide for AI Coding Agents on Windows**
 >
-> Turn "blind trust in Agent" into "**verifiable, auditable execution**" with zero learning curve.
+> Turn "blind trust in Agent" into "**verifiable, auditable, high-performance execution**" with zero learning curve.
 
 ---
 
-## Operating system support
+## Operating System Support
 
 Currently, only **Windows** is supported. CI and release workflows use only `windows-latest`; macOS / Linux validation is paused and support is not claimed. Retained generic path and process safety code does not mean those systems have been validated. See [platform support notes](docs/PORTABILITY.md). Developer-tool adapters do not imply real-host acceptance of every combination.
 
@@ -29,31 +25,46 @@ Currently, only **Windows** is supported. CI and release workflows use only `win
 When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or Cindy), you often face:
 * **Out-of-Scope Modifications**: You asked to fix a simple bug, but the AI rewrote half of your repository.
 * **Verification Theater**: The AI self-reports "all tests passed" without actually running any test command.
+* **Context Explosions**: Giant test logs flood model context windows, breaking IPC channels and draining tokens.
+* **Hanging Long-Running Tasks**: Silent channels during lengthy tests lead clients to kill execution prematurely.
 * **Complex Errors & Hard Rollbacks**: Mysterious error dumps with no plain explanation on how to revert.
 
-**Carlos Flow is a workflow gate and smart guide for AI coding on Windows**, providing mechanical guardrails and plain-language guidance for existing developer tools.
+**Carlos Flow is a workflow gate and smart guide for AI coding on Windows**, providing mechanical guardrails, communication optimizations, and plain-language guidance for existing developer tools.
 
 ---
 
-## 🌟 Highlights
+## 🌟 Highlights & New Features in v3.2.0
 
-### 1. Developer-Tool Adapters on Windows
-* Configuration adapters are provided for Cindy, OpenCode, Cursor, Cline, VS Code, and Claude Desktop; individual hosts still require validation.
-* Pure background assistance without console popups or resident background bloat.
+### 1. Communication Optimization & Protection
+* **P1 Output Protection & Private Artifact Storage**:
+  * **4KB UTF-8 Stream Summary**: Truncates large stdout/stderr outputs safely by Unicode codepoints with plain folding markers to protect model context.
+  * **Private Storage & Retention**: Full output is saved to private directories (`0700/0600` on POSIX, stripped inherited ACL on Windows) with automatic **30 copies / 7 days** rolling cleanup.
+  * **Zero Evidence Tampering**: Fingerprints (`output_hash` and workspace state) are calculated and committed before presentation, preserving 100% evidence integrity.
+  * **Graceful Degradation**: Transparently falls back to full output with plain warning if artifact storage fails.
+* **P2 MCP Progress Heartbeat Notifications**:
+  * **Standard Progress Notifications**: Ingests `params._meta.progressToken` and emits periodic `notifications/progress` during test runs to keep client channels active.
+  * **Strict Boundary Safety**: Completely silent without tokens; safely supports numeric token `0`; deterministically clears timers in `finish()`.
+* **P3 Composite Transactions (`pipeline_start`)**:
+  * **Atomic Pipeline Dispatch**: Sequentially coordinates `submit → claim → dispatch` in one call via `carlos_task(action: "pipeline_start")`.
+  * **Stage Short-Circuiting**: Immediately aborts on preceding validation errors without leaving unauthorized states.
+  * **Step Snapshots & Recovery Guidance**: Returns structured step receipts and actionable notes on dispatch errors without requiring card resubmission.
 
-### 2. Mechanical Guardrails (Fail-Closed)
+### 2. Advisory Review System (Lightweight Dual-Axis Review)
+* **Evidence Axis**: Audits whether searches were actually conducted, sources support claims, and statements match proofs.
+* **Feasibility Axis**: Audits plan soundness, technical feasibility, blast radius, and verifiable rollback paths.
+* **Lightweight Rule-Based Engine**: Triggers `none` for read-only queries, `single` for troubleshooting, and `dual` for high-risk plans with topic cooldowns and 24h budget limits.
+
+### 3. High-Level Facade Architecture
+* **`carlos_task`**: Manages requirements, claims, composite dispatch, and results (`submit`, `claim`, `dispatch`, `start`, `pipeline_start`, `protocol`, `add_user_msg`, `save_result`).
+* **`carlos_verify`**: Manages execution, negative control (falsification), and scope checks (`run`, `falsify`, `check_scope`, `trigger_check`, `diff_hunks`).
+* **`carlos_review`**: Manages dual-axis audits, verdicts, and advisory reviews (`axes`, `submit`, `guard`, `verdict`, `audit`, `advisory_axes`, `advisory_submit`, `advisory_guard`).
+* **`carlos_manage`**: Manages status, cancellation, rollback plans, and storage metrics (`status`, `cancel`, `revert`, `stats`, `bypass`, `mode`).
+
+### 4. Mechanical Guardrails (Fail-Closed)
 * **Scope Enforcer**: Automatically blocks out-of-scope edits at runtime.
 * **Evidence-Driven Testing**: Spawns real test suites (`verify.cmd`); no valid pass proof means no completion.
 * **Tamper-Evident Audit Trail**: SHA-256 chained logs (`prevHash` → `hash`).
 * **Separation of Duties**: Implementers (`executor`) cannot approve their own work; independent review (`auditor`) is mandatory.
-* **15 Anti-Pattern Rules**: Comprehensive rules covering asset credentials (R1-R3), portability (R4-R6), destructive commands (R7-R10), and AI-specific coding cheats like assertion stripping, phantom dependencies, and lazy placeholders (R11-R15).
-* **Dual-Track Rollout & Kill-Switch**: Full support for strict `enforce`, observation-only `shadow`, and emergency `bypass` modes with live health dashboard and alarm thresholds.
-
-### 3. Smart Plain-Language Guidance
-* **Plain Error Explanations**: Converts errors into clear steps: *Why it stopped + What caused it + How to continue*.
-* **Semantic Side-Effect Triage**: Distinguishes read-only questions from real mutations to prevent accidental locks.
-* **Multi-Turn Context Resolution**: Understands short commands like "Let's do it" by auto-extracting file paths from recent dialogue.
-* **Verifiable Revert & Cancel**: Cancel immediately; "Revert" first produces a restore plan and only restores the pre-task snapshot after you confirm.
 
 ---
 
@@ -71,47 +82,38 @@ carlos-flow init --target opencode  # OpenCode
 carlos-flow init --target cursor    # Cursor / Windsurf
 carlos-flow init --target vscode    # VS Code
 carlos-flow init --target cline     # Cline / Claude Desktop
+carlos-flow init --target workbuddy # Tencent WorkBuddy
+carlos-flow init --target codex     # OpenAI Codex CLI
+carlos-flow init --target trae      # ByteDance Trae
+carlos-flow init --target qoder     # Alibaba Qoder
 ```
 
-### 3. Verify Status
+### 3. Verify Server Status
+Run in any terminal:
 ```bash
 carlos-flow flow_status '{"sessionId":"test"}'
 ```
+Returning `"ok": true` confirms the gate service is ready.
 
 ---
 
-## ⚙️ The 6-Step Closed Loop
+## ⚙️ 6-Step Closed-Loop Workflow
 
 ```
-1. Record & Card      2. Claim Entry        3. Snapshot & Dispatch
-(Goal & Scope)     →  (Get executor role) → (Auto workspace backup)
-                                                   │
-                                                   ▼
-6. Safe Delivery       5. Dual-Axis Audit    4. Real Verification
-(PASS or Revert)   ← (Standards & Spec)   ← (Run tests & grab proof)
+  1. Record Requirement     2. Claim Ticket         3. Dispatch & Snapshot
+(State Goals & Scope)   →  (Acquire Executor)   →  (Auto Workspace Snapshot)
+                                                           │
+                                                           ▼
+  6. Final Delivery         5. Dual-Axis Audit      4. Real Verification
+(PASS / Revert Plan)    ←  (Standards & Spec)   ←  (Spawn Real Test Suite)
 ```
-
----
-
-## ❓ FAQ
-
-**Q: Does Carlos Flow slow down my PC or AI?**  
-A: No. The core engine is built with lightweight local JavaScript. Each decision takes **less than 2ms**, with zero external network or model token overhead.
-
-**Q: What if I triggered the gate by accident?**  
-A: Reply **"Cancel gate"** to release the session immediately, or **"Revert"** to generate a restore plan; the code is restored only after you confirm it.
+*(💡 Use `carlos_task(action: "pipeline_start")` to execute steps 1–3 in one call)*
 
 ---
 
 ## 📚 Documentation
 
-* [v2.22.0 Release Overview & Evolution Guide](./docs/RELEASE_v2.22.0.md) — Comprehensive guide, architectural shifts, and tool mapping
-* [Smart Trigger Guide](./TRIGGER_GUIDE.md) — Scoring, side-effect triage, and dual-threshold decisions
-* [Migration Guide](./MIGRATION.md) — Upgrading smoothly from older versions
-* [Changelog](./CHANGELOG.md) — Detailed version release notes
-
----
-
-## 📄 License
-
-MIT © Carlos Flow Contributors
+* [Trigger Guide](./TRIGGER_GUIDE.md) —— Intent classification, side-effect triage, and dual-threshold decisions
+* [Migration Guide](./MIGRATION.md) —— Smooth upgrade from older architectures
+* [Changelog](./CHANGELOG.md) —— Full version history
+* [Release Notes](./RELEASE_NOTES.md) —— Latest release highlights and fixes
