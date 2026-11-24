@@ -23,6 +23,7 @@ import {
   staleCaseIdentity,
   FLOW_HOME,
 } from './shared.js'
+import { presentVerifyOutput } from '../verify-output.js'
 import { collectVerifyFailure } from '../failure-memory.js'
 import { resolveTaskWorkdir, markTaskRunning, clearTaskRunning } from '../worktree.js'
 const TOOLS = [
@@ -181,10 +182,7 @@ const TOOLS = [
           } catch {}
         }
         return ok({
-          ok: result.ok,
-          exitCode: result.exitCode,
-          stdout: result.stdout,
-          stderr: result.stderr,
+          ...await presentVerifyOutput(result, { flowHome: FLOW_HOME, sessionId, outputHash }),
           cwd: workdir || process.cwd(),
         })
       } catch (e) {

@@ -16,6 +16,7 @@
     "./trigger-config": "./trigger-config.usable.json"
   },
   "scripts": {
+    "test:comm-output": "node test/comm-output.test.mjs",
     "test:handlers": "node test/handler-parity.mjs",
     "test": "node test/smoke.js",
     "test:e2e": "node test/e2e-carlos.mjs",
@@ -25,7 +26,7 @@
     "test:concurrency": "node test/concurrency-e2e.mjs",
     "test:ui": "node test/verify-ui.mjs",
     "test:acceptance": "node test/e2e-acceptance.mjs",
-    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean && npm run test:ui && npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch && npm run test:hardening && npm run test:cas && npm run test:roll && npm run test:prune && npm run test:stage2 && npm run test:unit && npm run test:worktree && npm run test:ast && npm run test:facade && npm run test:atomic && npm run test:encoding && npm run test:advisory && npm run test:advisory-int && npm run test:advisory-mut && npm run test:windows",
+    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean && npm run test:ui && npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch && npm run test:hardening && npm run test:cas && npm run test:roll && npm run test:prune && npm run test:stage2 && npm run test:unit && npm run test:worktree && npm run test:ast && npm run test:facade && npm run test:atomic && npm run test:encoding && npm run test:advisory && npm run test:advisory-int && npm run test:advisory-mut && npm run test:windows && npm run test:comm-output",
     "test:mutation": "node scripts/mutation-check.mjs",
     "sync:readme": "node scripts/sync-readme.mjs",
     "check:readme": "node scripts/sync-readme.mjs --check",
