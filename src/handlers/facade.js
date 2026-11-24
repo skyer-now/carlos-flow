@@ -12,8 +12,8 @@ const TOOLS = [
       properties: {
         action: {
           type: 'string',
-          enum: ['submit', 'claim', 'dispatch', 'start', 'protocol', 'add_user_msg', 'save_result'],
-          description: '操作类型：submit/claim/dispatch/start/protocol/add_user_msg/save_result',
+          enum: ['submit', 'claim', 'dispatch', 'start', 'pipeline_start', 'protocol', 'add_user_msg', 'save_result'],
+          description: '操作类型：submit/claim/dispatch/start/pipeline_start/protocol/add_user_msg/save_result',
         },
         sessionId: { type: 'string', description: '会话 ID' },
         goal: { type: 'string', description: '任务目标' },
@@ -87,6 +87,118 @@ const TOOLS = [
       void a.stdout
       void a.stderr
       void a.code
+
+      if (action === 'pipeline_start') {
+        const sid = sessionId || 'unknown'
+        const roleToClaim = role || 'executor'
+        const steps = {}
+
+        function parseToolResult(res) {
+          if (!res) return { ok: false, message: '未收到工具响应' }
+          if (res.isError === true) {
+            const rawText = (res.content && res.content[0] && res.content[0].text) || '工具执行出错'
+            return { ok: false, message: rawText, isError: true }
+          }
+          const rawText = (res.content && res.content[0] && res.content[0].text) || ''
+          try {
+            return JSON.parse(rawText)
+          } catch {
+            return { ok: true, raw: rawText }
+          }
+        }
+
+        // Step 1: Submit (留痕)
+        const submitArgs = { ...args }
+        delete submitArgs.action
+        delete submitArgs.role
+        delete submitArgs.message
+        delete submitArgs.run
+        const submitRes = await callTool('flow_submit_requirement', submitArgs, context, runtime)
+        if (submitRes && submitRes.routed) {
+          // mock router in testing harness
+          return submitRes
+        }
+        const submitJson = parseToolResult(submitRes)
+        steps.submit = submitJson
+        if (!submitJson || submitJson.ok !== true) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                pipeline: 'pipeline_start',
+                failed_step: 'submit',
+                error: (submitJson && (submitJson.reason || submitJson.message)) || '留痕提交失败',
+                steps,
+              }, null, 2),
+            }],
+            isError: true,
+          }
+        }
+
+        // Step 2: Claim (认领名额)
+        const claimArgs = { sessionId: sid, role: roleToClaim }
+        const claimRes = await callTool('flow_claim', claimArgs, context, runtime)
+        const claimJson = parseToolResult(claimRes)
+        steps.claim = claimJson
+        if (!claimJson || claimJson.ok !== true) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                pipeline: 'pipeline_start',
+                failed_step: 'claim',
+                error: (claimJson && (claimJson.reason || claimJson.message)) || '角色认领失败',
+                steps,
+              }, null, 2),
+            }],
+            isError: true,
+          }
+        }
+
+        // Step 3: Dispatch (派发执行)
+        const dispatchArgs = {
+          sessionId: sid,
+          role: roleToClaim,
+          message: a.message,
+          cwd: a.cwd,
+          run: a.run,
+        }
+        const dispatchRes = await callTool('flow_dispatch', dispatchArgs, context, runtime)
+        const dispatchJson = parseToolResult(dispatchRes)
+        steps.dispatch = dispatchJson
+        if (!dispatchJson || dispatchJson.ok !== true) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                pipeline: 'pipeline_start',
+                failed_step: 'dispatch',
+                error: (dispatchJson && (dispatchJson.reason || dispatchJson.message)) || '任务派发失败',
+                note: '任务卡与认领已生效，请修复派发条件后重试 dispatch，无需重新提交任务卡',
+                steps,
+              }, null, 2),
+            }],
+            isError: true,
+          }
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              pipeline: 'pipeline_start',
+              steps,
+              prompt: dispatchJson.prompt,
+              snapshot_count: Array.isArray(dispatchJson.snapshot) ? dispatchJson.snapshot.length : 0,
+            }, null, 2),
+          }],
+        }
+      }
+
       const targetTool = FACADE_ACTIONS.carlos_task[action]
       if (!targetTool) return fail('未知 action：' + action)
       const forwarded = { ...args }
@@ -263,6 +375,7 @@ export const FACADE_ACTIONS = Object.freeze({
   carlos_task: Object.freeze({
     submit: 'flow_submit_requirement',
     start: 'flow_submit_requirement',
+    pipeline_start: 'flow_submit_requirement',
     claim: 'flow_claim',
     dispatch: 'flow_dispatch',
     protocol: 'flow_protocol',
