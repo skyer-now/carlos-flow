@@ -10,7 +10,7 @@
 
 ---
 
-> **Mechanical Safety Gate & Plain-Language Guide for AI Coding Agents on Windows**
+> **The AI Coding Guardian & Safety Guide for Windows**
 >
 > Turn "blind trust in Agent" into "**verifiable, auditable, high-performance execution**" with zero learning curve.
 
