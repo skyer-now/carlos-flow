@@ -81,6 +81,24 @@ if (serverVersion !== pkg.version) die(`握手版本 ${serverVersion} 与 packag
 if (toolNames.length < 4) die(`tools/list 只拿到 ${toolNames.length} 个工具：${toolNames.join(',') || '空'}`)
 console.log(`握手版本 = ${serverVersion}｜工具面 = ${toolNames.join(',')}`)
 
+// ---- 校验 npm latest 标签与 Git Tag 一致性 ----
+try {
+  const latestOut = spawnSync('npm', ['view', pkg.name, 'dist-tags.latest'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    shell: process.platform === 'win32',
+    timeout: 30000,
+  })
+  const latestVer = String(latestOut.stdout || '').trim()
+  if (latestVer && latestVer !== pkg.version) {
+    console.log(`⚠️  npm latest (${latestVer}) 尚未指向当前发布版本 (${pkg.version})，可能存在发布传播延迟`)
+  } else if (latestVer) {
+    console.log(`✅ npm latest 已正确指向 ${latestVer}`)
+  }
+} catch {
+  /* 仅作一致性提醒，网络探测异常不阻塞安装验证主流程 */
+}
+
 // 产物合法性：tarball 里不能混进本机运维产物
 if (fs.existsSync(path.join(pkgDir, '.syncd.lock'))) die('安装产物里含 .syncd.lock（本机运维锁不该进包）')
 

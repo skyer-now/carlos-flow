@@ -83,6 +83,20 @@ if (pkg) {
   const topVer = (changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m) || [])[1];
   if (topVer === ver) pass(`CHANGELOG.md 顶部 = ${topVer}`);
   else fail(`CHANGELOG.md 顶部 = ${topVer || "(提取不到)"}，期望 ${ver}`);
+
+  // 检查双语 README 顶部的 Version Badge 是否与 package.json 一致
+  const checkBadge = (filename, content) => {
+    if (!content) return fail(`${filename} 读不到`);
+    const badgeMatch = content.match(/img\.shields\.io\/badge\/version-([^-\s)]+)-blue/i);
+    const badgeVer = badgeMatch ? badgeMatch[1] : null;
+    if (badgeVer === ver) {
+      pass(`${filename} 顶部 Version Badge = ${badgeVer}`);
+    } else {
+      fail(`${filename} 顶部 Version Badge = ${badgeVer || "(未提取到)"}，期望 ${ver}`);
+    }
+  };
+  checkBadge("README.md", readText(join(ROOT, "README.md")));
+  checkBadge("README.zh.md", readText(join(ROOT, "README.zh.md")));
 }
 
 // ---- 3. 文档一致性 ----
