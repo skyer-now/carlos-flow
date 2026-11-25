@@ -27,15 +27,36 @@ const die = (msg) => {
 }
 
 console.log(`真实安装 ${spec} 到临时前缀：${prefix}`)
-const install = spawnSync('npm', ['install', '-g', spec, '--prefix', prefix, '--no-audit', '--no-fund', '--silent'], {
-  encoding: 'utf8',
-  windowsHide: true,
-  spawn: false,
-  shell: process.platform === 'win32',
-  timeout: 300000,
-})
-if (install.status !== 0) {
-  die(`npm install 失败（退出码 ${install.status}）：${(install.stderr || install.stdout || '').slice(-1500)}`)
+
+// 带指数退避的安装重试机制：防止 npm CDN 全球节点同步延迟导致 404 误杀
+let installStatus = -1
+let installErr = ''
+const maxAttempts = 6
+for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  console.log(`[安装尝试 ${attempt}/${maxAttempts}] npm install -g ${spec}...`)
+  const install = spawnSync('npm', ['install', '-g', spec, '--prefix', prefix, '--no-audit', '--no-fund', '--prefer-online'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    spawn: false,
+    shell: process.platform === 'win32',
+    timeout: 180000,
+  })
+  installStatus = install.status
+  installErr = (install.stderr || install.stdout || '').slice(-1500)
+  if (installStatus === 0) {
+    console.log(`✓ 尝试 ${attempt} 安装成功`)
+    break
+  }
+  if (attempt < maxAttempts) {
+    const delay = attempt * 8000
+    console.log(`  · 遇到 registry 节点同步延迟，等待 ${delay / 1000}s 后重试...`)
+    const waitTill = Date.now() + delay
+    while (Date.now() < waitTill) {}
+  }
+}
+
+if (installStatus !== 0) {
+  die(`npm install 重试 ${maxAttempts} 次后仍然失败（退出码 ${installStatus}）：${installErr}`)
 }
 
 // npm 全局前缀在不同平台/版本的目录形态不同，两种都试

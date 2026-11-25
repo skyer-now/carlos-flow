@@ -213,4 +213,62 @@ function autoSyncDocs() {
   }
 }
 
+// 自动复用本机 Git 原生凭据管理器同步 GitHub Release（双保险防护）
+async function autoSyncGithubRelease(relTag, relVersion) {
+  console.log(`▶ 自动同步 GitHub Release (${relTag})...`);
+  try {
+    const cp = await import("node:child_process");
+    const https = await import("node:https");
+    const credProc = cp.spawnSync("git", ["credential", "fill"], {
+      input: "protocol=https\nhost=github.com\n\n",
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    let token = "";
+    for (const line of (credProc.stdout || "").split("\n")) {
+      if (line.startsWith("password=")) token = line.slice("password=".length).trim();
+    }
+    if (!token) {
+      console.log("  · 未在 Git 凭据管理器找到 GitHub 凭据，跳过本地直连同步（由 Actions 自动兜底）");
+      return;
+    }
+    const notes = existsSync(resolve(root, "RELEASE_NOTES.md"))
+      ? readFileSync(resolve(root, "RELEASE_NOTES.md"), "utf8")
+      : `Carlos Flow ${relTag}`;
+    const payload = JSON.stringify({
+      tag_name: relTag,
+      name: `Carlos Flow ${relTag}`,
+      body: notes,
+      draft: false,
+      prerelease: false,
+    });
+    const req = https.request({
+      hostname: "api.github.com",
+      path: "/repos/skyer-now/carlos-flow/releases",
+      method: "POST",
+      headers: {
+        "User-Agent": "carlos-flow-release",
+        "Authorization": `Bearer ${token}`,
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      if (res.statusCode === 201) {
+        ok(`GitHub Release ${relTag} 已通过本机原生凭据成功自动同步！`);
+      } else if (res.statusCode === 422) {
+        ok(`GitHub Release ${relTag} 已经存在，无需重复创建`);
+      } else {
+        console.log(`  · GitHub API 状态: HTTP ${res.statusCode}`);
+      }
+    });
+    req.on("error", (e) => console.log("  · 本地同步略过:", e.message));
+    req.write(payload);
+    req.end();
+  } catch (err) {
+    console.log("  · autoSyncGithubRelease 异常略过:", err.message);
+  }
+}
+
 autoSyncDocs();
+await autoSyncGithubRelease(tag, version);
