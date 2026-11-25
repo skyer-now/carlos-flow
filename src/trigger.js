@@ -77,6 +77,25 @@ const DEFAULT_CONFIG = {
   contextRelevanceWeight: 0.3,
   userIntentWeight: 0.2,
 
+  // 情绪与怀疑度感知参数 (Sentiment & Doubt Perception)
+  sentimentWeights: {
+    // 强烈不满与直接否定 (高权重 +15~25)
+    '根本不对': 20, '完全错了': 20, '非常不满意': 25, '很失望': 20,
+    '在说谎': 25, '在吹牛': 20, '不要瞎改': 25, '全搞崩了': 25,
+    '不行不行': 20, '差评': 20, '怎么搞的': 18, '你在干嘛': 18,
+    '不要只凭': 15, '胡说八道': 25,
+
+    // 质问与怀疑句式 (中高权重 +10~18)
+    '你确定': 15, '真的跑通': 18, '到底有没有': 15, '为什么还没有': 15,
+    '怎么可能': 12, '有没有核对': 15, '不要只凭口头': 18, '到底改了没有': 18,
+    '连这都不知道': 15, '为什么还在报错': 18, '反复': 10,
+
+    // 连续标点情绪强化 (+8~15)
+    '？？？': 15, '???': 15, '！！！': 10, '!!!': 10,
+    '？？': 10, '??': 10, '！！': 8, '!!': 8
+  },
+  sentimentWeight: 0.25,            // 综合评分中情绪维度的权重
+
   // 决策阈值
   triggerThreshold: 15,             // 触发阈值（0-100）
   autoTriggerThreshold: 25,         // 自动触发阈值（高中意图时）
@@ -628,40 +647,100 @@ class TriggerScorer {
   }
 
   /**
+   * 计算情绪与怀疑度分数 (Sentiment & Doubt Scorer)
+   *
+   * @param {string} message 用户输入
+   * @param {string[]} [recentMessages] 上下文最近历史消息（用于追问/疲劳强化）
+   */
+  calculateSentimentScore(message, recentMessages = []) {
+    const lowerMsg = String(message || '').toLowerCase();
+    let score = 0;
+    let matchedPatterns = [];
+
+    // 1. 词表匹配
+    if (config.sentimentWeights) {
+      Object.entries(config.sentimentWeights).forEach(([keyword, weight]) => {
+        if (lowerMsg.includes(keyword.toLowerCase())) {
+          score += weight;
+          matchedPatterns.push(keyword);
+        }
+      });
+    }
+
+    // 2. 连续质问标点强化（如？？？、？？、！！！）
+    if (/[?？]{2,}/.test(message)) {
+      score += 15;
+      matchedPatterns.push('连续问号');
+    }
+    if (/^[?？\s!！]+$/.test(message.trim())) {
+      score += 15; // 纯标点质问刷屏
+      matchedPatterns.push('标点刷屏');
+    }
+
+    // 3. 上下文反复追问强化：若上一轮也是质问/否定，追加怀疑权重 (+10)
+    if (Array.isArray(recentMessages) && recentMessages.length > 0) {
+      const lastMsg = String(recentMessages[recentMessages.length - 1] || '');
+      if (/[?？]|不行|不对|怎么|为什么|搞什么|错误|改了没有/.test(lastMsg)) {
+        score += 10;
+        matchedPatterns.push('连续追问上下文');
+      }
+    }
+
+    // 标准化到 0-40 范围
+    const normalizedScore = Math.min(score, 40);
+
+    return {
+      score: normalizedScore,
+      rawScore: score,
+      matchedPatterns,
+      level: normalizedScore >= 20 ? 'high_doubt' : (normalizedScore > 0 ? 'mild_doubt' : 'neutral'),
+      maxSentimentScore: 40
+    };
+  }
+
+  /**
    * 综合评分
    *
    * @param {string} message 用户输入
-   * @param {object} context 上下文（complexity 等）
+   * @param {object} context 上下文（complexity, recentMessages 等）
    * @param {number} historyCount 当前会话触发历史条数（由 L3 传入，保证与 L1 同会话）
    */
   calculateImpulseScore(message, context = {}, historyCount = 0) {
     const keywordResult = this.calculateKeywordScore(message);
     const contextResult = this.calculateContextRelevance(message, context);
     const intentResult = this.calculateUserIntent(message, historyCount);
+    const sentimentResult = this.calculateSentimentScore(message, context.recentMessages || []);
 
-    const totalScore = 
+    // 基础三项权重（保持与原基线完全一致，不压缩流程词权重）
+    const baseScore = 
       keywordResult.score * (1 - config.contextRelevanceWeight - config.userIntentWeight) +
       contextResult.score * config.contextRelevanceWeight +
       intentResult.score * config.userIntentWeight;
 
+    // 情绪与怀疑度额外叠加增益（0-15分），在用户不满或质问时为触发增力
+    const sentimentBonus = (sentimentResult.score / (sentimentResult.maxSentimentScore || 40)) * 15;
+    const totalScore = Math.min(100, Math.round(baseScore + sentimentBonus));
+
     return {
-      score: Math.round(totalScore),
+      score: totalScore,
       breakdown: {
         keyword: keywordResult,
         context: contextResult,
-        intent: intentResult
+        intent: intentResult,
+        sentiment: sentimentResult
       },
-      confidence: this.calculateConfidence(keywordResult, contextResult, intentResult)
+      confidence: this.calculateConfidence(keywordResult, contextResult, intentResult, sentimentResult)
     };
   }
 
   /**
    * 计算置信度
    */
-  calculateConfidence(keyword, context, intent) {
+  calculateConfidence(keyword, context, intent, sentiment = null) {
     const allMatched = keyword.matchedKeywords.length + 
                       context.matchedContext.length + 
-                      (intent.intentType !== 'generic' ? 1 : 0);
+                      (intent.intentType !== 'generic' ? 1 : 0) +
+                      (sentiment && sentiment.matchedPatterns.length > 0 ? 1 : 0);
     
     if (allMatched === 0) return 0.3; // 低置信度
     if (allMatched <= 2) return 0.6;  // 中等置信度
@@ -716,14 +795,20 @@ class TriggerDecisionEngine {
     }
 
     // 3. 决策逻辑
-    const threshold = score >= config.autoTriggerThreshold && impulseResult.confidence >= 0.8
+    let baseThreshold = score >= config.autoTriggerThreshold && impulseResult.confidence >= 0.8
       ? config.autoTriggerThreshold
       : config.triggerThreshold;
+
+    // 情绪与怀疑度自适应：高怀疑度时（high_doubt）自动下调阈值 20%，让防线更敏锐
+    const sentimentLevel = impulseResult.breakdown?.sentiment?.level;
+    if (sentimentLevel === 'high_doubt') {
+      baseThreshold = Math.max(8, baseThreshold - 5);
+    }
 
     // 反馈学习：负反馈多 → 抬高触发阈值（更保守）；正反馈多 → 降低阈值（更灵敏）
     // 两个来源：当前会话即时反馈 + 配置持久化偏移
     const feedbackAdj = this.getFeedbackThresholdAdjustment() + (Number(config.feedbackThresholdOffset) || 0);
-    const effectiveThreshold = Math.max(1, threshold + feedbackAdj);
+    const effectiveThreshold = Math.max(1, baseThreshold + feedbackAdj);
 
     let decision;
     let action = null;
@@ -758,7 +843,7 @@ class TriggerDecisionEngine {
       confidence: impulseResult.confidence,
       action,
       breakdown: impulseResult.breakdown,
-      reason: decision === 'trigger' ? '触发评分达标' : `评分${score}低于阈值${threshold}`
+      reason: decision === 'trigger' ? '触发评分达标' : `评分${score}低于阈值${effectiveThreshold}`
     };
     // 决策 → 激活：把判定翻译成可执行的 MCP 动作序列
     outcome.activationPlan = this.buildActivationPlan(outcome, message, sid);
@@ -991,6 +1076,8 @@ class TriggerDecisionEngine {
 }
 
 // ============ 导出接口 ============
+export { TriggerScorer, TriggerDecisionEngine, DynamicTriggerManager };
+
 export const TriggerEngine = {
   /**
    * 创建触发引擎实例
