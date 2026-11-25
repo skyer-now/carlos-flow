@@ -203,7 +203,14 @@ ok(`${SELF_REPO_NAME} ${tag} 已推送（GitHub Actions 将自动创建 Release 
 step("完成");
 console.log(`  关注 CI：https://github.com/${pkg.repository.url.split("github.com/")[1]?.replace(".git", "") || "skyer-now/carlos-flow"}/actions`);
 // Auto-hook: 同步审计归档与更新版本记录
-async function autoSyncDocs() { 
-  console.log("Syncing Audit & Docs...");
-  // 此处整合审计合并逻辑
+function autoSyncDocs() { 
+  console.log("▶ 同步文档与多语言副本...");
+  try {
+    runOrFail("node", ["scripts/sync-readme.mjs"], { cwd: root }, "sync-readme");
+    ok("多语言 README 一致性同步完成");
+  } catch (e) {
+    console.error("  ✗ sync-readme 执行异常：", e.message);
+  }
 }
+
+autoSyncDocs();

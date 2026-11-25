@@ -725,7 +725,7 @@ export function pruneSnapshots(sid, maxVersions = SNAPSHOT_KEEP_VERSIONS) {
 
 // 快照：存在→复制到 RUNS_DIR/<id>/backup/sha-<hash>_<name>（内容相同只存一份）；
 // 不存在→created:true；复制失败→error 且不中断其余
-export function snapshotFiles(sid, paths, cwd) {
+export function snapshotFiles(sid, paths, cwd, cardTs = null) {
   return withBackupTransaction(sid, (bdir) => {
     const previous = backupManifestEntries(bdir)
     const entries = []
@@ -734,7 +734,9 @@ export function snapshotFiles(sid, paths, cwd) {
       const ts = new Date().toISOString()
       const orig = path.isAbsolute(p) ? p : path.join(cwd || process.cwd(), p)
       if (!fs.existsSync(orig)) {
-        entries.push({ ts, orig, backup: null, created: true })
+        const item = { ts, orig, backup: null, created: true }
+        if (cardTs) item.card_ts = cardTs
+        entries.push(item)
         continue
       }
       try {
@@ -750,7 +752,7 @@ export function snapshotFiles(sid, paths, cwd) {
         } else {
           prepareBackupBlob(bdir, backup, buf)
         }
-        entries.push({
+        const item = {
           ts,
           orig,
           backup,
@@ -758,7 +760,9 @@ export function snapshotFiles(sid, paths, cwd) {
           sha,
           bytes: buf.length,
           deduped,
-        })
+        }
+        if (cardTs) item.card_ts = cardTs
+        entries.push(item)
       } catch (e) {
         entries.push({ ts, orig, error: String(e) })
       }
@@ -771,7 +775,7 @@ export function snapshotFiles(sid, paths, cwd) {
   })
 }
 
-export function readManifest(sid) {
+export function readManifest(sid, filterCardTs = null) {
   const file = path.join(RUNS_DIR, sanitizeId(sid), 'backup', 'manifest.jsonl')
   try {
     const raw = fs.readFileSync(file, 'utf8')
@@ -780,7 +784,11 @@ export function readManifest(sid) {
       const t = line.trim()
       if (!t) continue
       try {
-        all.push(JSON.parse(t))
+        const parsed = JSON.parse(t)
+        if (filterCardTs && parsed.card_ts && parsed.card_ts !== filterCardTs) {
+          continue
+        }
+        all.push(parsed)
       } catch {}
     }
     // 只返回每个 orig 的最新条目（按 ts 去重）

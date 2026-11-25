@@ -556,7 +556,9 @@ const TOOLS = [
       try {
         const a = args || {}
         const sessionId = a.sessionId || 'unknown'
-        const entries = readManifest(sessionId)
+        const state = loadState(sessionId)
+        const filterCardTs = state && state.card_ts ? state.card_ts : null
+        const entries = readManifest(sessionId, filterCardTs)
         const plan = []
         for (const entry of entries) {
           if (!entry) continue
@@ -572,6 +574,7 @@ const TOOLS = [
         }
         return ok({
           sessionId,
+          card_ts: filterCardTs,
           count: plan.length,
           plan,
           note: '这是还原计划，不会自动执行；实际还原需人工确认后按 plan 操作。',
