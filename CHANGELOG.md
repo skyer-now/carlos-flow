@@ -1,3 +1,15 @@
+## [3.3.1] - 2026-11-26 — 情绪与怀疑感知引擎补齐英文质问词表 (中英双语对齐)
+
+### ✨ 新增 | Added
+
+- **英文情绪与怀疑度词表对齐 (English Sentiment & Doubt Scorer)**：
+  - `src/trigger.js` 的 `sentimentWeights` 补充完整的英文**强烈否定与不满表达**（`totally wrong`, `completely broken`, `very disappointed`, `stop lying`, `dont mess`, `not working at all`, `what are you doing` 等）与**英文质问怀疑句式**（`are you sure`, `did you even test`, `why is it still failing`, `have you checked`, `did you actually fix` 等）。
+  - **英文多轮追问上下文识别**：检测到英文历史消息包含质问时自动追加疲劳/怀疑权重，确保纯英文对话下的自适应降阈值与安全守护效果与中文 100% 对齐。
+
+### 🧪 测试 | Tests
+
+- `test/trigger-sentiment.test.mjs` 扩展至 10 项断言，全面覆盖英文否定词、英文质问句式、英文多轮追问、英文动态降阈值激活与英文纯只读/闲聊防误触测试（全部绿灯通过）。
+
 ## [3.3.0] - 2026-11-25 — 情绪与怀疑度感知引擎上线与发布机制全面加固
 
 ### ✨ 新增 | Added

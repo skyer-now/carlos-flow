@@ -1,3 +1,15 @@
+# Carlos Flow v3.3.1 发布说明
+
+## 核心新特性
+
+### 1. 情绪与怀疑感知引擎补齐英文质问词表 (中英双语对齐)
+- **多语言情绪对齐**：`src/trigger.js` 扩展支持对等英文表达：
+  - **强烈不满与否定**（`totally wrong`, `completely broken`, `very disappointed`, `stop lying`, `dont mess`, `not working at all`, `what are you doing` 等）；
+  - **质问与怀疑句式**（`are you sure`, `did you even test`, `why is it still failing`, `have you checked`, `did you actually fix` 等）；
+  - **英文追问上下文感知**：多轮英文质问自动追加疲劳怀疑权重，实现降阈值敏锐激活与纯技术/闲聊防误触。
+
+---
+
 # Carlos Flow v3.3.0 发布说明
 
 ## 核心新特性

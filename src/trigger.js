@@ -79,16 +79,28 @@ const DEFAULT_CONFIG = {
 
   // 情绪与怀疑度感知参数 (Sentiment & Doubt Perception)
   sentimentWeights: {
-    // 强烈不满与直接否定 (高权重 +15~25)
+    // 强烈不满与直接否定 (中文 · 高权重 +15~25)
     '根本不对': 20, '完全错了': 20, '非常不满意': 25, '很失望': 20,
     '在说谎': 25, '在吹牛': 20, '不要瞎改': 25, '全搞崩了': 25,
     '不行不行': 20, '差评': 20, '怎么搞的': 18, '你在干嘛': 18,
     '不要只凭': 15, '胡说八道': 25,
 
-    // 质问与怀疑句式 (中高权重 +10~18)
+    // 强烈不满与直接否定 (英文 · English Negation & Frustration)
+    'totally wrong': 20, 'completely wrong': 20, 'very disappointed': 25, 'terrible': 20,
+    'stop lying': 25, 'you are lying': 25, 'broken everything': 25, 'completely broken': 25,
+    'dont break': 20, 'dont mess': 20, 'messing up': 20, 'bullshit': 25, 'nonsense': 20,
+    'not working at all': 20, 'what are you doing': 18,
+
+    // 质问与怀疑句式 (中文 · 中高权重 +10~18)
     '你确定': 15, '真的跑通': 18, '到底有没有': 15, '为什么还没有': 15,
     '怎么可能': 12, '有没有核对': 15, '不要只凭口头': 18, '到底改了没有': 18,
     '连这都不知道': 15, '为什么还在报错': 18, '反复': 10,
+
+    // 质问与怀疑句式 (英文 · English Doubt & Questioning)
+    'are you sure': 15, 'did you even test': 18, 'did you test': 15, 'did you verify': 15,
+    'why is it still failing': 18, 'why is it failing': 15, 'how is that possible': 12,
+    'have you checked': 15, 'dont just claim': 18, 'did you actually fix': 18,
+    'did you actually change': 18, 'not even aware': 15, 'repeatedly': 10,
 
     // 连续标点情绪强化 (+8~15)
     '？？？': 15, '???': 15, '！！！': 10, '!!!': 10,
@@ -680,7 +692,7 @@ class TriggerScorer {
     // 3. 上下文反复追问强化：若上一轮也是质问/否定，追加怀疑权重 (+10)
     if (Array.isArray(recentMessages) && recentMessages.length > 0) {
       const lastMsg = String(recentMessages[recentMessages.length - 1] || '');
-      if (/[?？]|不行|不对|怎么|为什么|搞什么|错误|改了没有/.test(lastMsg)) {
+      if (/[?？]|不行|不对|怎么|为什么|搞什么|错误|改了没有|why|wrong|failing|error|broken|sure|again/i.test(lastMsg)) {
         score += 10;
         matchedPatterns.push('连续追问上下文');
       }

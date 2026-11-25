@@ -1,7 +1,7 @@
 # Carlos 工作流 (Carlos-Flow)
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/skyer-now/carlos-flow)
-[![Version](https://img.shields.io/badge/version-3.3.0-blue)](https://www.npmjs.com/package/carlos-flow)
+[![Version](https://img.shields.io/badge/version-3.3.1-blue)](https://www.npmjs.com/package/carlos-flow)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [中文说明](README.zh.md) | [English Documentation](README.en.md)
