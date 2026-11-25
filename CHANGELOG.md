@@ -1,3 +1,11 @@
+## [未发布] - 2026-11-25 — 会话身份补齐 (session_context)
+
+### 🔧 修复 | Fixed
+
+- **sessionId 恒为 `unknown`**：`ghost.json` 已声明 `"sessionContext": true`，宿主在 tool-call 时把铸造好的上下文注入 `args.session_context`，`main.js` 也把它转成 `carlosContext` 交给了随包 Node 服务；但 Node 侧只读 `args.sessionId`，于是调用方不手填时所有门禁状态都落到 `unknown` 名下——卡片、审计流水、验证回执互相看不见，`quote` 锚点也定位不到原话，留痕直接被拒。
+- `src/index.js` 现在在缺少显式 `sessionId` 时采用 `carlosContext.session_id`；显式传入仍然优先，空字符串不补位（不伪造身份）。
+- 新增 `test/session-context.test.mjs`（`npm run test:session-context`）：覆盖上下文补位、显式优先、双缺省仍为 `unknown`、空字符串不补位；未打补丁的副本在同一用例上必须失败，用作负对照。
+
 ## [3.2.0] - 2026-11-24 — 通信优化全量演进 (P1 输出保护 / P2 Progress 协议通知 / P3 复合事务)
 
 ### ✨ 新增 | Added

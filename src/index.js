@@ -251,6 +251,13 @@ async function callTool(toolName, args = {}, context, runtime) {
     }
   }
 
+  // 会话身份：宿主在真实任务内注入 session_context，调用方未显式给 sessionId 时沿用它。
+  // 不补这一步，所有门禁状态都会落到 'unknown' 名下：卡片、审计流水与验证回执互相看不见，
+  // 且 quote 锚点找不到原话而拒绝留痕。显式传入的 sessionId 优先，不被覆盖。
+  if (context && typeof context.session_id === 'string' && context.session_id && !args.sessionId) {
+    args = { ...args, sessionId: context.session_id }
+  }
+
   // 项目级敏感路径扩展：从 cwd 逐级向上找 `.carlos.json`（只追加，不能缩减）。
   // 放在这里统一加载，保证同一请求里所有路径判定用同一份规则；
   // 配置缺失 / 损坏时自动退回内置基线，不影响门禁。
