@@ -1,3 +1,12 @@
+# Carlos Flow v3.2.2 发布说明
+
+## 核心修复与加固
+
+- **首页 README 徽章版本号对齐**：更新 `README.md` 与 `README.zh.md` 顶部的 Version 徽章至 `3.2.2`，保证主页展示与 npm 发布版本 100% 对应。
+- **发布闸一致性防护**：确保 `ghost.json` releaseNotes 与全套文档版本号零偏差。
+
+---
+
 # Carlos Flow v3.2.1 发布说明
 
 ## 核心修复与加固

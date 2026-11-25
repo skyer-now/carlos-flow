@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- 背景盾牌 - 代表门禁/保护 -->
+  <path d="M128 16 C80 16 40 50 40 98 c0 32 20 62 48 98 c14 18 36 36 60 52 c24-16 46-34 60-52 c28-36 48-66 48-98 C216 50 176 16 128 16 Z" 
+        fill="#1e3a5f" stroke="#3b82f6" stroke-width="3"/>
+  
+  <!-- 内部发光效果 -->
+  <path d="M128 28 C90 28 56 56 56 98 c0 24 14 48 36 78 c11 15 28 30 48 42 c20-12 37-27 48-42 c22-30 36-54 36-78 C200 56 166 28 128 28 Z" 
+        fill="#1e4d7a" opacity="0.6"/>
+  
+  <!-- 工作流节点：四个圆圈代表四个核心环节 -->
+  <!-- 留痕节点 (左上) -->
+  <circle cx="85" cy="85" r="14" fill="#3b82f6" stroke="#fff" stroke-width="2"/>
+  <text x="85" y="90" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="system-ui">记</text>
+  
+  <!-- 派发节点 (右上) -->
+  <circle cx="171" cy="85" r="14" fill="#10b981" stroke="#fff" stroke-width="2"/>
+  <text x="171" y="90" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="system-ui">发</text>
+  
+  <!-- 裁定节点 (右下) -->
+  <circle cx="171" cy="171" r="14" fill="#f59e0b" stroke="#fff" stroke-width="2"/>
+  <text x="171" y="176" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="system-ui">裁</text>
+  
+  <!-- 审计节点 (左下) -->
+  <circle cx="85" cy="171" r="14" fill="#ef4444" stroke="#fff" stroke-width="2"/>
+  <text x="85" y="176" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="system-ui">审</text>
+  
+  <!-- 连接线：形成闭环工作流 -->
+  <path d="M99 85 L157 85" stroke="#fff" stroke-width="2.5" opacity="0.8" marker-end="url(#arrowhead)"/>
+  <path d="M171 99 L171 157" stroke="#fff" stroke-width="2.5" opacity="0.8" marker-end="url(#arrowhead)"/>
+  <path d="M157 171 L99 171" stroke="#fff" stroke-width="2.5" opacity="0.8" marker-end="url(#arrowhead)"/>
+  <path d="M85 157 L85 99" stroke="#fff" stroke-width="2.5" opacity="0.8" marker-end="url(#arrowhead)"/>
+  
+  <!-- 中心核心节点：门禁核心 -->
+  <circle cx="128" cy="128" r="18" fill="#fff" stroke="#3b82f6" stroke-width="3"/>
+  <circle cx="128" cy="128" r="10" fill="#3b82f6"/>
+  <!-- 中心对勾：代表通过/验证 -->
+  <path d="M116 128 L125 137 L140 118" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- 箭头定义 -->
+  <defs>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#fff" opacity="0.8"/>
+    </marker>
+  </defs>
+  
+  <!-- 装饰：快照/闪电小图标 (右上角) -->
+  <g transform="translate(185, 35)">
+    <path d="M0 0 L6 -4 L2 -4 L8 -12 L-6 0 L-2 0 L-8 12 Z" fill="#fbbf24" opacity="0.9"/>
+  </g>
+  
+  <!-- 装饰：还原/循环箭头 (左下角) -->
+  <g transform="translate(35, 185)">
+    <path d="M0 -8 A8 8 0 0 1 8 0 M8 0 L12 -4 M8 0 L12 4" stroke="#60a5fa" stroke-width="2" fill="none" stroke-linecap="round"/>
+  </g>
+</svg>
