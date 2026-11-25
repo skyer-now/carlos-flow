@@ -1,10 +1,18 @@
-## [未发布] - 2026-11-25 — 会话身份补齐 (session_context)
+## [3.2.1] - 2026-11-25 — 范围检查安全加固与会话身份补齐 (Fail-Closed 加固)
 
 ### 🔧 修复 | Fixed
 
-- **sessionId 恒为 `unknown`**：`ghost.json` 已声明 `"sessionContext": true`，宿主在 tool-call 时把铸造好的上下文注入 `args.session_context`，`main.js` 也把它转成 `carlosContext` 交给了随包 Node 服务；但 Node 侧只读 `args.sessionId`，于是调用方不手填时所有门禁状态都落到 `unknown` 名下——卡片、审计流水、验证回执互相看不见，`quote` 锚点也定位不到原话，留痕直接被拒。
-- `src/index.js` 现在在缺少显式 `sessionId` 时采用 `carlosContext.session_id`；显式传入仍然优先，空字符串不补位（不伪造身份）。
-- 新增 `test/session-context.test.mjs`（`npm run test:session-context`）：覆盖上下文补位、显式优先、双缺省仍为 `unknown`、空字符串不补位；未打补丁的副本在同一用例上必须失败，用作负对照。
+- **范围检查暂存区漏检修复 (`--cached`)**：`src/dispatch.js` 中的 `enforceScope` 自动扫描扩展支持已暂存的修改（`git diff --name-only --cached`），彻底杜绝 AI 执行 `git add` 后越界改动被误判为“零改动放行”的漏洞。
+- **Git 异常严格 Fail-Closed**：当底层 Git 检查命令异常退出（非 Git 仓库或执行失败）时，显式拦截报错，杜绝将环境异常误判为“无改动通过”。
+- **sessionId 恒为 `unknown` 修复**：`src/index.js` 现在在缺少显式 `sessionId` 时采用宿主注入的 `carlosContext.session_id`；显式传入仍然优先，空字符串不伪造。
+- **快照任务生命周期隔离**：快照 manifest 关联 `card_ts` 任务卡标识，`flow_revert_plan` 还原计划支持按当前卡筛选，防止历史任务文件混入。
+- **文案诚实化修偏**：修正 `ui/narrator.js` 消除“系统正在自动领取入场券”等误导性说明，确保报错与提示 100% 真实客观。
+- **发布流程自动化增强**：`scripts/release.mjs` 落地 `autoSyncDocs` 自动同步多语言文档与版本记录。
+
+### 🧪 测试 | Tests
+
+- `test/scope-enforcement.mjs` 扩展用例 14（暂存区越界检测）与用例 15（Git 失败 fail-closed 拦截），37 项断言全部通过。
+- 新增 `test/session-context.test.mjs`，4 项断言覆盖会话上下文补位、显式优先与边界情况。
 
 ## [3.2.0] - 2026-11-24 — 通信优化全量演进 (P1 输出保护 / P2 Progress 协议通知 / P3 复合事务)
 

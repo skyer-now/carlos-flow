@@ -33,9 +33,14 @@ When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or
 
 ---
 
-## 🌟 Highlights & New Features in v3.2.0
+## 🌟 Highlights & New Features in v3.2.1
 
-### 1. Communication Optimization & Protection
+### 1. Fail-Closed Scope Enforcement & Boundary Hardening
+* **Comprehensive Scope Guard**: `enforceScope` now scans unstaged changes, **staged changes (`git diff --cached`)**, and untracked new files. Completely closes the loophole where AI executing `git add` bypassed gate interception.
+* **Strict Fail-Closed on Git Failure**: Git command timeout or non-zero status rejects execution instead of silently defaulting to empty diffs.
+* **Snapshot Lifecycle Isolation**: Snapshots now bind `card_ts` task timestamps, preventing previous task files from contaminating revert plans.
+
+### 2. Communication Optimization & Protection
 * **P1 Output Protection & Private Artifact Storage**:
   * **4KB UTF-8 Stream Summary**: Truncates large stdout/stderr outputs safely by Unicode codepoints with plain folding markers to protect model context.
   * **Private Storage & Retention**: Full output is saved to private directories (`0700/0600` on POSIX, stripped inherited ACL on Windows) with automatic **30 copies / 7 days** rolling cleanup.
@@ -49,18 +54,21 @@ When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or
   * **Stage Short-Circuiting**: Immediately aborts on preceding validation errors without leaving unauthorized states.
   * **Step Snapshots & Recovery Guidance**: Returns structured step receipts and actionable notes on dispatch errors without requiring card resubmission.
 
-### 2. Advisory Review System (Lightweight Dual-Axis Review)
+### 3. Session Context Auto-Inheritance
+* **Seamless Session Tracking**: Automatically adopts host-provided `carlosContext.session_id` when explicit `sessionId` is omitted, eliminating isolated state under `unknown`.
+
+### 4. Advisory Review System (Lightweight Dual-Axis Review)
 * **Evidence Axis**: Audits whether searches were actually conducted, sources support claims, and statements match proofs.
 * **Feasibility Axis**: Audits plan soundness, technical feasibility, blast radius, and verifiable rollback paths.
 * **Lightweight Rule-Based Engine**: Triggers `none` for read-only queries, `single` for troubleshooting, and `dual` for high-risk plans with topic cooldowns and 24h budget limits.
 
-### 3. High-Level Facade Architecture
+### 5. High-Level Facade Architecture
 * **`carlos_task`**: Manages requirements, claims, composite dispatch, and results (`submit`, `claim`, `dispatch`, `start`, `pipeline_start`, `protocol`, `add_user_msg`, `save_result`).
 * **`carlos_verify`**: Manages execution, negative control (falsification), and scope checks (`run`, `falsify`, `check_scope`, `trigger_check`, `diff_hunks`).
 * **`carlos_review`**: Manages dual-axis audits, verdicts, and advisory reviews (`axes`, `submit`, `guard`, `verdict`, `audit`, `advisory_axes`, `advisory_submit`, `advisory_guard`).
 * **`carlos_manage`**: Manages status, cancellation, rollback plans, and storage metrics (`status`, `cancel`, `revert`, `stats`, `bypass`, `mode`).
 
-### 4. Mechanical Guardrails (Fail-Closed)
+### 6. Mechanical Guardrails (Fail-Closed)
 * **Scope Enforcer**: Automatically blocks out-of-scope edits at runtime.
 * **Evidence-Driven Testing**: Spawns real test suites (`verify.cmd`); no valid pass proof means no completion.
 * **Tamper-Evident Audit Trail**: SHA-256 chained logs (`prevHash` → `hash`).

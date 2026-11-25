@@ -1,3 +1,23 @@
+# Carlos Flow v3.2.1 发布说明
+
+## 核心修复与加固
+
+### 1. 范围检查安全漏洞修复与 Fail-Closed 加固
+- **暂存区越界扫描 (`--cached`)**：`src/dispatch.js` 中的 `enforceScope` 扩展支持 `git diff --name-only --cached`，彻底堵住 AI 执行 `git add` 后门禁因未扫描暂存区而误判“无改动放行”的漏洞。
+- **Git 执行异常严格 Fail-Closed**：当底层 Git 检查命令异常退出（非 Git 仓库或命令超时）时，显式拦截报错，杜绝将环境异常误判为“无改动通过”。
+- **测试用例先行固化**：在 `test/scope-enforcement.mjs` 中新增用例 14 与 15，覆盖暂存区改动与 Git 异常退化，37 项断言全部通过。
+
+### 2. 会话身份自动继承 (session_context)
+- **无缝会话追踪**：`src/index.js` 在调用方未显式传入 `sessionId` 时，自动采用宿主注入的 `carlosContext.session_id`，消除卡片与审计记录因落入 `unknown` 账户而互不可见的问题。
+- **显式优先与空串保护**：显式传入参数仍然保持最高优先级，空字符串不伪造。
+
+### 3. 快照任务生命周期隔离与文案诚实化修偏
+- **快照任务绑定**：快照 manifest 自动绑定 `card_ts` 任务卡标识，`flow_revert_plan` 支持按当前任务卡过滤，防止历史任务文件混入恢复计划。
+- **提示文案修偏**：修正 `ui/narrator.js` 中关于“自动领券”、“一键退出”等误导性说明，确保人话解释 100% 真实。
+- **发布文档自动同步**：`scripts/release.mjs` 落地 `autoSyncDocs` 自动同步多语言文档。
+
+---
+
 # Carlos Flow v3.2.0 发布说明
 
 ## 核心新特性
