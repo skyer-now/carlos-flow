@@ -2426,37 +2426,82 @@ function flowHomePrefix(cwd) {
 // 只看 `git diff --name-only` 不够 —— 它**只含已跟踪文件**，
 // 于是「新建一个没授权的文件」在越界检测里完全看不见（漏了最大的一类）。
 export function enforceScope(scope, cwd, diffFiles) {
-  // diffFiles 可选：外部传入的改动文件列表；不传则自动跑 `git diff --name-only`
+  // diffFiles 可选：外部传入的改动文件列表；不传则自动跑 `git diff --name-only` + `git diff --name-only --cached` + `git ls-files --others`
   // cwd: 仓库根目录（用于跑 git diff）
   let autoCollected = false
   if (!diffFiles) {
     autoCollected = true
-    diffFiles = []
+    const collectedSet = new Set()
+    const targetCwd = cwd || process.cwd()
+
+    // 1. 工作区已跟踪文件的未暂存改动
     try {
       const proc = spawnSync('git', ['diff', '--name-only'], {
-        cwd: cwd || process.cwd(),
+        cwd: targetCwd,
         encoding: 'utf8',
-        // git 不在 PATH / 不是仓库 / 超时 → 一律当作「无改动」而非抛错，
-        // 避免把环境问题变成门禁误报（fail-closed 只针对 scope 语义，不针对环境）
         timeout: 10000,
         windowsHide: true,
       })
       if (proc.status === 0 && typeof proc.stdout === 'string') {
-        diffFiles = proc.stdout
-          .split('\n')
-          .map((s) => s.trim())
-          .filter(Boolean)
+        for (const s of proc.stdout.split('\n')) {
+          const t = s.trim()
+          if (t) collectedSet.add(t)
+        }
+      } else {
+        // Git 退出码非 0（非 Git 仓库 / 目录不存在等）：fail-closed 拒绝，防止漏报
+        return {
+          ok: false,
+          violations: [],
+          checked: [],
+          message: formatError(`Git 工作区检查异常（status=${proc.status}），无法完成范围比对`),
+        }
       }
-    } catch {
-      diffFiles = []
+    } catch (e) {
+      return {
+        ok: false,
+        violations: [],
+        checked: [],
+        message: formatError(`执行 Git 检查失败：${e && e.message ? e.message : String(e)}`),
+      }
     }
-    // 未跟踪的新文件：同样属于「本次改动」，必须纳入越界判定。
+
+    // 2. 暂存区已跟踪文件的暂存改动（git add 后的越界必须能被检出）
+    try {
+      const proc = spawnSync('git', ['diff', '--name-only', '--cached'], {
+        cwd: targetCwd,
+        encoding: 'utf8',
+        timeout: 10000,
+        windowsHide: true,
+      })
+      if (proc.status === 0 && typeof proc.stdout === 'string') {
+        for (const s of proc.stdout.split('\n')) {
+          const t = s.trim()
+          if (t) collectedSet.add(t)
+        }
+      } else {
+        return {
+          ok: false,
+          violations: [],
+          checked: [],
+          message: formatError(`Git 暂存区检查异常（status=${proc.status}），无法完成范围比对`),
+        }
+      }
+    } catch (e) {
+      return {
+        ok: false,
+        violations: [],
+        checked: [],
+        message: formatError(`执行 Git 暂存区检查失败：${e && e.message ? e.message : String(e)}`),
+      }
+    }
+
+    // 3. 未跟踪的新文件：同样属于「本次改动」，必须纳入越界判定。
     try {
       const proc = spawnSync(
         'git',
         ['ls-files', '--others', '--exclude-standard', '--full-name'],
         {
-          cwd: cwd || process.cwd(),
+          cwd: targetCwd,
           encoding: 'utf8',
           timeout: 10000,
           windowsHide: true,
@@ -2464,8 +2509,8 @@ export function enforceScope(scope, cwd, diffFiles) {
         },
       )
       if (proc.status === 0 && typeof proc.stdout === 'string') {
-        const top = gitTopLevel(cwd)
-        const homePrefix = flowHomePrefix(cwd)
+        const top = gitTopLevel(targetCwd)
+        const homePrefix = flowHomePrefix(targetCwd)
         for (const line of proc.stdout.split('\n')) {
           const rel = line.trim()
           if (!rel) continue
@@ -2474,12 +2519,26 @@ export function enforceScope(scope, cwd, diffFiles) {
             const prefix = homePrefix.endsWith('/') ? homePrefix : homePrefix + '/'
             if (abs.startsWith(prefix)) continue
           }
-          if (!diffFiles.includes(rel)) diffFiles.push(rel)
+          collectedSet.add(rel)
+        }
+      } else {
+        return {
+          ok: false,
+          violations: [],
+          checked: [],
+          message: formatError(`Git 未跟踪文件检查异常（status=${proc.status}），无法完成范围比对`),
         }
       }
-    } catch {
-      /* 未跟踪扫描失败：不影响已跟踪改动的判定 */
+    } catch (e) {
+      return {
+        ok: false,
+        violations: [],
+        checked: [],
+        message: formatError(`执行 Git 未跟踪文件检查失败：${e && e.message ? e.message : String(e)}`),
+      }
     }
+
+    diffFiles = Array.from(collectedSet)
   }
 
   // 没有任何变更 → 无需判定

@@ -624,21 +624,26 @@ const TOOLS = [
         // 派发前就存在的未跟踪文件属于基线，不是本次执行引入的改动，
         // 自查时不得把它报成越界（否则「自查没越界、裁定却报越界」自相矛盾）。
         // 传了 paths → 用调用方给的清单逐项自查（调用方自己指定要查什么）。
-        const result = paths.length
-          ? enforceScope(allowed, scopeRoot, paths)
-          : (() => {
-              const current = enforceScope(allowed, scopeRoot)
-              const introduced = introducedChanges(
-                current.checked || [],
-                state.dispatch_baseline,
-              )
-              const scoped = enforceScope(allowed, scopeRoot, introduced)
-              return {
-                ...scoped,
-                checked: introduced,
-                baseline_excluded: (current.checked || []).length - introduced.length,
-              }
-            })()
+        let result
+        if (paths.length) {
+          result = enforceScope(allowed, scopeRoot, paths)
+        } else {
+          const current = enforceScope(allowed, scopeRoot)
+          if (!current.ok && current.checked && current.checked.length === 0 && current.violations && current.violations.length === 0) {
+            // Git 检查异常（如非 git 目录、命令失败）：直接 fail-closed 抛错返回
+            return fail(current.message || 'Git 检查异常，无法完成自动范围比对')
+          }
+          const introduced = introducedChanges(
+            current.checked || [],
+            state.dispatch_baseline,
+          )
+          const scoped = enforceScope(allowed, scopeRoot, introduced)
+          result = {
+            ...scoped,
+            checked: introduced,
+            baseline_excluded: (current.checked || []).length - introduced.length,
+          }
+        }
 
         return ok({
           ok: result.ok,

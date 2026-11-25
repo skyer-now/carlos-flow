@@ -423,6 +423,36 @@ check("enforceScope 函数体内确实包含 git diff 调用", gitInside);
 const untrackedInside = mod.enforceScope.toString().includes("ls-files");
 check("enforceScope 函数体内确实包含未跟踪文件扫描（ls-files）", untrackedInside);
 
+// ---- 用例 14：暂存区越界改动（git add 后的越界文件）必须能被自动模式检出 ----
+{
+  const sid14 = "scope-staged-" + Date.now();
+  await tool("flow_add_user_msg", { sessionId: sid14, text: QUOTE });
+  await tool("flow_submit_requirement", {
+    sessionId: sid14, goal: "暂存区越界测试", quote: QUOTE,
+    scope: ["in-scope.txt"], acceptance: ["x"], cwd: repo, confirmed: true,
+  });
+  // 模拟 AI 改了越界文件并执行了 git add
+  writeFileSync(join(repo, "out-of-scope.txt"), "staged out-of-scope hack\n");
+  git("add", "out-of-scope.txt");
+  const autoStaged = await tool("flow_check_scope", { sessionId: sid14, cwd: repo });
+  check("用例14：已暂存的越界改动（git add）仍能被自动模式检出",
+    autoStaged.__isError === false && autoStaged.ok === false && Array.isArray(autoStaged.violations) && autoStaged.violations.includes("out-of-scope.txt"),
+    JSON.stringify(autoStaged).slice(0, 160));
+  // 清理暂存与工作树
+  git("reset", "HEAD", "out-of-scope.txt");
+  git("checkout", "--", "out-of-scope.txt");
+}
+
+// ---- 用例 15：enforceScope 扫描阶段如果 git 异常不能误判为无改动放行 ----
+{
+  const mod = await import(pathToFileURL(join(ROOT, "src", "dispatch.js")).href);
+  const invalidDir = join(repo, "non-existent-sub-dir-xyz");
+  const failRes = mod.enforceScope(["in-scope.txt"], invalidDir);
+  check("用例15：Git 命令执行失败时 fail-closed 报错，不能误判为 ok: true 放行",
+    failRes.ok === false,
+    JSON.stringify(failRes).slice(0, 160));
+}
+
 child.kill();
 // Windows 上子进程退出前目录仍被占用 → 清理失败不应影响测试结论
 try { rmSync(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); } catch {}
