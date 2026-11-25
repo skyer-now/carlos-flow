@@ -12,6 +12,7 @@
   "agent": {},
   "sessionContext": true,
   "command": "门禁",
+  "releaseNotes": "【v3.2.1 更新说明】\n1. 范围检查安全加固与 Fail-Closed：支持扫描已暂存修改（git diff --name-only --cached），堵住暂存区越界绕过漏洞；Git 执行异常时严格拦截报错，杜绝环境异常误判通过。\n2. 会话身份自动继承：在未显式传入 sessionId 时自动继承宿主注入的会话 ID，避免卡片与审计记录隔离为 unknown。\n3. 快照生命周期隔离与文案客观化：快照 manifest 绑定任务卡标识防止历史任务混入还原计划；修正人话解释文案，消除误导性说明。\n4. 通信优化与传输防护（v3.2.0 特性）：超大输出 4KB UTF-8 摘要折叠与私有工件落盘；接通 MCP Progress 心跳通知；支持 carlos_task(action: \"pipeline_start\") 复合事务快捷编排。\n5. 调研与方案轻量互审体系（v3.1.0 特性）：提供 Evidence 调研轴与 Feasibility 方案轴双轴复核，支持高阶门面 carlos_review 与纯规则决策引擎。",
   "node": {
     "entry": "src/index.js",
     "entries": [
