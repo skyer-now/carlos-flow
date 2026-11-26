@@ -6,6 +6,9 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { startMcpClient } from './_mcp-client.mjs'
 import { presentVerifyOutput, pruneArtifacts, VERIFY_SUMMARY_BYTES } from '../src/verify-output.js'
+import childProcess from 'node:child_process'
+import { EventEmitter, once } from 'node:events'
+import { syncBuiltinESMExports } from 'node:module'
 import { computeOutputHash } from '../src/dispatch.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -145,6 +148,92 @@ try {
   const cleanRes = pruneArtifacts(cleanBase, { keep: 30 })
   assert.equal(cleanRes.removed, 5)
   assert.equal(cleanRes.kept, 30)
+
+  // 31 次真实生成：当前工件可回读，最终严格保留 30 份。
+  const retentionHome = path.join(home, 'retention')
+  fs.mkdirSync(retentionHome)
+  for (let i = 0; i < 31; i++) {
+    const generated = await presentVerifyOutput(input, { flowHome: retentionHome, sessionId: 'retention', outputHash: 'test' })
+    assert.equal(generated.output_metadata.artifact.available, true)
+    assert.equal(JSON.parse(fs.readFileSync(generated.output_metadata.artifact.path, 'utf8')).stdout, input.stdout)
+  }
+  assert.equal(fs.readdirSync(path.join(retentionHome, 'verify-output')).length, 30, '31 次生成后不得残留 31 份')
+
+  // 并发生成跨过 await ACL：任何正在写入的工件都不能被 prune 删除。
+  const concurrent = await Promise.all(Array.from({ length: 31 }, (_, i) =>
+    presentVerifyOutput(input, { flowHome: retentionHome, sessionId: `parallel-${i}`, outputHash: 'test' })))
+  assert.ok(concurrent.every(r => r.output_metadata.artifact.available === true))
+  assert.equal(fs.readdirSync(path.join(retentionHome, 'verify-output')).length, 30)
+
+  // 持续 ACL 故障必须回退原输出，并回收本次确认失败的自有目录。
+  const aclHome = path.join(home, 'acl-failures')
+  fs.mkdirSync(aclHome)
+  const originalSpawn = childProcess.spawn
+  const originalChmod = fs.chmodSync
+  try {
+    if (process.platform === 'win32') {
+      childProcess.spawn = () => {
+        const child = new EventEmitter()
+        child.kill = () => {}
+        queueMicrotask(() => child.emit('close', 1))
+        return child
+      }
+      syncBuiltinESMExports()
+    } else {
+      fs.chmodSync = () => { throw new Error('注入 ACL 失败') }
+    }
+    for (let i = 0; i < 35; i++) {
+      const failedAcl = await presentVerifyOutput(input, { flowHome: aclHome, sessionId: 'acl', outputHash: 'test' })
+      assert.equal(failedAcl.output_metadata.artifact.available, false)
+      assert.equal(failedAcl.stdout, input.stdout)
+      assert.match(failedAcl.output_warning, /ACL/)
+      assert.equal(fs.readdirSync(path.join(aclHome, 'verify-output')).length, 0, 'ACL 失败不得积累空目录')
+    }
+  } finally {
+    childProcess.spawn = originalSpawn
+    fs.chmodSync = originalChmod
+    syncBuiltinESMExports()
+  }
+
+  // 所有权随 mkdir 原子登记在目录名中；文件已 open 但未发布也必须保护。
+  const ownersBase = path.join(home, 'owners')
+  fs.mkdirSync(ownersBase)
+  const liveOwner = childProcess.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  const liveExit = once(liveOwner, 'exit')
+  const ownedDir = pid => path.join(ownersBase, `${'a'.repeat(64)}-${'b'.repeat(32)}-p${pid}`)
+  try {
+    const writing = ownedDir(liveOwner.pid)
+    fs.mkdirSync(writing)
+    assert.equal(pruneArtifacts(ownersBase, { keep: 0, maxAgeMs: 0, now: Date.now() + 1e12 }).removed, 0, '活进程空目录不可仅按年龄回收')
+    const fd = fs.openSync(path.join(writing, 'available-output.json'), 'wx')
+    try {
+      fs.writeSync(fd, '{未写完')
+      const protectedResult = pruneArtifacts(ownersBase, { keep: 0, maxAgeMs: 0, now: Date.now() + 1e12 })
+      assert.equal(fs.existsSync(writing), true, '不能仅凭年龄或文件存在删除活进程未发布工件')
+      assert.equal(protectedResult.removed, 0)
+    } finally { fs.closeSync(fd) }
+    liveOwner.kill()
+    await liveExit
+    assert.equal(pruneArtifacts(ownersBase).removed, 1, '确认死亡的未发布工件须立即回收')
+    assert.equal(fs.existsSync(writing), false)
+    fs.mkdirSync(writing)
+    assert.equal(pruneArtifacts(ownersBase).removed, 1, '确认死亡的空目录也须回收')
+    const unknown = path.join(ownersBase, `${'c'.repeat(64)}-${'d'.repeat(32)}`)
+    fs.mkdirSync(unknown)
+    const retained = pruneArtifacts(ownersBase, { keep: 0, maxAgeMs: 0, now: Date.now() + 1e12 })
+    assert.equal(fs.existsSync(unknown), true)
+    assert.equal(retained.unknown, 1, '未知归属必须报告保留风险')
+    assert.match(retained.warning, /归属未知/)
+    const riskHome = path.join(home, 'unknown-risk')
+    fs.mkdirSync(path.join(riskHome, 'verify-output'), { recursive: true })
+    fs.mkdirSync(path.join(riskHome, 'verify-output', path.basename(unknown)))
+    const withRisk = await presentVerifyOutput(input, { flowHome: riskHome, sessionId: 'risk', outputHash: 'test' })
+    assert.equal(withRisk.output_metadata.artifact.available, true)
+    assert.equal(withRisk.output_metadata.retention.unknown, 1)
+    assert.match(withRisk.output_warning, /归属未知/)
+  } finally {
+    if (liveOwner.exitCode === null && liveOwner.signalCode === null) { liveOwner.kill(); await liveExit }
+  }
 
   console.log(
     JSON.stringify(

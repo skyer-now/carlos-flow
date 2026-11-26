@@ -25,6 +25,8 @@ export class StdioServer {
     this.log = typeof log === "function" ? log : () => {};
     this.initialized = false;
     this.pending = new Set();
+    this.pendingWrites = new Set();
+    this.outputClosed = false;
   }
 
   reply(id, result) {
@@ -38,14 +40,35 @@ export class StdioServer {
   }
 
   write(message) {
+    if (this.outputClosed) return;
+    let finish;
+    let pending;
+    const settle = () => {
+      if (!pending) return;
+      this.pendingWrites.delete(pending);
+      finish();
+    };
     try {
-      process.stdout.write(JSON.stringify(message) + "\n");
+      // 序列化成功后才登记写入；同步异常与异步回调共用释放路径。
+      const text = JSON.stringify(message) + "\n";
+      pending = new Promise(resolve => { finish = resolve; });
+      this.pendingWrites.add(pending);
+      process.stdout.write(text, error => {
+        settle();
+        if (error) this.outputFailed(error);
+      });
     } catch (e) {
-      // 客户端已断开（EPIPE）：不再尝试写，避免把进程搞崩
-      try {
-        this.log("stdout 写入失败：" + (e && e.message ? e.message : e));
-      } catch { /* ignore */ }
+      settle();
+      this.outputFailed(e);
     }
+  }
+
+  outputFailed(e) {
+    if (this.outputClosed) return;
+    this.outputClosed = true;
+    // write 的异步 error 与同步异常统一停写，但不取消已接收工具。
+    try { this.log("stdout 写入失败：" + (e?.message || e)); } catch { /* 忽略日志故障 */ }
+    this.stopOutput?.();
   }
 
   async handle(message, runtime) {
@@ -216,6 +239,9 @@ export class StdioServer {
       rl.close()
       closeInput?.()
     }
+    const outputError = e => this.outputFailed(e)
+    this.stopOutput = stop
+    process.stdout.on('error', outputError)
     // readline转发与输入流本身的error都收敛，关闭事件不能越过已接收操作的finally。
     rl.on('error', stop)
     input.on('error', stop)
@@ -242,9 +268,12 @@ export class StdioServer {
       })
       // 同步收行回调返回后pending已登记；正常EOF与传输故障均先等全部收尾。
       await Promise.allSettled([...this.pending])
+      await Promise.allSettled([...this.pendingWrites])
       if (transportError) throw transportError
     } finally {
       input.off('error', stop)
+      process.stdout.off('error', outputError)
+      this.stopOutput = undefined
       rl.off('error', stop)
     }
   }

@@ -1,15 +1,15 @@
-// 推 tag 前置钩子安装器
+// 提交与推 tag 前置钩子安装器
 //
 // 为什么需要：
-//   1. 2026-11-13 的 v2.11.1 —— 一个**没跑过任何验证**的提交被打上 tag 并推上远端，
+//   1. 每次 `git commit` 前自动执行单包一致性守卫（check-repo-parity / check:full / lang-audit），
+//      确保首页特性、中英介绍、版本号、产物规范 100% 对齐，未对齐直接阻断提交。
+//   2. 2026-11-13 的 v2.11.1 —— 一个**没跑过任何验证**的提交被打上 tag 并推上远端，
 //      里面包含一个语法错误的冒烟测试和一个只有 23 行的残缺 bridge。
-//   2. 推 `v*` tag **等于**触发 npm 自动发布 —— 推错 tag 的代价远大于推错分支。
+//   3. 推 `v*` tag **等于**触发 npm 自动发布 —— 推错 tag 的代价远大于推错分支。
 //
-// 装上之后，`git push` 只要涉及 tag，就会自动跑：
-//   - `./check-all.sh`（语法校验 + 真 RPC 往返冒烟测试）
-//   - `npm run sync:version` 的等价校验（版本号在 4 处是否一致）
-//   - tag 重名检查
-// 任何一项不过，**推送被阻断**，远端不会出现带缺陷的 tag。
+// 装上之后：
+//   - `git commit` 时自动执行 pre-commit：校验版本号、首页文档与产物体检，不合格直接阻断提交。
+//   - `git push` 只要涉及 tag，就会自动跑 pre-push：Gatekeeper 冒烟测试、版本号单一真源校验、tag 重名检查。
 //
 // 用法：
 //   node scripts/install-hooks.mjs          # 安装
@@ -22,7 +22,61 @@ import { execFileSync } from "node:child_process";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HOOKS_DIR = join(ROOT, ".git", "hooks");
-const HOOK_PATH = join(HOOKS_DIR, "pre-push");
+const PRE_PUSH_PATH = join(HOOKS_DIR, "pre-push");
+const PRE_COMMIT_PATH = join(HOOKS_DIR, "pre-commit");
+
+// pre-commit 钩子正文：每次 git commit 时执行
+const PRE_COMMIT_HOOK = `#!/bin/bash
+# ============================================================
+# Carlos Flow —— 提交前前置门禁（由 scripts/install-hooks.mjs 生成）
+#
+# 规则：每次本地 git commit 前自动执行，检查版本号与首页介绍一致性、
+#       产物全面体检与语言体检，不合规直接阻断提交。
+# ============================================================
+
+set -u
+
+REPO_ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")/../.." && pwd)"
+[ -f "$REPO_ROOT/package.json" ] || REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$REPO_ROOT" || exit 1
+[ -f "$REPO_ROOT/package.json" ] || { echo "❌ 找不到仓库根目录（package.json）"; exit 1; }
+
+echo "=============================================="
+echo "🚧 提交前自动检查（pre-commit hook 自动执行）"
+echo "=============================================="
+
+# 1. 检查版本号单一真源（只读检查）
+if ! node scripts/sync-version.mjs --check >/dev/null 2>&1; then
+  echo "❌ pre-commit 失败：版本号未对齐（package.json / lock / ghost.json / TRIGGER_GUIDE.md / CHANGELOG.md）"
+  echo "   请运行：npm run sync:version"
+  exit 1
+fi
+
+# 2. 单包一致性与首页特性介绍检查
+if ! node scripts/check-repo-parity.mjs >/dev/null 2>&1; then
+  echo "❌ pre-commit 失败：单包一致性或首页中英文特性标题未对齐"
+  echo "   请运行：node scripts/check-repo-parity.mjs 查看具体不一致项"
+  exit 1
+fi
+
+# 3. 产物全面体检
+if ! node scripts/full-audit.mjs >/dev/null 2>&1; then
+  echo "❌ pre-commit 失败：对外产物体检未通过"
+  echo "   请运行：npm run check:full"
+  exit 1
+fi
+
+# 4. 产物语言体检（必须 100% 中文）
+if ! node scripts/lang-audit.mjs >/dev/null 2>&1; then
+  echo "❌ pre-commit 失败：产物注释或提交信息含英文叙述"
+  echo "   请运行：npm run check:lang"
+  exit 1
+fi
+
+echo "✅ 提交前自动检查全部通过（pre-commit hook 放行）"
+echo "=============================================="
+exit 0
+`;
 
 // 钩子正文。用 bash 写（Git for Windows 自带 bash）。
 // 关键：只对 **tag** 推送生效，普通分支推送不受影响。
@@ -139,27 +193,26 @@ function main() {
   mkdirSync(HOOKS_DIR, { recursive: true });
 
   // 备份既有钩子（不覆盖别人的东西）
-  if (existsSync(HOOK_PATH)) {
-    const bak = HOOK_PATH + ".bak-" + Date.now();
-    copyFileSync(HOOK_PATH, bak);
-    console.log("ℹ️  已备份原钩子：" + bak);
+  if (existsSync(PRE_PUSH_PATH)) {
+    const bak = PRE_PUSH_PATH + ".bak-" + Date.now();
+    copyFileSync(PRE_PUSH_PATH, bak);
+    console.log("ℹ️  已备份原 pre-push 钩子：" + bak);
   }
+  writeFileSync(PRE_PUSH_PATH, HOOK, "utf8");
+  console.log("✅ 已安装推 tag 前置钩子：" + PRE_PUSH_PATH);
 
-  writeFileSync(HOOK_PATH, HOOK, "utf8");
-  console.log("✅ 已安装推 tag 前置钩子：" + HOOK_PATH);
-
-  // Windows 上 git 可能在提交时丢掉可执行位，这里直接修回 100755
-  try {
-    execFileSync("git", ["update-index", "--chmod=+x", ".git/hooks/pre-push"], {
-      cwd: ROOT,
-      stdio: "ignore",
-    });
-  } catch {
-    // .git/hooks 不在 index 里，这条会失败，属预期，忽略
+  if (existsSync(PRE_COMMIT_PATH)) {
+    const bak = PRE_COMMIT_PATH + ".bak-" + Date.now();
+    copyFileSync(PRE_COMMIT_PATH, bak);
+    console.log("ℹ️  已备份原 pre-commit 钩子：" + bak);
   }
+  writeFileSync(PRE_COMMIT_PATH, PRE_COMMIT_HOOK, "utf8");
+  console.log("✅ 已安装提交前自动检查钩子：" + PRE_COMMIT_PATH);
 
   console.log("");
-  console.log("生效范围：只拦截 **tag 推送**；普通分支推送不受影响。");
+  console.log("生效范围：");
+  console.log("  1. git commit 时自动执行 pre-commit（版本号与首页介绍一致性、产物体检、语言体检）");
+  console.log("  2. git push tag 时自动执行 pre-push（Gatekeeper 冒烟、tag 重名校验）");
   console.log("自检：node scripts/install-hooks.mjs --check");
 }
 

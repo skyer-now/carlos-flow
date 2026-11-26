@@ -9,6 +9,7 @@ export const VERIFY_SUMMARY_BYTES = 4096 // 单流摘要上限字节数（含折
 export const ARTIFACT_KEEP_MAX_COUNT = 30 // 最多保留最近 30 份 artifact
 export const ARTIFACT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // 最长保留 7 天
 
+const activeArtifacts = new Set() // 跨 await 保护本进程正在写入的工件。
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 
 function summary(text) {
@@ -68,6 +69,15 @@ async function privateDirectory(dir) {
   })
 }
 
+// PID 只用于保守存活检查：仅 ESRCH 可确认死亡，权限不足/PID 复用均保留。
+function ownerState(pid) {
+  const value = Number(pid)
+  if (!Number.isSafeInteger(value) || value <= 0) return 'unknown'
+  try { process.kill(value, 0); return 'alive' } catch (e) {
+    return e.code === 'ESRCH' ? 'dead' : 'unknown'
+  }
+}
+
 export function pruneArtifacts(baseDir, options = {}) {
   const keep = Number.isInteger(options.keep) ? options.keep : ARTIFACT_KEEP_MAX_COUNT
   const maxAgeMs = Number.isFinite(options.maxAgeMs) ? options.maxAgeMs : ARTIFACT_MAX_AGE_MS
@@ -82,23 +92,33 @@ export function pruneArtifacts(baseDir, options = {}) {
         const full = path.join(baseDir, e.name)
         try {
           const st = fs.statSync(full)
-          return { full, mtimeMs: st.mtimeMs }
+          // 所有权随目录创建原子登记，不能拿文件已 open 当作发布完成。
+          const artifact = /^[a-f0-9]{64}-[a-f0-9]{32}(?:-p(\d+))?$/.exec(e.name)
+          const published = artifact?.[1] && fs.existsSync(path.join(full, '.published'))
+          const owner = artifact && !published ? ownerState(artifact[1]) : null
+          const protectedDir = activeArtifacts.has(full) || full === options.protect ||
+            (artifact && !published && owner !== 'dead')
+          return { full, mtimeMs: st.mtimeMs, protectedDir, abandoned: owner === 'dead', unknown: owner === 'unknown' }
         } catch {
           return null
         }
       })
       .filter(Boolean)
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .sort((a, b) => Number(b.protectedDir) - Number(a.protectedDir) || b.mtimeMs - a.mtimeMs)
 
     dirs.forEach((d, index) => {
       const tooOld = now - d.mtimeMs > maxAgeMs
-      if (index < keep && !tooOld) return
+      if (d.protectedDir || (!d.abandoned && index < keep && !tooOld)) return
       try {
         fs.rmSync(d.full, { recursive: true, force: true })
         removed++
       } catch {}
     })
-    return { removed, kept: Math.max(0, dirs.length - removed) }
+    const unknown = dirs.filter(d => d.unknown).length
+    return {
+      removed, kept: Math.max(0, dirs.length - removed), unknown,
+      ...(unknown ? { warning: `保留 ${unknown} 个归属未知的未发布工件；无法安全回收，存储可能超出数量/年龄限制。` } : {}),
+    }
   } catch {
     return { removed: 0, kept: 0 }
   }
@@ -137,9 +157,13 @@ export async function presentVerifyOutput(result, { flowHome, sessionId, outputH
 
   // 超限大输出路径：进行摘要折叠并尝试落盘。
   let file
+  let dir
+  let base
+  let owned = false
+  let published = false
   try {
     guard(flowHome)
-    const base = path.join(flowHome, 'verify-output')
+    base = path.join(flowHome, 'verify-output')
     try {
       fs.mkdirSync(base, { mode: 0o700 })
     } catch (e) {
@@ -147,10 +171,10 @@ export async function presentVerifyOutput(result, { flowHome, sessionId, outputH
     }
     guard(base)
 
-    pruneArtifacts(base)
-
-    const dir = path.join(base, `${sha(String(sessionId))}-${randomBytes(16).toString('hex')}`)
+    dir = path.join(base, `${sha(String(sessionId))}-${randomBytes(16).toString('hex')}-p${process.pid}`)
     fs.mkdirSync(dir, { mode: 0o700 })
+    owned = true
+    activeArtifacts.add(dir)
     guard(dir)
     await privateDirectory(dir)
     guard(dir)
@@ -174,14 +198,21 @@ export async function presentVerifyOutput(result, { flowHome, sessionId, outputH
       throw new Error('私有文件权限设置未生效')
     }
     if (fs.readFileSync(file, 'utf8') !== available) throw new Error('工件回读内容校验不一致')
+    // 回读校验后才发布；其他进程看到空/部分文件时仍按 owner PID 保护。
+    fs.writeFileSync(path.join(dir, '.published'), '', { flag: 'wx', mode: 0o600 })
+    published = true
+    activeArtifacts.delete(dir)
+    const retention = pruneArtifacts(base, { protect: dir })
 
     return {
       ...original,
+      ...(retention.warning ? { output_warning: retention.warning } : {}),
       stdout: summary(result.stdout),
       stderr: summary(result.stderr),
       output_metadata: {
         ...baseMeta,
         truncated: true,
+        retention,
         artifact: {
           path: file,
           bytes: Buffer.byteLength(available, 'utf8'),
@@ -191,6 +222,13 @@ export async function presentVerifyOutput(result, { flowHome, sessionId, outputH
       },
     }
   } catch (e) {
+    // 本次 mkdir 成功且已确认失败：可直接回收自有目录，不能留给永久保护。
+    let cleanupWarning = ''
+    if (owned) {
+      try { fs.rmSync(dir, { recursive: true, force: true }) } catch (cleanupError) {
+        cleanupWarning = `；失败工件回收失败，可能残留目录：${cleanupError.message || cleanupError}`
+      }
+    }
     // 落盘失败：保持原文本回退，同时带上明确警告与基本元数据，不谎报落盘成功。
     return {
       ...original,
@@ -199,7 +237,11 @@ export async function presentVerifyOutput(result, { flowHome, sessionId, outputH
         truncated: false,
         artifact: { available: false, error: e.message || String(e) },
       },
-      output_warning: `验证输出工件保存失败，已保留原始返回输出：${e.message || e}`,
+      output_warning: `验证输出工件保存失败，已保留原始返回输出：${e.message || e}${cleanupWarning}`,
     }
+  } finally {
+    // 正常路径已在发布后清理；失败路径只移除本进程的活动登记。
+    if (owned) activeArtifacts.delete(dir)
+    if (base && !published) pruneArtifacts(base)
   }
 }

@@ -14,7 +14,50 @@ import os from "node:os";
 import path from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from 'node:child_process'
+import assert from 'node:assert/strict'
 import { startMcpClient } from "./_mcp-client.mjs";
+
+// 真实关闭管道读端，触发异步 EPIPE；在途工具仍须完成且错误后停止写入。
+const broken = spawn(process.execPath, ['--input-type=module', '-e', `
+  import { StdioServer } from ${JSON.stringify(new URL('../src/mcp-stdio.mjs', import.meta.url).href)};
+  let writes = 0;
+  const original = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (...args) => { writes++; return original(...args); };
+  const server = new StdioServer({ name: '断管测试', version: '1', tools: [],
+    log: msg => process.stderr.write('ERROR:' + msg + '\\n'),
+    callTool: async (name, args, context) => {
+      process.stderr.write('START\\n');
+      await new Promise(r => setTimeout(r, 150));
+      context.sendProgress(1, 2, '触发断管');
+      await new Promise(r => setTimeout(r, 150));
+      context.sendProgress(2, 2, '不得再写');
+      process.stderr.write('DONE\\n');
+      return { content: [] };
+    }
+  });
+  try { await server.start(); } catch { process.stderr.write('TRANSPORT_CLOSED\\n'); }
+  process.stderr.write('WRITES:' + writes + '\\n');
+`], { stdio: ['pipe', 'pipe', 'pipe'] })
+let brokenLog = ''
+const brokenExit = new Promise(resolve => broken.on('close', (code, signal) => resolve({ code, signal })))
+const brokenTimer = setTimeout(() => broken.kill(), 10000)
+broken.stderr.on('data', chunk => {
+  brokenLog += chunk
+  if (brokenLog.includes('START')) {
+    broken.stdout.destroy()
+    broken.stdin.end()
+  }
+})
+broken.stdin.on('error', () => {})
+broken.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'slow', _meta: { progressToken: 0 } } }) + '\n')
+const brokenStatus = await brokenExit
+clearTimeout(brokenTimer)
+assert.equal(brokenStatus.code, 0, brokenLog)
+assert.match(brokenLog, /DONE/, '断管不得越过在途工具收尾')
+assert.match(brokenLog, /ERROR:stdout/)
+assert.match(brokenLog, /WRITES:1\b/, '异步错误后进度与最终回复都不得继续写')
+console.log('真实断管 EPIPE 与在途收尾：通过')
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -161,7 +204,7 @@ try {
     return captured === undefined ? undefined : () => captured
   } }
   Object.defineProperty(process, 'stdin', { configurable: true, value: input })
-  process.stdout.write = text => { replies.push(JSON.parse(text)); return true }
+  process.stdout.write = (text, callback) => { replies.push(JSON.parse(text)); queueMicrotask(() => callback?.()); return true }
   try {
     const server = new StdioServer({ name: '捕获检查', version: '1', tools: [],
       callTool: async (name, args, context, runtime) => {
@@ -206,7 +249,7 @@ try {
   let release
   const barrier = new Promise(resolve => { release = resolve })
   Object.defineProperty(process, 'stdin', { configurable: true, value: input })
-  process.stdout.write = () => true
+  process.stdout.write = (text, callback) => { queueMicrotask(() => callback?.()); return true }
   try {
     const server = new StdioServer({ name: '输入错误', version: '1', tools: [], callTool: async () => {
       accepted++
@@ -230,6 +273,45 @@ try {
     input.end()
     Object.defineProperty(process, 'stdin', originalInput)
     process.stdout.write = originalWrite
+  }
+}
+
+// 同步序列化与 write 抛错必须释放等待者，否则 EOF/传输关闭会挂死。
+{
+  const { StdioServer } = await import('../src/mcp-stdio.mjs')
+  const { PassThrough } = await import('node:stream')
+  for (const fault of ['stringify', 'write']) {
+    const input = new PassThrough()
+    const originalInput = Object.getOwnPropertyDescriptor(process, 'stdin')
+    const originalWrite = process.stdout.write
+    let attempts = 0
+    let timer
+    const order = []
+    Object.defineProperty(process, 'stdin', { configurable: true, value: input })
+    process.stdout.write = () => { attempts++; throw new Error('注入同步 write 失败') }
+    try {
+      const server = new StdioServer({ name: '同步异常', version: '1', tools: [], callTool: async () => {
+        try { await Promise.resolve(); return fault === 'stringify' ? { value: 1n } : {} }
+        finally { order.push('finally') }
+      } })
+      const done = server.start().then(() => order.push('resolved'), () => order.push('rejected'))
+      input.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: '异常' } }) + '\n')
+      await Promise.race([done, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${fault} 同步异常收尾挂死`)), 1000)
+      })])
+      assert.equal(server.pending.size, 0)
+      assert.equal(server.pendingWrites.size, 0)
+      assert.equal(server.outputClosed, true)
+      assert.deepEqual(order, ['finally', 'rejected'])
+      server.reply(2, {})
+      assert.equal(attempts, fault === 'write' ? 1 : 0, '同步异常后必须停止写入')
+    } finally {
+      clearTimeout(timer)
+      input.destroy()
+      Object.defineProperty(process, 'stdin', originalInput)
+      process.stdout.write = originalWrite
+    }
+    check(`同步 ${fault} 异常释放 pendingWrites 并完成收尾`, true)
   }
 }
 

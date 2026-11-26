@@ -103,7 +103,8 @@ const TOOLS = [
           try {
             return JSON.parse(rawText)
           } catch {
-            return { ok: true, raw: rawText }
+            // 非 JSON 回执不能作为成功证据，必须失败关闭。
+            return { ok: false, message: '工具响应不是有效 JSON', raw: rawText }
           }
         }
 

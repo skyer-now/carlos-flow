@@ -3,7 +3,23 @@ import os from 'node:os'
 import path from 'node:path'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
+import { createFacadeTools } from '../src/handlers/facade.js'
 import { startMcpClient } from './_mcp-client.mjs'
+
+// 故障注入：每一步收到非 JSON 回执都必须失败关闭，不能继续派发。
+for (const [index, step] of ['submit', 'claim', 'dispatch'].entries()) {
+  const calls = []
+  const task = createFacadeTools(async name => {
+    calls.push(name)
+    return { content: [{ type: 'text', text: calls.length === index + 1 ? 'broken-json' : '{"ok":true}' }] }
+  }).find(t => t.name === 'carlos_task')
+  const res = await task.handler({ action: 'pipeline_start', sessionId: 'injected' })
+  const data = JSON.parse(res.content[0].text)
+  assert.equal(data.ok, false, `${step} 非 JSON 必须失败关闭`)
+  assert.equal(res.isError, true)
+  assert.equal(data.failed_step, step)
+  assert.equal(calls.length, index + 1, '失败后不得调用后续工具')
+}
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'comm-pipeline-'))
@@ -120,31 +136,34 @@ try {
     arguments: { action: 'add_user_msg', sessionId: sid4, text: '派发测试原话' },
   }, 10000)
 
-  const res4 = await client.request('tools/call', {
-    name: 'carlos_task',
-    arguments: {
+  // 仅在派发时注入不同项目根；submit/claim 仍调用真实服务，保证命中第三步。
+  const dispatchMismatch = createFacadeTools(async (name, args) => {
+    const rpc = await client.request('tools/call', {
+      name, arguments: { ...args, ...(name === 'flow_dispatch' ? { cwd: home } : {}) },
+    }, 10000)
+    assert.equal(rpc.error, undefined)
+    return rpc.result
+  }).find(t => t.name === 'carlos_task')
+  const res4 = { result: await dispatchMismatch.handler({
       action: 'pipeline_start',
       sessionId: sid4,
       goal: '派发测试原话',
       quote: '派发测试原话',
       scope: [path.basename(script1)],
-      newFiles: ['outside.txt'],
-      newFilesReason: '测试派发失败',
       acceptance: ['执行无误'],
       verify: { cmd: `node "${script1}"` },
       cwd: work,
       confirmed: true,
-    },
-  }, 10000)
+  }) }
 
   const data4 = JSON.parse(res4.result.content[0].text)
-  if (data4.failed_step === 'dispatch') {
-    assert.equal(data4.ok, false)
-    assert.equal(data4.steps.submit.ok, true)
-    assert.equal(data4.steps.claim.ok, true)
-    assert.equal(data4.steps.dispatch.ok, false)
-    assert.ok(typeof data4.note === 'string')
-  }
+  assert.equal(data4.failed_step, 'dispatch')
+  assert.equal(data4.ok, false)
+  assert.equal(res4.result.isError, true)
+  assert.equal(data4.steps.submit.ok, true)
+  assert.equal(data4.steps.claim.ok, true)
+  assert.equal(data4.steps.dispatch.ok, false)
+  assert.ok(typeof data4.note === 'string')
 
   console.log('COMM_PIPELINE_OK')
 } finally {
