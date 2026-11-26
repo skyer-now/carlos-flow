@@ -2,20 +2,20 @@
 
 ## 支持的版本
 
+以 [GitHub Releases](https://github.com/skyer-now/carlos-flow/releases/latest) 标记的最新稳定版为维护基准，版本号可与 [`package.json`](./package.json) 核对；提交报告时请填写实际安装的版本。
+
 | 版本 | 支持状态 |
 |------|----------|
-| 2.7.x | ✅ 活跃维护（当前发布版） |
-| 2.6.x | ⚠️ 仅修安全问题 |
-| 2.5.x | ⚠️ 仅修安全问题 |
-| < 2.5 | ❌ 不再维护 |
+| 最新稳定版 | ✅ 优先验证和修复安全问题 |
+| 历史版本 | 请先升级到最新稳定版；是否回补按漏洞影响逐项评估，不承诺长期维护所有历史版本 |
 
 ## 报告漏洞
 
 **请勿在公开 Issue 中披露安全漏洞。**
 
-请通过以下方式私下报告：
-- 📧 邮件：security@<YOUR_DOMAIN>
-- 🔐 GitHub Security Advisories：[私下报告](https://github.com/skyer-now/carlos-flow/security/advisories/new)
+请通过 [GitHub 私密漏洞报告](https://github.com/skyer-now/carlos-flow/security/advisories/new) 向仓库维护者报告，提交时需登录 GitHub。本项目不提供安全联系邮箱。
+
+若私密报告入口暂时不可用，请勿改用公开 Issue 提交漏洞细节、利用步骤、密钥或个人信息；可以在普通 Issue 中仅说明“需要私密报告渠道”，等待维护者提供安全的后续方式。
 
 报告请包含：
 1. 漏洞描述与影响范围
