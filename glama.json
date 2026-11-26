@@ -1,5 +1,5 @@
 {
-  "$schema": "https://glama.ai/mcp/glama.schema.json",
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
   "name": "carlos-flow",
   "displayName": "Carlos Flow (AI Coding Guardian)",
   "description": "Carlos Flow is an AI coding guardian and mechanical workflow gate for Windows developer agents (Cursor, VS Code, OpenCode, Claude Desktop, Cindy). Provides fail-closed scope enforcement, real test verification, sentiment-aware triggering, and MCP progress heartbeats.",
