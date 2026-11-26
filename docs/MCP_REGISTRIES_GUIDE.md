@@ -30,6 +30,8 @@ startCommand:
   command: npx
   args:
     - "-y"
+    - "-p"
+    - "carlos-flow"
     - "carlos-flow-server"
 ```
 
