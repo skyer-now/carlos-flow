@@ -1,0 +1,20 @@
+# Smithery.ai MCP Server Configuration
+# Reference: https://smithery.ai/docs/build/project-config/smithery-yaml
+
+name: carlos-flow
+displayName: Carlos Flow (AI Coding Guardian)
+description: |
+  Carlos Flow is a workflow gate and guardian for AI coding assistants on Windows.
+  It provides mechanical guardrails (fail-closed scope checks, spawn-driven real testing),
+  communication optimizations (4KB output folding, MCP progress heartbeats), and plain-language guidance.
+homepage: https://github.com/skyer-now/carlos-flow#readme
+repository: https://github.com/skyer-now/carlos-flow
+license: MIT
+
+runtime: node
+startCommand:
+  type: stdio
+  command: npx
+  args:
+    - "-y"
+    - "carlos-flow-server"

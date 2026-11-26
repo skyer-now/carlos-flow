@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // MCP 服务入口：目录装配、参数校验、请求补偿与传输。
 import { createCatalog, createExternalCatalog } from './handlers/catalog.js'
 import {

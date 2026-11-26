@@ -7,7 +7,8 @@
   "bin": {
     "carlos-flow": "client/carlos.js",
     "carlos-flow-cindy": "client/carlos.js",
-    "carlos-flow-opencode": "client/carlos.js"
+    "carlos-flow-opencode": "client/carlos.js",
+    "carlos-flow-server": "src/index.js"
   },
   "exports": {
     ".": "./src/index.js",
