@@ -33,9 +33,14 @@ When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or
 
 ---
 
-## 🌟 Highlights & New Features in v3.2.1
+## 🌟 Highlights & New Features in v3.3.2
 
-### 1. Fail-Closed Scope Enforcement & Boundary Hardening
+### 1. Sentiment & Doubt Perception Engine (v3.3.0 ~ v3.3.2)
+* **Multi-dimensional Attitude Recognition & Bilingual Alignment**: Captures strong dissatisfaction, negative refutations, consecutive punctuation (???/!!!), and English questioning patterns (`why is it still failing`, `totally wrong`, `did you even test`, etc.).
+* **Strict Negation & False-Positive Guard**: Implements `STRICT_NEGATION_PATTERNS` with top silent priority (*"Don't touch the code yet / No need to start workflow"*), ensuring 100% complete silence when the user explicitly requests no changes, while distinguishing code questions from purely conceptual discussions.
+* **Dynamic Threshold Adaptation**: Automatically reduces the trigger threshold by 20% in high-doubt contexts to proactively safeguard operations.
+
+### 2. Fail-Closed Scope Enforcement & Boundary Hardening
 * **Comprehensive Scope Guard**: `enforceScope` now scans unstaged changes, **staged changes (`git diff --cached`)**, and untracked new files. Completely closes the loophole where AI executing `git add` bypassed gate interception.
 * **Strict Fail-Closed on Git Failure**: Git command timeout or non-zero status rejects execution instead of silently defaulting to empty diffs.
 * **Snapshot Lifecycle Isolation**: Snapshots now bind `card_ts` task timestamps, preventing previous task files from contaminating revert plans.

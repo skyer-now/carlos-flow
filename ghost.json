@@ -13,7 +13,11 @@
   "sessionContext": true,
   "command": "门禁",
   "icon": "assets/icon.png",
-  "releaseNotes": "【v3.2.2 更新说明】\n1. 插件图标声明与随包补全：在安装包中补齐规范图标文件 assets/icon.png，并在清单 ghost.json 正确声明 icon 字段，修复公开市场图标展示。\n2. 范围检查安全加固与 Fail-Closed：支持扫描已暂存修改（git diff --name-only --cached），堵住暂存区越界绕过漏洞；Git 执行异常时严格拦截报错，杜绝环境异常误判通过。\n3. 会话身份自动继承：在未显式传入 sessionId 时自动继承宿主注入的会话 ID，避免卡片与审计记录隔离为 unknown。\n4. 快照生命周期隔离与文案客观化：快照 manifest 绑定任务卡标识防止历史任务混入还原计划；修正人话解释文案，消除误导性说明。\n5. 通信优化与传输防护（v3.2.0 特性）：超大输出 4KB UTF-8 摘要折叠与私有工件落盘；接通 MCP Progress 心跳通知；支持 carlos_task(action: \"pipeline_start\") 复合事务快捷编排。\n6. 调研与方案轻量互审体系（v3.1.0 特性）：提供 Evidence 调研轴与 Feasibility 方案轴双轴复核，支持高阶门面 carlos_review 与纯规则决策引擎。",
+  "readme": {
+    "en": "README.en.md",
+    "zh-CN": "README.zh.md"
+  },
+  "releaseNotes": "【v3.3.2 更新说明】\n1. 情绪与怀疑度感知引擎全量落地 (v3.3.0 ~ v3.3.2)：\n   - 多维态度识别：深度捕捉强烈不满、否定驳斥与连续标点情绪（？？？/！！！）；\n   - 中英双语全覆盖：完整支持英文情绪词汇与追问质问句式；\n   - 严格防误触机制：引入最高优先级静默拦截（如“先别改/不用启动工作流”），区分代码改动质问与纯原理反问；\n   - 动态阈值自适应：高怀疑上下文下自动下调 20% 门禁触发阈值，敏锐介入安全守护。\n2. 产品定位升级：全面定位为 Windows 环境下的「AI 编程卫士」。\n3. 开源社区与国际化：同步接入 GitHub 开源仓库地址与双语 README 介绍。\n4. CI/CD 发布加固：健全 GitHub Release 自动同步与 CDN 退避重试机制。\n5. 规范图标补齐：已随包内置规范 icon.png 图标。",
   "node": {
     "entry": "src/index.js",
     "entries": [
