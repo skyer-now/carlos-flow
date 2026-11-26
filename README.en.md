@@ -4,6 +4,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-1.29%2B-blue.svg)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![Glama](https://glama.ai/mcp/servers/skyer-now/carlos-flow/badge)](https://glama.ai/mcp/servers/skyer-now/carlos-flow)
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg)](https://github.com/skyer-now/carlos-flow)
 
 **Languages:** [English Documentation](README.en.md) | [中文说明](README.zh.md)

@@ -2,6 +2,7 @@
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/skyer-now/carlos-flow)
 [![Version](https://img.shields.io/badge/version-3.3.3-blue)](https://www.npmjs.com/package/carlos-flow)
+[![Glama](https://glama.ai/mcp/servers/skyer-now/carlos-flow/badge)](https://glama.ai/mcp/servers/skyer-now/carlos-flow)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [中文说明](README.zh.md) | [English Documentation](README.en.md)
