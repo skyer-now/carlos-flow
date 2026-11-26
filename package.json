@@ -59,6 +59,7 @@
     "test:bridge": "node test/bridge-identity.mjs && node test/bridge-idle.mjs",
     "sync:version": "node scripts/sync-version.mjs",
     "check:version": "node scripts/check-repo-parity.mjs",
+    "prepare": "node scripts/install-hooks.mjs",
     "test:gate": "node test/publish-gate.test.mjs",
     "install:hooks": "node scripts/install-hooks.mjs",
     "check:hooks": "node scripts/install-hooks.mjs --check",

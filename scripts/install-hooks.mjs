@@ -175,13 +175,21 @@ function main() {
   const checkOnly = process.argv.includes("--check");
 
   if (checkOnly) {
-    if (!existsSync(HOOK_PATH)) {
-      console.log("❌ 未安装推 tag 前置钩子");
-      process.exit(1);
+    let ok = true;
+    if (!existsSync(PRE_PUSH_PATH) || readFileSync(PRE_PUSH_PATH, "utf8") !== HOOK) {
+      console.log("❌ 未安装推 tag 前置钩子 (pre-push) 或内容不是最新");
+      ok = false;
+    } else {
+      console.log("✅ 推 tag 前置钩子 (pre-push) 已安装且为最新");
     }
-    const cur = readFileSync(HOOK_PATH, "utf8");
-    const ok = cur === HOOK;
-    console.log(ok ? "✅ 钩子已安装且为最新" : "⚠️ 钩子已安装但内容不是最新，重新安装即可");
+
+    if (!existsSync(PRE_COMMIT_PATH) || readFileSync(PRE_COMMIT_PATH, "utf8") !== PRE_COMMIT_HOOK) {
+      console.log("❌ 未安装提交前前置钩子 (pre-commit) 或内容不是最新");
+      ok = false;
+    } else {
+      console.log("✅ 提交前前置钩子 (pre-commit) 已安装且为最新");
+    }
+
     process.exit(ok ? 0 : 1);
   }
 

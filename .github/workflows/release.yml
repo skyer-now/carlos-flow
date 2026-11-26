@@ -147,6 +147,8 @@ jobs:
       - name: 失败诊断（失败套件原始输出转成公开运行注解）
         if: failure()
         run: node scripts/ci-annotate-logs.mjs
+      - name: 钩子安装与最新状态校验（check:hooks）
+        run: npm run check:hooks
       # 单包一致性守卫：身份 / 版本 / 文档 / 产物 必须一致
       - name: 单包一致性检查
         run: node scripts/check-repo-parity.mjs

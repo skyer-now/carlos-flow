@@ -91,6 +91,8 @@ jobs:
         with:
           node-version: 22
       - run: npm install
+      - name: 钩子安装与最新状态校验（check:hooks）
+        run: npm run check:hooks
       - name: 单包一致性检查（身份 / 版本 / 文档 / 产物）
         run: node scripts/check-repo-parity.mjs
       - name: 产物全面体检（对外产物是否正确）
