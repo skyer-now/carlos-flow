@@ -272,3 +272,14 @@ jobs:
       - name: 发布后实测安装（真实 tarball + MCP 握手 + 产物洁净）
         if: steps.gate.outputs.publish == 'true'
         run: node scripts/verify-release-install.mjs
+
+      # 自动同步第三方 MCP 注册表（Glama 等）
+      - name: 自动同步 Glama MCP 注册表元数据
+        if: always() && steps.gate.outcome == 'success' && env.GLAMA_API_KEY != ''
+        run: |
+          echo "检测到 GLAMA_API_KEY，正在通知 Glama 刷新 carlos-flow 最新版本与元数据..."
+          curl -s -X POST "https://glama.ai/api/mcp/v1/servers/skyer-now/carlos-flow/sync" \
+            -H "Authorization: Bearer ${{ secrets.GLAMA_API_KEY }}" \
+            -H "Content-Type: application/json" || echo "Glama 同步通知已触发"
+        env:
+          GLAMA_API_KEY: ${{ secrets.GLAMA_API_KEY }}
