@@ -83,7 +83,8 @@ const DEFAULT_CONFIG = {
     '根本不对': 20, '完全错了': 20, '非常不满意': 25, '很失望': 20,
     '在说谎': 25, '在吹牛': 20, '不要瞎改': 25, '全搞崩了': 25,
     '不行不行': 20, '差评': 20, '怎么搞的': 18, '你在干嘛': 18,
-    '不要只凭': 15, '胡说八道': 25,
+    '不要只凭': 15, '胡说八道': 25, '全部报错': 20, '根本没有跑通': 25,
+    '重做': 20, '给我重做': 25, '重新搞': 20, '重新做': 20,
 
     // 强烈不满与直接否定 (英文 · English Negation & Frustration)
     'totally wrong': 20, 'completely wrong': 20, 'very disappointed': 25, 'terrible': 20,
@@ -134,6 +135,7 @@ const DEFAULT_CONFIG = {
     'fix', 'refactor', 'change', 'update', 'implement', 'add', 'remove',
     'modify', 'rewrite', 'migrate', 'patch', 'upgrade', 'rename',
     '修复', '重构', '修改', '更新', '实现', '新增', '删除', '重写', '迁移', '改造', '写一个', '写个',
+    '一行都没变', '没变', '根本没改', '重做', '重新搞', '重新做', '搞砸', 'broken', 'nothing works', 'not working'
   ],
 
   // 用户反馈学习
@@ -213,11 +215,18 @@ const COMPOUND_NOUN_PHRASES = [
 ];
 
 /**
- * 疑问前缀与否定/探讨反转词（具有最高静默优先级）
+ * 严格否定与禁止修改前缀（最高静默优先级）
  */
-const QUESTION_OR_NEGATION_PREFIXES = [
-  '为什么', '为何', '怎么看', '如何看待', '是什么', '什么原因',
-  '先别改', '不要改', '只是讨论', '随便问问', '不用动代码', '仅分析', '别执行'
+const STRICT_NEGATION_PATTERNS = [
+  '先别改', '不要改', '只是讨论', '随便问问', '不用动代码', '仅分析', '别执行',
+  '不用启动工作流', '不要动任何文件', 'dont touch', "don't touch", 'do not modify', 'do not change'
+];
+
+/**
+ * 纯只读疑问引导词（如未携带改动意图，属于只读探讨）
+ */
+const READONLY_QUESTION_PREFIXES = [
+  '怎么看', '如何看待', '是什么', '什么原因', 'what is', 'how does', 'explain'
 ];
 
 const LEARNED_RULES_FILE = join(TRIGGER_HOME, 'learned-rules.json');
@@ -312,9 +321,23 @@ export function classifySideEffect(message) {
     return 'LEVEL_0';
   }
 
-  // 1. 疑问前缀与否定反转词优先（优先静默）
-  if (QUESTION_OR_NEGATION_PREFIXES.some((q) => s.startsWith(q) || s.includes(q))) {
+  // 1. 严格否定与禁止修改模式优先（最高静默优先级）
+  if (STRICT_NEGATION_PATTERNS.some((q) => s.includes(q.toLowerCase()))) {
     return 'LEVEL_0';
+  }
+
+  // 2. 纯标点刷屏或多轮短质问追问（在无显式否定时，不当成只读）
+  if (/^[?？\s!！why]+$/i.test(s.trim())) {
+    return 'LEVEL_2';
+  }
+
+  // 3. 纯只读疑问引导词（若不含强烈情绪与改动动词，判定为只读）
+  if (READONLY_QUESTION_PREFIXES.some((q) => s.startsWith(q.toLowerCase()) || s.includes(q.toLowerCase()))) {
+    const mut = config.mutatingActionWords || [];
+    const hasMut = mut.some((w) => s.includes(String(w).toLowerCase()));
+    if (!hasMut && !/[?？]{2,}/.test(message)) {
+      return 'LEVEL_0';
+    }
   }
 
   const ro = config.readOnlyIntentWords || [];
@@ -825,7 +848,10 @@ class TriggerDecisionEngine {
     let decision;
     let action = null;
 
-    if (score >= effectiveThreshold) {
+    if (isReadOnlyIntent(message)) {
+      decision = 'ignore';
+      action = null;
+    } else if (score >= effectiveThreshold) {
       decision = 'trigger';
       action = this.buildTriggerAction(impulseResult);
     } else if (score < config.lowConfidenceThreshold) {

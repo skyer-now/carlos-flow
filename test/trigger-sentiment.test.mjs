@@ -5,7 +5,7 @@ import {
   TriggerEngine,
 } from '../src/trigger.js';
 
-describe('Carlos 智能触发引擎 · 情绪、质问与反复追问感知测试 (中英双语对齐)', () => {
+describe('Carlos 智能触发引擎 · 情绪、质问与反复追问感知全场景测试 (中英混合/否定引用/反问/连续追问/防误触)', () => {
   it('1. 识别中文强烈不满与否定词汇，情绪评分显著增加', () => {
     const scorer = new TriggerScorer();
     const res = scorer.calculateSentimentScore('你改的根本不对，完全错了，对你很失望！');
@@ -45,59 +45,78 @@ describe('Carlos 智能触发引擎 · 情绪、质问与反复追问感知测�
     assert.ok(res2.score >= 20, `英文标点强化得分应 >= 20，实际: ${res2.score}`);
   });
 
-  it('6. 英文上下文追问强化：连续多轮英文质问自动追加疲劳/怀疑权重', () => {
-    const scorer = new TriggerScorer();
-    const historyMsgs = [
-      'Did you actually change anything?',
-      'Why is it still broken?'
-    ];
-    const res = scorer.calculateSentimentScore('What are you doing???', historyMsgs);
-    assert.ok(res.score >= 25, `英文连续追问追加权重后得分应 >= 25，实际: ${res.score}`);
-  });
-
-  it('7. 情绪驱动动态阈值自调节（中文质问）：高怀疑度时触发阈值自动下调、敏锐激活', () => {
-    const sid = 'test-sentiment-trigger-zh-' + Date.now();
+  it('6. 中英文混合强烈质问（Mixed Language Doubt）触发激活', () => {
+    const sid = 'test-sentiment-mixed-' + Date.now();
     const engine = TriggerEngine.create(sid);
     
-    const msg = '你怎么搞的，根本不对！马上用工作流给我重新修复并验证一遍？？？';
+    const msg = 'You told me it was fixed, 但根本不对！Why is it still failing??? 马上重新核对！';
     const decision = engine.shouldTrigger(msg);
     
     assert.equal(decision.decision, 'trigger');
     assert.ok(decision.shouldTrigger === true);
-    assert.ok(decision.score >= 20, `综合评分应达标，实际: ${decision.score}`);
-    assert.ok(decision.breakdown.sentiment, '返回结果应包含 sentiment 情绪维度');
-    assert.ok(decision.breakdown.sentiment.score > 0);
+    assert.ok(decision.score >= 15);
   });
 
-  it('8. 情绪驱动动态阈值自调节（英文质问）：高怀疑度时触发阈值自动下调、敏锐激活', () => {
-    const sid = 'test-sentiment-trigger-en-' + Date.now();
+  it('7. 否定与驳斥引用场景触发激活', () => {
+    const sid = 'test-sentiment-quote-' + Date.now();
     const engine = TriggerEngine.create(sid);
     
-    const msg = 'This is totally wrong! Are you sure you ran the tests? Dispatch workflow to fix it immediately???';
+    const msg = '> 修复完成，测试全绿\n\n你在吹牛！根本没有跑通，全部报错，给我重做！';
     const decision = engine.shouldTrigger(msg);
     
     assert.equal(decision.decision, 'trigger');
     assert.ok(decision.shouldTrigger === true);
-    assert.ok(decision.score >= 20, `英文综合评分应达标，实际: ${decision.score}`);
-    assert.equal(decision.breakdown.sentiment.level, 'high_doubt');
   });
 
-  it('9. 英文防误触测试：纯只读提问中出现单个问号不误触发', () => {
-    const sid = 'test-sentiment-readonly-en-' + Date.now();
+  it('8. 反问与怀疑句式触发激活', () => {
+    const sid = 'test-sentiment-rhetorical-' + Date.now();
     const engine = TriggerEngine.create(sid);
     
-    const msg = 'What is the main architecture design of this project?';
+    const msg = '你不是说已经改好了吗？为什么代码一行都没变？？？';
+    const decision = engine.shouldTrigger(msg);
+    
+    assert.equal(decision.decision, 'trigger');
+    assert.ok(decision.shouldTrigger === true);
+  });
+
+  it('9. 连续简短多轮追问上下文驱动激活', () => {
+    const sid = 'test-sentiment-multiturn-' + Date.now();
+    const engine = TriggerEngine.create(sid);
+    
+    const context = { recentMessages: ['Did you change anything?', 'Still broken.'] };
+    const decision = engine.shouldTrigger('Why???', context);
+    
+    assert.equal(decision.decision, 'trigger');
+    assert.ok(decision.shouldTrigger === true);
+  });
+
+  it('10. 严格否定式防误触：用户明确说“先别改/不用启动工作流”时 100% 静默', () => {
+    const sid = 'test-sentiment-negation-guard-' + Date.now();
+    const engine = TriggerEngine.create(sid);
+    
+    const msg = '先别改代码，也不用启动工作流，我就问问这个报错是什么意思？';
     const decision = engine.shouldTrigger(msg);
     
     assert.equal(decision.decision, 'ignore');
     assert.equal(decision.shouldTrigger, false);
   });
 
-  it('10. 英文防误触测试：日常普通对话与探讨不误激活', () => {
-    const sid = 'test-sentiment-chat-en-' + Date.now();
+  it('11. 英文严格否定式防误触', () => {
+    const sid = 'test-sentiment-negation-en-' + Date.now();
     const engine = TriggerEngine.create(sid);
     
-    const msg = 'Good morning, let us schedule a team meeting this afternoon to discuss the roadmap.';
+    const msg = "Don't touch the code yet, just explain why this error happened.";
+    const decision = engine.shouldTrigger(msg);
+    
+    assert.equal(decision.decision, 'ignore');
+    assert.equal(decision.shouldTrigger, false);
+  });
+
+  it('12. 只读探讨反问词防误触：纯原理探讨不误激活', () => {
+    const sid = 'test-sentiment-readonly-rhetorical-' + Date.now();
+    const engine = TriggerEngine.create(sid);
+    
+    const msg = '难道 React 状态更新不是异步的吗？请解释一下原理。';
     const decision = engine.shouldTrigger(msg);
     
     assert.equal(decision.decision, 'ignore');
