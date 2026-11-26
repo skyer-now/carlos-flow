@@ -1,3 +1,17 @@
+# Carlos Flow v3.3.3 发布说明
+
+## 核心新特性与优化
+
+### 1. 专用 MCP 服务端启动入口 (`carlos-flow-server`)
+- 在 `package.json` 的 `bin` 中增加 `"carlos-flow-server": "src/index.js"` 命令，并在 `src/index.js` 添加 `#!/usr/bin/env node`。
+- 允许通过 `npx -y carlos-flow carlos-flow-server` 一键以标准 Stdio 方式启动 MCP 服务端，完美适配 Smithery、Glama 等第三方生态平台的一键配装与握手探测。
+
+### 2. 第三方生态平台配置集成
+- 根目录内置 `smithery.yaml` 与 `glama.json`；
+- 补充 `docs/MCP_REGISTRIES_GUIDE.md` 注册表申报物料指南。
+
+---
+
 # Carlos Flow v3.3.2 发布说明
 
 ## 核心新特性与加固

@@ -1,7 +1,7 @@
 # Carlos 工作流 (Carlos-Flow)
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/skyer-now/carlos-flow)
-[![Version](https://img.shields.io/badge/version-3.3.2-blue)](https://www.npmjs.com/package/carlos-flow)
+[![Version](https://img.shields.io/badge/version-3.3.3-blue)](https://www.npmjs.com/package/carlos-flow)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [中文说明](README.zh.md) | [English Documentation](README.en.md)
@@ -25,16 +25,21 @@
 
 ---
 
-## 🌟 核心特性与亮点
+## 🌟 核心特性与亮点 (v3.3.3)
 
-### 1. 机械级防撞护栏与范围安全 (Fail-Closed 加固)
+### 1. 情绪与怀疑度感知引擎 (v3.3.0 ~ v3.3.2)
+* **多维度态度捕获与中英双语对齐**：灵敏识别用户强烈否定、不满质问、反问句式（*“你不是说改好了吗？为什么代码没变？”*）、中英夹杂（*“You told me it was fixed, 但根本不对！”*）以及连续标点（`???`/`!!!`）；
+* **严格否定与只读探讨防误触**：内置最高优先级的 `STRICT_NEGATION_PATTERNS` 模式拦截（*“先别改代码/不用启动工作流/千万不要瞎改/Don't touch the code yet”*），用户明确要求不改动时 100% 绝对静默；精准区分纯原理探讨与代码改动质问；
+* **自适应动态降阈值**：在检测到怀疑或疲劳质问上下文时，自动降低 20% 激活阈值，主动踩刹车守护代码安全。
+
+### 2. 机械级防撞护栏与范围安全 (Fail-Closed 加固)
 * **全域越界硬拦截**：`enforceScope` 深度扫描工作区已跟踪改动、**暂存区已跟踪改动 (`--cached`)** 与未跟踪新文件；彻底消除 AI 执行 `git add` 后门禁失效的漏洞；
 * **Git 异常严格退化**：底层 Git 命令执行失败或超时时，一律执行 Fail-Closed 拒绝放行，绝不将环境异常误判为“零改动通过”；
 * **真实验证命令驱动**：真实调用 `spawn` 执行项目测试，没有真实的通过证据绝不允许宣布完工；
 * **写改分离与独立复核**：写代码的角色不能自己审批自己的作业，必须由独立复核角色验收；
 * **快照任务生命周期隔离**：快照 manifest 自动绑定 `card_ts` 任务卡标识，确保任务取消后重新开始时还原计划绝不混入历史任务文件。
 
-### 2. 通信优化与传输防护 (v3.2.0 重磅演进)
+### 3. 通信优化与传输防护
 * **P1 输出保护与工件落盘**：
   * **4KB 单流 UTF-8 摘要折叠**：自动拦截超大 stdout/stderr 输出，按 Unicode 字符安全截断，彻底消除大文本打爆通道与上下文的现象；
   * **私有工件落盘与自动清理**：完整日志安全落盘至本地私有目录（POSIX 0700/0600，Windows 剥离继承设置独立 ACL），自动执行 **30 份 / 7 天** 生命周期轮转清理；
@@ -48,16 +53,16 @@
   * **严格阶段短路拦截**：前序步骤校验不通过立即中断，不产生后续未授权状态；
   * **分步回执快照与恢复指引**：派发阶段受阻时结构化保留前序成功快照，并提示无需重提任务卡。
 
-### 3. 会话身份自动继承 (session_context)
+### 4. 会话身份自动继承 (session_context)
 * **无缝会话追踪**：支持宿主环境自动注入 `carlosContext.session_id`，调用方未手填时自动补位，彻底消除状态落到 `unknown` 导致任务卡与审计记录互不可见的问题；显式指定优先。
 
-### 4. 调研与方案轻量互审体系 (Advisory Review)
+### 5. 调研与方案轻量互审体系 (Advisory Review)
 * **Evidence 调研轴**：复核是否真的执行了查询、引用来源是否真实支撑结论、声明与证据是否一一对应。
 * **Feasibility 方案轴**：复核方案合理性、技术可行性、影响面评估以及可执行的回滚方案。
 * **纯规则轻量触发决策引擎**：支持中英双语语义识别，常规查询（`none`）静默不打扰，时效/排障问题单轴（`single`），高风险架构/发布方案决策双轴（`dual`）。
 * **真实证据绑定与离线核验**：声明项 `evidence_ref` 支持 `path:line` 离线校验与 URL 外部溯源；两轴证据高度雷同自动拦截防敷衍；支持 canary 已知缺陷注入核验。
 
-### 5. 四大高阶复合门面工具 (High-Level Facades)
+### 6. 四大高阶复合门面工具 (High-Level Facades)
 * **`carlos_task`**：聚合管理任务的留痕、开卡、角色认领、复合派发与结果保存 (`submit` / `claim` / `dispatch` / `start` / `pipeline_start` / `protocol` / `add_user_msg` / `save_result`)；
 * **`carlos_verify`**：聚合管理真实验证执行、反向负对照证伪、越界自查与触发检查 (`run` / `falsify` / `check_scope` / `trigger_check` / `diff_hunks`)；
 * **`carlos_review`**：聚合管理双轴独立审查、审查结论提交、最终裁定与调研互审 (`axes` / `submit` / `guard` / `verdict` / `audit` / `advisory_axes` / `advisory_submit` / `advisory_guard`)；

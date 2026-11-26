@@ -1,5 +1,5 @@
-# Smithery.ai MCP Server Configuration
-# Reference: https://smithery.ai/docs/build/project-config/smithery-yaml
+# Smithery.ai MCP 服务端配置
+# 参考文档：https://smithery.ai/docs/build/project-config/smithery-yaml
 
 name: carlos-flow
 displayName: Carlos Flow (AI Coding Guardian)

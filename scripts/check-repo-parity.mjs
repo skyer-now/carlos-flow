@@ -87,16 +87,45 @@ if (pkg) {
   // 检查双语 README 顶部的 Version Badge 是否与 package.json 一致
   const checkBadge = (filename, content) => {
     if (!content) return fail(`${filename} 读不到`);
-    const badgeMatch = content.match(/img\.shields\.io\/badge\/version-([^-\s)]+)-blue/i);
-    const badgeVer = badgeMatch ? badgeMatch[1] : null;
-    if (badgeVer === ver) {
-      pass(`${filename} 顶部 Version Badge = ${badgeVer}`);
+    // 检查 Version Badge (中英文 Badge 风格不同：中文用 version-X.Y.Z-blue，英文用 npm/v 动态 badge 或 version-X.Y.Z-blue)
+    const badgeMatch = content.match(/img\.shields\.io\/badge\/version-([^-\s)]+)-blue/i) || content.match(/img\.shields\.io\/npm\/v\/carlos-flow/i);
+    if (badgeMatch) {
+      if (badgeMatch[1]) {
+        if (badgeMatch[1] === ver) {
+          pass(`${filename} 顶部 Version Badge = ${badgeMatch[1]}`);
+        } else {
+          fail(`${filename} 顶部 Version Badge = ${badgeMatch[1]}，期望 ${ver}`);
+        }
+      } else {
+        pass(`${filename} 顶部采用 npm dynamic badge`);
+      }
     } else {
-      fail(`${filename} 顶部 Version Badge = ${badgeVer || "(未提取到)"}，期望 ${ver}`);
+      fail(`${filename} 顶部 Version Badge 未提取到`);
+    }
+
+    // 检查特性大纲标题版本号是否对齐
+    if (filename === "README.md" || filename === "README.zh.md") {
+      const headerMatch = content.match(/## 🌟 核心特性与亮点\s*\(v(\d+\.\d+\.\d+)\)/);
+      const headerVer = headerMatch ? headerMatch[1] : null;
+      if (headerVer === ver) {
+        pass(`${filename} 特性大纲标题版本 = ${headerVer}`);
+      } else {
+        fail(`${filename} 特性大纲标题版本 = ${headerVer || "(未指定/不符)"}，期望 v${ver}`);
+      }
+    }
+    if (filename === "README.en.md") {
+      const headerMatch = content.match(/## 🌟 Highlights & New Features in v(\d+\.\d+\.\d+)/);
+      const headerVer = headerMatch ? headerMatch[1] : null;
+      if (headerVer === ver) {
+        pass(`${filename} 特性大纲标题版本 = ${headerVer}`);
+      } else {
+        fail(`${filename} 特性大纲标题版本 = ${headerVer || "(未指定/不符)"}，期望 v${ver}`);
+      }
     }
   };
   checkBadge("README.md", readText(join(ROOT, "README.md")));
   checkBadge("README.zh.md", readText(join(ROOT, "README.zh.md")));
+  checkBadge("README.en.md", readText(join(ROOT, "README.en.md")));
 }
 
 // ---- 3. 文档一致性 ----

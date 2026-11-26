@@ -1,3 +1,16 @@
+## [3.3.3] - 2026-11-26 — 新增专用 MCP 服务端启动入口与多平台规范配置
+
+### ✨ 新增与优化 | Added & Optimized
+
+- **专用 MCP 服务端启动入口 (`carlos-flow-server`)**：
+  - 在 `package.json` 的 `bin` 中增加 `"carlos-flow-server": "src/index.js"` 命令导出；
+  - `src/index.js` 头部注入 `#!/usr/bin/env node` shebang，使第三方生态（如 Smithery、Glama、Claude Desktop 等）能够通过 `npx -y carlos-flow carlos-flow-server` 直接拉起并与 MCP Stdio 握手。
+- **第三方 MCP 平台规范配置落地**：
+  - 根目录集成规范的 `smithery.yaml` 与 `glama.json`，声明 node 运行时、stdio 协议与完整维护者元数据；
+  - `docs/MCP_REGISTRIES_GUIDE.md` 补齐 Smithery、Glama、MCP.so 三大平台的申报入口与材料。
+
+---
+
 ## [3.3.2] - 2026-11-26 — 情绪与怀疑感知多场景深度加固 (中英混用/反问/驳斥引用/严格防误触)
 
 ### ✨ 新增与修复 | Added & Fixed

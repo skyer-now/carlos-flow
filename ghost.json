@@ -5,7 +5,7 @@
   "name": "Carlos 工作流",
   "description": "AI 编程卫士 MCP：留痕/派发/验证/负对照/双轴审查/裁定/审计/快照/免检/还原，并为调研与方案提供轻量互审。v3 对外默认只暴露四个门面（carlos_task / carlos_verify / carlos_review / carlos_manage），底层 25 个操作经门面动作路由；Cindy 内通过 list_tools 翻目录、call_tool 执行。",
   "whenToUse": "需要 AI 编程卫士护航与门禁校验时使用：提交任务卡留痕、派发 executor/auditor 子 Agent、跑真实验证命令、证明测试有判别力（负对照）、记录裁定与双轴审计、查询审计流水、免检通道、一键还原计划。启动任务向导时先调用 start_wizard。",
-  "version": "3.3.2",
+  "version": "3.3.3",
   "kind": "chip",
   "entry": "main.js",
   "card": {},
@@ -17,7 +17,7 @@
     "en": "README.en.md",
     "zh-CN": "README.zh.md"
   },
-  "releaseNotes": "【v3.3.2 更新说明】\n1. 情绪与怀疑度感知引擎全量落地 (v3.3.0 ~ v3.3.2)：\n   - 多维态度识别：深度捕捉强烈不满、否定驳斥与连续标点情绪（？？？/！！！）；\n   - 中英双语全覆盖：完整支持英文情绪词汇与追问质问句式；\n   - 严格防误触机制：引入最高优先级静默拦截（如“先别改/不用启动工作流”），区分代码改动质问与纯原理反问；\n   - 动态阈值自适应：高怀疑上下文下自动下调 20% 门禁触发阈值，敏锐介入安全守护。\n2. 产品定位升级：全面定位为 Windows 环境下的「AI 编程卫士」。\n3. 开源社区与国际化：同步接入 GitHub 开源仓库地址与双语 README 介绍。\n4. CI/CD 发布加固：健全 GitHub Release 自动同步与 CDN 退避重试机制。\n5. 规范图标补齐：已随包内置规范 icon.png 图标。",
+  "releaseNotes": "【v3.3.3 更新说明】\n1. 新增专用 MCP 服务端启动入口：在 package.json bin 中新增 carlos-flow-server 命令并为 src/index.js 注入 node shebang，支持第三方生态（如 Smithery / Glama / npx）直接无交互一键启动 Stdio MCP 实例。\n2. 第三方生态就绪配置：根目录集成规范的 smithery.yaml 与 glama.json 声明，并于 docs/ 补齐 MCP 注册表申报指南。\n3. 情绪与怀疑度感知引擎全量落地 (v3.3.0 ~ v3.3.2)：\n   - 多维态度识别：深度捕捉强烈不满、否定驳斥与连续标点情绪（？？？/！！！）；\n   - 中英双语全覆盖：完整支持英文情绪词汇与追问质问句式；\n   - 严格防误触机制：引入最高优先级静默拦截（如“先别改/不用启动工作流”），区分代码改动质问与纯原理反问；\n   - 动态阈值自适应：高怀疑上下文下自动下调 20% 门禁触发阈值，敏锐介入安全守护。\n4. 规范图标与产品定位升级：已随包内置规范 icon.png 图标，全面升级产品定位为 Windows 环境下的「AI 编程卫士」。",
   "node": {
     "entry": "src/index.js",
     "entries": [

@@ -141,6 +141,36 @@ if (changelog) {
   }
 }
 
+// ---- 5. README.md / README.zh.md / README.en.md 首页版本与特性标题 ----
+const syncReadmeVersion = (rel) => {
+  let content = readText(rel);
+  if (!content) return;
+  const before = content;
+
+  // 1) 替换 Version Badge
+  content = content.replace(/img\.shields\.io\/badge\/version-[^-\s)]+-blue/gi, `img.shields.io/badge/version-${ver}-blue`);
+
+  // 2) 替换中文 README 核心特性大纲标题版本号: ## 🌟 核心特性与亮点 (vX.Y.Z) 或 ## 🌟 核心特性与亮点
+  if (rel === "README.md" || rel === "README.zh.md") {
+    content = content.replace(/## 🌟 核心特性与亮点(\s*\(v\d+\.\d+\.\d+\))?/g, `## 🌟 核心特性与亮点 (v${ver})`);
+  }
+
+  // 3) 替换英文 README 核心特性大纲标题版本号: ## 🌟 Highlights & New Features in vX.Y.Z
+  if (rel === "README.en.md") {
+    content = content.replace(/## 🌟 Highlights & New Features in v\d+\.\d+\.\d+/g, `## 🌟 Highlights & New Features in v${ver}`);
+  }
+
+  if (content !== before) {
+    writeText(rel, content);
+  } else {
+    console.log(`  ✅ ${rel} 首页版本已是 ${ver}`);
+  }
+};
+
+syncReadmeVersion("README.md");
+syncReadmeVersion("README.zh.md");
+syncReadmeVersion("README.en.md");
+
 if (CHECK_ONLY) {
   if (changedFiles.length) {
     console.error(
