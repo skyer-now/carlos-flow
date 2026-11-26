@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "carlos-flow": {
+      "command": "npx",
+      "args": ["-y", "-p", "carlos-flow", "carlos-flow-server"]
+    }
+  }
+}
