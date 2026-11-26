@@ -34,8 +34,10 @@ export function startMcpClient({ entry, cwd, env = {}, surface = 'legacy' }) {
     onMessage: null,
   };
 
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
   child.stdout.on("data", (d) => {
-    buf += d.toString("utf8");
+    buf += d;
     let idx;
     while ((idx = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, idx).trim();
@@ -59,7 +61,7 @@ export function startMcpClient({ entry, cwd, env = {}, surface = 'legacy' }) {
       w.resolve(msg);
     }
   });
-  child.stderr.on("data", (d) => stderr.push(d.toString("utf8")));
+  child.stderr.on("data", (d) => stderr.push(d));
 
   function write(obj) {
     child.stdin.write(JSON.stringify(obj) + "\n");

@@ -48,7 +48,7 @@
 
 ## PhaseB候选：固定哈希子入口与Host请求能力
 
-此为未安装候选适配，不声明当前安装版0.1.139具备新接口；不虚设尚未发布的最低Host版本。`node.entries=['src/state.js']`及`node.childSpawn=true`是实际权限扩展，待后续安装批准与真实Desktop验收。三public工具、21后端操作、guide/pro及expected永久领取语义不变。
+此为未安装候选适配，不声明当前安装版0.1.139具备新接口；不虚设尚未发布的最低Host版本。`node.entries=['src/state.js']`及`node.childSpawn=true`是实际权限扩展，待后续安装批准与真实Desktop验收。两public元工具、21后端操作、guide/pro及expected永久领取语义不变。
 
 MCP在同步收行内调用真实Host `bindLaunch()` 捕获请求专用闭包，作为独立内部参数传递，JSON arguments/carlosContext/rpcId/signal不能供给此能力。无binding、收行scope丢失或getter异常的Host采样不可用，不回退Electron execPath或spawnEntry。普通Node CLI保持旧同步API及原环境兼容，不冒称其为Host白名单。
 
@@ -56,38 +56,6 @@ MCP在同步收行内调用真实Host `bindLaunch()` 捕获请求专用闭包，
 
 所有长采样在锁外：status采样后重读卡与完整验证身份，变化时使用最新卡但采样不可用；run_verify普通/expected均在短锁核完整卡及旧last_verify；falsify完成finally还原后才采样，短锁核卡/验证/负对照身份，冲突拒绝旧证据覆盖；verdict短锁比对完整判定状态快照，不因同卡axes/role/bypass等变化拼接PASS，也不自动重试。状态仅局部合并，旧恢复算法不改。输出错误仍单次受控退出1，无原始路径/环境错误回传。
 
-
-## Phase7：原生 callback GET 未知闭环
-
-原生wizard callback先核本实例当前nonce/callId/SID绑定，再消费；invalid/crossSID事件不能消费真实nonce、隐藏真实卡或撤销别任务资格。随后KV GET的网络、非ok、JSON解析失败在callback内收敛；仅最后仍绑定当前issued对象时置unavailable、向对应SID广播不可用并隐藏原卡。消费不回滚，不新增Node/Agent，不自动重放；不会暴露原始错误。Agent异常继续按unknown处理，非一律unavailable；普通工具与原STALE callback不受此分支影响。
-
-## Phase6：异步后单次领取与确认资格展示
-
-resume 的最后一次状态/代摘要 await 完成后，同一同步段重新核对签发对象 identity、当前nonce绑定、SID/目录、callId/expected代/intent、requested/resumed及原始有效期；核当前采样阶段对应意图一致后立即置消费，再 await 持久保存。双请求即使都在等待前通过，最后同步门只允许一个接受。保存失败/unknown保留已消费，不回滚重放；不影响普通call_tool。时间是该次采样与领取时观察，不是页面实时监控；后端/跨实例CAS与硬件exactly-once不在此保证。
-
-主逻辑展示 confirmation 固定枚举 unavailable/pending/requested/consumed/expired/unknown。只有当前本实例签发、未消费、期限内的当前nonce与已确认offer才可展示pending；callback/resume变化只广播展示，不额外读Node。GET/PUT失败无资格，页面优先不可用，不引导点击不存在的卡。缓存重开只显示“上次意图/当前资格未知”，永不把缓存当当前可点击证明；原生Agent请求未知保持fail-closed，不重放。
-
-草稿只是未可信讨论提案；bootstrap读点击时现有草稿，不保证此前看到的字节就是批准的snapshot，也不是quote/范围授权。Agent下一prepare协议仍待真实Host连续交互验收。labels/reasons重复保持已记录StdWARN，不为去重eval或增加桥。
-
-## Phase4：任务页、单次意图与普通工具隔离
-
-本节取代 Phase2 的全会话向导锁设计。普通 `call_tool` 保持原参数合同，不自动补 SID、不限制 cwd、不读写向导 KV、不发布 wizard；历史 SID、audit 不传 SID 聚合、原 cwd 等价写法均照旧。原 expected STALE 验证边界保留。
-
-`start_wizard` 独立 public 支持 action=open/prepare/resume，缺省 open；intent 是 clarify/confirm-scope/execute/check/review/finish 固定枚举。resume 只接四字段 expected={callId,generation,nonce,intent}，不进入后端参数。open/prepare 在当前 Host 本机可写上下文只读采样，供准确阶段意图卡；无卡不建卡或覆盖。
-
-主逻辑只从真实工具响应取 wizard 白名单，并再次转固定中文/数量/时间摘要；原始 card 仅在主逻辑为任务、目录与卡代计算 SHA256，不广播或存其原文。KV fullWizard 最多8条白名单展示记录（callId、sid、代摘要、单次nonce、过期、requested、summary）；不存点击票、命令、目录、diff。BroadcastChannel 与 /wake 只有展示作用，页面查询参数不是可信工具上下文；普通页面意图永不触发 Node/Agent。只当前 Agent 工具调用重新采样，页面打开/重开/“查看最近采样”请求缓存并说明非实时，不后台轮询。
-
-原生卡只确认一个明确协调意图，不授权未来全部工具。callback 本实例先占 nonce、核签发内存与持久 row/callId/sid/代/到期，再持久 requested 后使用 Host 真 userActionToken Agent continue；票不保存。新活跃 start_wizard resume 核 expected、Host SID/目录、当前真卡代、时效及单次消费，返回协调意图与标注未可信的草稿；KV 损坏/未知/重启不能重建资格，不回退执行。消费后普通业务工具不加 SID 锁，合法无卡→讨论→正常建卡可继续，旧 resume 仍拒。
-
-任务页目标/范围/验收草稿只在页和逻辑展示内存，长度各1000、三键白名单，无任意工具/目录/命令转发，不写 config、业务卡或 quote。按钮零 Node/Agent，只交未可信提案。用户使用 open 已生成的原生“读取草稿并澄清目标”卡启动交接，不必每步催 prepare；Agent 续接先 resume、协调一个动作或提问，然后本活跃回合自动 prepare 下一适用意图卡。prepare 卡 HTML转义展示待讨论草稿；草稿不是范围授权。这个连续回合协议仅 VM 验证，真实 Host 能否连续执行、采集页面草稿和供下一卡仍需桌面验证，不能宣称完整体验闭环。
-
-普通工具不碰缓存。向导展示逐行跳过坏缓存，GET/PUT失败以 warning保留真实采样、不伪生成确认资格；绑定 resume/callback 所需记录异常则 fail-closed。KV LWW不是CAS/exactly-once，回调无新Node授权只能核最近观察；resume 才在新活跃调用读取当前卡代。不复活旧callId、不扩大权限、不免检、自动PASS或重放未知结果。
-
-**限制必须保留**：原生回调没有新 Agent 工具调用的 Node 授权，不能借旧 callId读当前状态，因此未被新采样观察到的外部换卡可能先请求原助手只读确认，拒绝落在后续活跃工具调用的代检查。检查与后续业务调用之间不是后端原子CAS；现有后端自己的卡CAS/权限仍负责执行边界。本阶段不声称跨这两个读写窗口的原子代锁或任意旧writer防护。要求“回调时绝对最新代、所有业务写入原子绑定旧确认”仍需后端正式契约与范围审查，不能把KV当该能力。
-
-settings.html/js 共享壳：有 Host session 查询即任务展示分支，非法/远程展示查询也不退回配置；分支在配置load/save事件注册前。无session仍原/config设置逻辑，不改变配置数据来源。包内 `/settings.js` 路径由匹配 0.1.139 ghostFiles.ts/ghostPageHandler.ts 供静态文件（固定commit及Git blob核对），不是猜 /file URL。页面用 Host 明暗主题变量，无新增网络/background/childSpawn权限或模式。
-
-`test/cindy-dispatch.mjs` 保留原32条回归，新增真实main VM与真实Node目录/无卡状态、Host拒绝/点击单元桩、单次续接、新活跃代拒绝、任务页零配置与设置读写、缓存重开等断言。票、页签、权限的Host桩不是实际桌面点击/批准验收；Phase1完成正例矩阵也不是独立全业务链。真实桌面成功与拒绝全链以及已知Host hash_child超时仍待验证。
 
 ## 增量：验证失效向导与永久领取
 
@@ -235,7 +203,7 @@ Cindy 对插件 `tools` 声明有**硬上限 16 项**，本插件有 21 个操�
 
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 清单 | `ghost.json` | `kind: chip`，声明 `list_tools` / `call_tool` 两个元工具，可附唯一 `start_wizard` 启动器；`node.protocol = mcp-stdio`，`node.entry = src/index.js` |
+| 清单 | `ghost.json` | `kind: chip`，声明 `list_tools` / `call_tool` 两个元工具；`node.protocol = mcp-stdio`，`node.entry = src/index.js` |
 | 分发 | `main.js` | 类目表（5 类）+ 每类 RULES；向随包 MCP 服务端取 `tools/list`（说明与参数 schema 的**唯一真源**），再按 name 转发 `tools/call` |
 | 能力 | `src/index.js` | 21 个 `flow_*` 操作的实现 |
 

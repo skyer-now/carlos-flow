@@ -4,7 +4,7 @@
   "id": "carlos-flow",
   "name": "Carlos 工作流",
   "description": "AI 编程卫士 MCP：留痕/派发/验证/负对照/双轴审查/裁定/审计/快照/免检/还原，并为调研与方案提供轻量互审。v3 对外默认只暴露四个门面（carlos_task / carlos_verify / carlos_review / carlos_manage），底层 25 个操作经门面动作路由；Cindy 内通过 list_tools 翻目录、call_tool 执行。",
-  "whenToUse": "需要 AI 编程卫士护航与门禁校验时使用：提交任务卡留痕、派发 executor/auditor 子 Agent、跑真实验证命令、证明测试有判别力（负对照）、记录裁定与双轴审计、查询审计流水、免检通道、一键还原计划。启动任务向导时先调用 start_wizard。",
+  "whenToUse": "需要 AI 编程卫士护航与门禁校验时使用：提交任务卡留痕、派发 executor/auditor 子 Agent、跑真实验证命令、证明测试有判别力（负对照）、记录裁定与双轴审计、查询审计流水、免检通道、一键还原计划。",
   "version": "3.3.3",
   "kind": "chip",
   "entry": "main.js",
@@ -28,67 +28,8 @@
     "lifecycle": "on-demand",
     "idleTimeoutSeconds": 300
   },
-  "taskView": {
-    "title": "任务向导",
-    "html": "settings.html"
-  },
   "settingsHtml": "settings.html",
   "tools": [
-    {
-      "name": "start_wizard",
-      "description": "在当前本机可写任务中打开专用任务向导，并只读采样真实门禁状态。不新建或覆盖任务卡，不执行业务命令。用户在原对话的原生确认卡继续协调；页面按钮不授予执行权限。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string",
-            "enum": [
-              "open",
-              "prepare",
-              "resume"
-            ],
-            "description": "缺省打开；prepare供当前阶段意图卡；resume只消费一项原生确认意图"
-          },
-          "intent": {
-            "type": "string",
-            "enum": [
-              "clarify",
-              "confirm-scope",
-              "execute",
-              "check",
-              "review",
-              "finish"
-            ],
-            "description": "阶段协调意图，不是执行权限"
-          },
-          "expected": {
-            "type": "object",
-            "properties": {
-              "callId": {
-                "type": "string"
-              },
-              "generation": {
-                "type": "string"
-              },
-              "nonce": {
-                "type": "string"
-              },
-              "intent": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "callId",
-              "generation",
-              "nonce",
-              "intent"
-            ],
-            "additionalProperties": false,
-            "description": "只用于resume，来自真实原生卡续接；不进后端参数"
-          }
-        }
-      }
-    },
     {
       "name": "list_tools",
       "description": "列出 Carlos 门禁可用的操作。不传 category 返回类目概览（类目名、数量、该类目 RULES）；传 category 返回该类目下全部操作的名称、说明、参数 schema，并在同一份结果里下发该类目 RULES（调用前必读，决定你先做哪一步）。默认面为四个门面，legacy 面为 26 个底层操作。",

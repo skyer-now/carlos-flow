@@ -39,20 +39,6 @@
   /* 移动端响应式优化 (< 600px) */
   @media (max-width: 600px) {
     body { padding: 10px; font-size: 14px; }
-    .mobile-fold { margin-top: 8px; }
-    .mobile-big-btn {
-      width: 100%;
-      min-height: 44px;
-      font-size: 15px;
-      font-weight: 600;
-      margin-bottom: 8px;
-    }
-    .mobile-two-btn-row {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-top: 12px;
-    }
   }
 </style>
 <body style="margin:0;padding:12px;font-size:13px;line-height:1.6">
@@ -94,35 +80,6 @@
     <span id="status" style="font-size:12px;opacity:.8"></span>
   </div>
 
-  </section>
-  <section id="wizard-shell" hidden style="color:var(--text-primary,#222)">
-    <h2 style="margin:0 0 8px">一步一步完成当前任务</h2>
-    <p>任务页只展示真实状态，不运行命令。需要继续时，请回原对话点击“确认并继续”卡片。</p>
-    <ol id="wizard-steps" style="padding-left:24px">
-      <li data-stage="start">启动</li><li data-stage="goal">说明目标</li><li data-stage="scope">确认范围与验收</li>
-      <li data-stage="execution">执行</li><li data-stage="checks">真实检查与负对照</li><li data-stage="review">独立审查</li><li data-stage="complete">完成或处理问题</li>
-    </ol>
-    <div style="padding:12px;border:1px solid var(--border-default,#ddd);border-radius:8px;background:var(--surface,#fff)">
-      <strong id="wizard-stage">尚未读取真实任务状态</strong>
-      <p id="wizard-reason">请让原助手打开任务向导。</p>
-      <p id="wizard-summary"></p><p id="wizard-sample">没有采样，不显示已完成。</p>
-    </div>
-    <p id="wizard-confirm">页面按钮不能代替聊天确认，也不能批准文件或命令权限。</p>
-    <div style="display:grid;gap:8px">
-      <label>我希望解决的问题<textarea id="draft-goal" maxlength="1000" style="display:block;width:100%;background:var(--surface,#fff);color:inherit"></textarea></label>
-      <label>希望讨论的修改范围<textarea id="draft-scope" maxlength="1000" style="display:block;width:100%;background:var(--surface,#fff);color:inherit"></textarea></label>
-      <label>怎样判断任务完成<textarea id="draft-acceptance" maxlength="1000" style="display:block;width:100%;background:var(--surface,#fff);color:inherit"></textarea></label>
-      <button id="draft-propose">将草稿交给当前确认卡讨论</button>
-      <p id="draft-state">草稿仅在本页内存中，尚未发送；关闭会丢失。它不是授权或任务事实。</p>
-    </div>
-    <button id="wizard-refresh" style="padding:8px 12px;background:var(--surface,#fff);color:inherit;border:1px solid var(--border-default,#ddd);border-radius:6px">查看最近采样</button>
-    <p id="wizard-refresh-note">刷新只请求展示缓存。获取新状态需要原助手发起新的工具调用，不是后台实时轮询。</p>
-
-    <!-- 移动端专属单手双大按钮流转卡 -->
-    <div id="mobile-action-card" class="mobile-two-btn-row">
-      <button id="mobile-approve-btn" class="mobile-big-btn" style="padding:10px 16px;border-radius:8px;border:none;background:var(--primary,#0969da);color:#fff;cursor:pointer">👉 复制下一步操作指引</button>
-      <button id="mobile-revert-btn" class="mobile-big-btn" style="padding:10px 16px;border-radius:8px;border:1px solid var(--border-default,#ddd);background:transparent;color:inherit;cursor:pointer">🛑 遇到问题申请回滚 (恢复重来)</button>
-    </div>
   </section>
   <script src="/settings.js"></script>
 </body>

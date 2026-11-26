@@ -139,14 +139,14 @@ try {
   })
   check('真实包内固定入口正常退出且复用内容算法', JSON.parse(hashOutput).diff_sha256 === createHash('sha256').update('包内固定入口').digest('hex'))
   let pageClosure = true;
-  for (const html of [packagedGhost.settingsHtml, packagedGhost.taskView?.html].filter(Boolean)) {
+  for (const html of [packagedGhost.settingsHtml].filter(Boolean)) {
     if (!existsSync(join(pkgRoot, html))) { pageClosure = false; continue; }
     for (const ref of readFileSync(join(pkgRoot, html), 'utf8').matchAll(/<script\s+src=["']([^"']+)["']/g)) {
       const target = ref[1].replace(/^\//, '');
       if (target.includes('..') || !existsSync(join(pkgRoot, target)) || !tarEntries.has('package/' + target)) pageClosure = false;
     }
   }
-  check('真实运行包内 taskView/settings 页面脚本引用完整', pageClosure);
+  check('真实运行包内 settings 页面脚本引用完整', pageClosure);
   const visited = new Set(); let moduleClosure = true;
   function verifyRuntimeClosure(file) {
     if (visited.has(file)) return;
@@ -175,10 +175,10 @@ try {
   const ghostTools = (ghost.tools || []).map((t) => t.name);
   // 两种合法形态（详见 docs/TOOL_CONTRACTS.md §1.3）：
   //   A. 直接声明：ghost.json 逐条列出全部 flow_*（宿主上限 16 项）
-  //   B. 两元工具或附唯一 start_wizard；后端类目仍恰好覆盖全部操作。
-  const twoLevel = (ghostTools.length === 2 || ghostTools.length === 3) &&
-    new Set(ghostTools).size === ghostTools.length && ghostTools.includes('list_tools') && ghostTools.includes('call_tool') &&
-    ghostTools.every((name) => ['list_tools', 'call_tool', 'start_wizard'].includes(name));
+  //   B. 两元工具（list_tools / call_tool）；后端类目仍恰好覆盖全部操作。
+  const twoLevel = ghostTools.length === 2 &&
+    new Set(ghostTools).size === 2 && ghostTools.includes('list_tools') && ghostTools.includes('call_tool') &&
+    ghostTools.every((name) => ['list_tools', 'call_tool'].includes(name));
   if (twoLevel) {
     const mainSrc = readFileSync(join(pkgRoot, "main.js"), "utf8");
     const members = [...mainSrc.matchAll(/members:\s*\[([^\]]*)\]/gs)]

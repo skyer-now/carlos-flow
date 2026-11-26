@@ -297,242 +297,6 @@ async function callToolRequest(msg) {
   }
 }
 
-// 完整向导：缓存只是展示与拒绝重放提示，不能形成后端证据或授予 Node 权限。
-var wizardCurrent = Object.create(null)
-var wizardIssued = Object.create(null)
-var wizardDrafts = Object.create(null)
-var WIZARD_INTENTS = { clarify: '读取草稿并澄清目标', 'confirm-scope': '讨论并确认范围与验收意图', execute: '协调已确认范围内的下一项执行', check: '协调真实检查、负对照与还原核对', review: '协调独立审查', finish: '复核真实结果或处理问题' }
-var wizardObserved = Object.create(null)
-var wizardConsumed = Object.create(null)
-var wizardChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('carlos-task-wizard') : null
-var WIZARD_LABELS = { start: '启动', goal: '说明目标', scope: '范围与验收', execution: '执行', checks: '检查与负对照', review: '独立审查', complete: '完成', problem: '处理问题' }
-function writableWizardContext(ctx) {
-  return !!(ctx && typeof ctx.session_id === 'string' && ctx.session_id.length > 0 && ctx.session_id.length <= 200 &&
-    typeof ctx.workdir === 'string' && ctx.workdir.trim() && ctx.workdir_is_local === true && ctx.workdir_is_read_only === false)
-}
-function trustedWizardContext(msg) {
-  var ctx = msg.args && msg.args.session_context
-  return ctx ? { session_id: ctx.session_id, workdir: ctx.workdir, workdir_is_local: ctx.workdir_is_local === true, workdir_is_read_only: ctx.workdir_is_read_only !== false } : null
-}
-function safeWizard(w) {
-  if (!w || !Object.prototype.hasOwnProperty.call(WIZARD_LABELS, w.stage)) throw new Error('向导状态不可用')
-  var status = ['waiting', 'blocked', 'unknown', 'complete'].indexOf(w.status) >= 0 ? w.status : 'unknown'
-  var reasons = { start: '请在原对话说明希望解决的问题。', goal: '请在原对话明确目标。', scope: '请确认修改范围和验收依据；确认前不执行。', execution: '执行状态待确认，派发记录不代表完成。', checks: '需要真实检查、有效负对照与还原核对；未知或失败不能继续。', review: '需要当前任务的独立审查和合法最终裁定。', complete: '后端当前检查与独立裁定已确认。', problem: '存在阻断或未知结果，请先在原对话处理问题，不自动重试。' }
-  return { stage: w.stage, stage_label: WIZARD_LABELS[w.stage], status: status,
-    completed_ok: w.completed_ok === true && w.stage === 'complete' && status === 'complete',
-    goal: w.goal === '已记录目标' ? '已记录目标' : '尚未记录目标',
-    scope_count: Number.isInteger(w.scope_count) && w.scope_count >= 0 ? w.scope_count : 0,
-    reason: reasons[w.stage], next_responsible: ['start', 'goal', 'scope'].indexOf(w.stage) >= 0 ? '用户与原任务助手' : '原任务助手与独立审查者',
-    sampled_at: Number.isFinite(w.sampled_at) ? w.sampled_at : null,
-    warning_count: Number.isInteger(w.warning_count) && w.warning_count >= 0 ? w.warning_count : 0 }
-}
-function readStatus(result) {
-  if (!result || result.isError) throw new Error('状态未确认')
-  var content = (result.content || []).find(function (item) { return item.type === 'text' })
-  var status = content ? JSON.parse(content.text) : null
-  if (!status || !status.wizard) throw new Error('向导真源不可用')
-  return status
-}
-async function wizardGeneration(status, ctx) {
-  var encoded = unescape(encodeURIComponent(JSON.stringify({ card: status.card, card_ts: status.card_ts, sid: ctx.session_id, workdir: ctx.workdir })))
-  var data = Uint8Array.from(encoded, function (c) { return c.charCodeAt(0) })
-  var digest = await crypto.subtle.digest('SHA-256', data)
-  return Array.from(new Uint8Array(digest)).map(function (b) { return b.toString(16).padStart(2, '0') }).join('')
-}
-async function wizardCache() {
-  var response = await fetch('/kv')
-  if (!response.ok) throw new Error('缓存不可用')
-  var cfg = await response.json()
-  var rows = []
-  ;(Array.isArray(cfg.fullWizard) ? cfg.fullWizard : []).slice(-8).forEach(function (r) {
-    try {
-      if (!r || typeof r.sid !== 'string' || r.sid.length > 200 || typeof r.callId !== 'string' || r.callId.length > 200 || !/^[a-f0-9]{64}$/.test(r.generation) || !/^[a-f0-9]{32}$/.test(r.nonce) || !Object.prototype.hasOwnProperty.call(WIZARD_INTENTS, r.intent)) return
-      rows.push({ sid: r.sid, callId: r.callId, generation: r.generation, nonce: r.nonce, intent: r.intent, expiresAt: Number(r.expiresAt) || 0, requested: r.requested === true, resumed: r.resumed === true, wizard: safeWizard(r.wizard) })
-    } catch (e) { /* 单条展示损坏隔离；绝不重建执行资格 */ }
-  })
-  return { cfg: cfg, rows: rows }
-}
-async function saveWizard(cache) {
-  cache.cfg.fullWizard = cache.rows.slice(-8)
-  var response = await fetch('/kv', { method: 'PUT', body: JSON.stringify(cache.cfg) })
-  if (!response.ok) throw new Error('展示缓存保存未确认')
-}
-function wizardConfirmation(row, cached) {
-  if (cached) return 'unknown'
-  var issued = row && wizardIssued[row.nonce]
-  if (!row || !issued || wizardCurrent[row.sid] !== row.nonce || issued.sid !== row.sid || issued.callId !== row.callId || issued.generation !== row.generation || issued.intent !== row.intent) return 'unknown'
-  if (issued.expiresAt <= Date.now() || row.expiresAt <= Date.now()) return 'expired'
-  if (issued.unavailable) return 'unavailable'
-  if (issued.resumed) return 'consumed'
-  if (issued.requested) return 'requested'
-  return issued.offerReady === true ? 'pending' : 'unknown'
-}
-function displayWizard(row, confirmation, cached) {
-  if (wizardChannel && row) wizardChannel.postMessage({ type: 'wizard-display', sid: row.sid, wizard: row.wizard, cached: cached === true, intent: row.intent, confirmation: confirmation })
-}
-function drawWizard(callId, text, hide, nonce) {
-  cindy.send({ type: 'card-update', callId: callId, v: 2, state: 'done', height: 150,
-    html: '<div style="padding:12px;color:var(--text-primary,#222)"><p>' + text + '</p>' +
-      (hide ? '' : '<button data-ghost-action="wizard-continue:' + nonce + '" data-ghost-primary>确认并继续</button>') + '</div>' })
-}
-function escapeWizard(text) { return String(text).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] }) }
-function wizardDraft(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(function (key) { return ['goal', 'scope', 'acceptance'].indexOf(key) < 0 })) return null
-  var draft = {}
-  for (var key of ['goal', 'scope', 'acceptance']) {
-    if (value[key] !== undefined && (typeof value[key] !== 'string' || value[key].length > 1000)) return null
-    draft[key] = value[key] || ''
-  }
-  return draft
-}
-async function publishWizard(msg, ctx, status, intent) {
-  if (status.sessionId !== ctx.session_id) throw new Error('状态任务不匹配')
-  var generation = await wizardGeneration(status, ctx)
-  var summary = safeWizard(status.wizard)
-  wizardObserved[ctx.session_id] = generation
-  var cache
-  try { cache = await wizardCache() } catch (e) { cache = null }
-  var warning = null
-  var nonce = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(function (b) { return b.toString(16).padStart(2, '0') }).join('')
-  var row = { sid: ctx.session_id, callId: msg.callId, generation: generation, nonce: nonce, intent: intent, expiresAt: Date.now() + 120000, requested: false, resumed: false, wizard: summary }
-  try {
-    if (!cache) throw new Error('展示缓存不可用')
-    cache.rows = cache.rows.filter(function (r) { return r.sid !== ctx.session_id }); cache.rows.push(row)
-    await saveWizard(cache)
-    wizardIssued[nonce] = { sid: row.sid, callId: row.callId, generation: generation, intent: intent, expiresAt: row.expiresAt, requested: false, resumed: false, offerReady: true, workdir: ctx.workdir, draft: wizardDrafts[row.sid] || null }
-    wizardCurrent[row.sid] = nonce
-    var draft = wizardDrafts[row.sid]
-    drawWizard(msg.callId, WIZARD_INTENTS[intent] + '。' + (draft ? '待讨论草稿（不是任务事实或扩大范围授权）：' + escapeWizard(JSON.stringify(draft)) : '先在任务页填写草稿，再点击此原生卡读取草稿并开始协调。') + '文件与命令仍需原权限审批。', false, nonce)
-  } catch (e) {
-    warning = '展示或确认记录保存未确认；没有执行资格，请在原对话继续讨论。'
-    drawWizard(msg.callId, warning, true)
-  }
-  if (wizardChannel) wizardChannel.postMessage({ type: 'wizard-display', sid: ctx.session_id, wizard: summary, cached: false, intent: intent, confirmation: warning ? 'unavailable' : wizardConfirmation(row, false), draft_received: !!wizardDrafts[ctx.session_id] })
-  return { wizard: summary, warning: warning }
-}
-async function wizardStatusRequest(msg, ctx) {
-  var result = await cindy.node.request({ method: 'tools/call', params: { name: 'flow_status', arguments: { sessionId: ctx.session_id }, carlosContext: ctx },
-    callId: msg.callId, cancelWithCall: true, timeoutMs: NODE_TIMEOUT_MS, maxTotalMs: NODE_MAX_TOTAL_MS })
-  if (!result || !result.ok) throw new Error('只读状态请求未确认')
-  return readStatus(result.result)
-}
-function nextWizardIntent(stage) { return { start: 'clarify', goal: 'clarify', scope: 'confirm-scope', execution: 'execute', checks: 'check', review: 'review', complete: 'finish', problem: 'finish' }[stage] }
-async function startWizard(msg) {
-  var args = msg.args || {}, ctx = trustedWizardContext(msg)
-  if (!writableWizardContext(ctx)) return fail(msg, 'WIZARD_CONTEXT_REQUIRED', '仅支持当前本机可写任务；未受理启动，请检查任务权限与位置。')
-  if (args.sessionId !== undefined && args.sessionId !== ctx.session_id) return fail(msg, 'WIZARD_TASK_MISMATCH', '任务不匹配，未受理启动。')
-  var action = args.action === undefined ? 'open' : args.action
-  if (['open', 'prepare', 'resume'].indexOf(action) < 0 || Object.keys(args).some(function (key) { return ['session_context', 'sessionId', 'action', 'intent', 'expected'].indexOf(key) < 0 }) ||
-      (args.intent !== undefined && !Object.prototype.hasOwnProperty.call(WIZARD_INTENTS, args.intent)) || (action !== 'resume' && args.expected !== undefined)) return fail(msg, 'WIZARD_INVALID_INTENT', '只接受明确向导意图，不接受工具名、目录或执行指令。')
-  var row, issued, cache
-  if (action === 'resume') {
-    var exp = args.expected
-    if (!exp || typeof exp !== 'object' || Array.isArray(exp) || Object.keys(exp).sort().join(',') !== 'callId,generation,intent,nonce' || !/^[a-f0-9]{32}$/.test(exp.nonce) || !/^[a-f0-9]{64}$/.test(exp.generation)) return fail(msg, 'WIZARD_EXPECTED_INVALID', '确认记录无效，不回退普通执行。')
-    cache = await wizardCache()
-    row = cache.rows.find(function (r) { return r.sid === ctx.session_id && r.callId === exp.callId && r.nonce === exp.nonce && r.generation === exp.generation && r.intent === exp.intent })
-    issued = wizardIssued[exp.nonce]
-    if (issued && issued.workdir !== ctx.workdir) return fail(msg, 'WIZARD_WORKDIR_MISMATCH', '当前任务目录已变化，旧意图不能继续。')
-    if (!row || !issued || wizardCurrent[ctx.session_id] !== exp.nonce || issued.unavailable || issued.sid !== ctx.session_id || issued.callId !== exp.callId || issued.generation !== exp.generation || issued.intent !== exp.intent || !issued.requested || issued.resumed || issued.expiresAt <= Date.now() || !row.requested || row.resumed || row.expiresAt <= Date.now()) return fail(msg, 'WIZARD_EXPECTED_INVALID', '单次意图已过期、变化或消费；不重放，也不影响普通工具调用。')
-  }
-  var status = await wizardStatusRequest(msg, ctx)
-  if (status.sessionId !== ctx.session_id) return fail(msg, 'WIZARD_TASK_MISMATCH', '状态与当前任务不一致，未打开页面。')
-  if (row) {
-    var sampledGeneration = await wizardGeneration(status, ctx)
-    // 最后一个 await 之后同步复核并领取；并发另一请求不能穿过已消费的内存门。
-    if (sampledGeneration !== exp.generation) return fail(msg, 'WIZARD_GENERATION_CHANGED', '任务或目录已变化，旧意图不能继续。')
-    if (nextWizardIntent(status.wizard.stage) !== issued.intent) return fail(msg, 'WIZARD_INTENT_STAGE_MISMATCH', '本次采样阶段已变化，旧意图不能继续；不是实时监控。')
-    if (wizardIssued[exp.nonce] !== issued || wizardCurrent[ctx.session_id] !== exp.nonce || issued.unavailable || issued.resumed || !issued.requested ||
-        issued.sid !== ctx.session_id || issued.workdir !== ctx.workdir || issued.callId !== exp.callId || issued.generation !== exp.generation || issued.intent !== exp.intent ||
-        row.nonce !== exp.nonce || row.callId !== exp.callId || row.generation !== exp.generation || row.intent !== exp.intent || !row.requested || row.resumed ||
-        issued.expiresAt <= Date.now() || row.expiresAt <= Date.now()) {
-      displayWizard(row, wizardConfirmation(row, false), false)
-      return fail(msg, 'WIZARD_EXPECTED_INVALID', '单次意图在采样等待后过期、变化或已消费，不重放。')
-    }
-    // 同一同步段立即消费，不锁普通工具；保存未知仍保留消费，不回滚。
-    issued.resumed = true; row.resumed = true
-    displayWizard(row, 'consumed', false)
-    try { await saveWizard(cache) } catch (e) {
-      issued.unavailable = true
-      displayWizard(row, 'unavailable', false)
-      return fail(msg, 'WIZARD_PERSIST_UNKNOWN', '消费记录保存未确认；意图仍已消费，不自动重放。')
-    }
-    return { type: 'tool-result', callId: msg.callId, ok: true, result: { intent: row.intent, wizard: safeWizard(status.wizard),
-      proposal: issued.draft, proposal_is_untrusted: true,
-      next: '只协调本意图；草稿不等于用户原话、任务事实或扩大范围授权。正常业务工具沿原权限另发新调用。完成一个协调动作或提问后，必须在本活跃回合用 start_wizard prepare 采样并供下一确认卡；无需用户催动技术命令。未知结果先查证，不自动PASS或重放。' } }
-  }
-  var opened = await cindy.taskView({ sessionId: ctx.session_id })
-  if (!opened || !opened.ok || opened.sessionId !== ctx.session_id) return fail(msg, 'WIZARD_OPEN_DENIED', '任务页未受理或落点不一致；请检查插件批准与原任务，不自动重试。')
-  var intent = args.intent || nextWizardIntent(status.wizard.stage)
-  if (!intent || intent !== nextWizardIntent(status.wizard.stage)) return fail(msg, 'WIZARD_INTENT_STAGE_MISMATCH', '意图与真实当前阶段不一致，不执行或跳步。')
-  var published = await publishWizard(msg, ctx, status, intent)
-  return { type: 'tool-result', callId: msg.callId, ok: true, result: { opened: true, wizard: published.wizard, warning: published.warning,
-    intent: intent, hint: '先自然询问当前目标或范围，让用户在页填草稿并点击当前原生意图卡。每次resume之后本回合自动prepare下一卡，不让用户填写技术参数或催prepare。草稿只是提案，页面不能执行。' } }
-}
-async function wizardAction(msg) {
-  var nonce = msg.actionId.slice('wizard-continue:'.length)
-  if (!/^[a-f0-9]{32}$/.test(nonce) || wizardConsumed[nonce]) return
-  var issued = wizardIssued[nonce]
-  // 先绑定本实例当前nonce/callId/SID；无效跨任务事件不能消费或取消真卡。
-  if (!issued || wizardCurrent[issued.sid] !== nonce || issued.callId !== msg.callId || issued.sid !== msg.sessionId) return
-  wizardConsumed[nonce] = true
-  var cache
-  try { cache = await wizardCache() } catch (e) {
-    // GET网络/非ok/解析未知：仅仍绑定当前签发对象时撤销展示资格；消费不回滚。
-    if (wizardIssued[nonce] === issued && wizardCurrent[issued.sid] === nonce && issued.callId === msg.callId && issued.sid === msg.sessionId) {
-      issued.unavailable = true
-      if (wizardChannel) wizardChannel.postMessage({ type: 'wizard-confirmation', sid: issued.sid, confirmation: 'unavailable' })
-      drawWizard(msg.callId, '确认记录读取未确认；资格不可用，不请求助手或重放。', true)
-    }
-    return
-  }
-  var row = cache.rows.find(function (r) { return r.callId === msg.callId && r.sid === msg.sessionId && r.nonce === nonce })
-  if (!row || !issued || issued.callId !== row.callId || issued.sid !== row.sid || issued.generation !== row.generation || issued.intent !== row.intent || issued.expiresAt <= Date.now() || wizardCurrent[row.sid] !== nonce || issued.unavailable || row.requested || row.expiresAt <= Date.now() || wizardObserved[row.sid] !== row.generation || !msg.userActionToken) {
-    drawWizard(msg.callId, '确认已过期、任务观察已变化或记录不可用；请在原对话重新确认，不会自动执行。', true)
-    return
-  }
-  row.requested = true; issued.requested = true
-  // bootstrap卡只批准读取并讨论草稿；页面草稿永不变成业务授权。
-  issued.draft = wizardDrafts[row.sid] || issued.draft
-  try { await saveWizard(cache) } catch (e) {
-    issued.unavailable = true
-    displayWizard(row, 'unavailable', false)
-    drawWizard(msg.callId, '确认记录保存未确认；不会请求助手或重放。', true)
-    return
-  }
-  displayWizard(row, 'requested', false)
-  var expected = { callId: row.callId, generation: row.generation, nonce: row.nonce, intent: row.intent }
-  var result
-  try { result = await cindy.agent.run({ mode: 'continue', userActionToken: msg.userActionToken,
-    promptTemplate: '用户选择：{{user_message}}\n立即在新的活跃调用中使用 start_wizard(action=resume, expected=事件中的expected)。它只返回一个协调意图和未可信草稿，绝不将草稿作为quote/范围授权。按当前阶段自然提问或协调一个动作；正常业务工具另发新调用沿原权限。随后本回合必须调用 start_wizard(action=prepare) 采样并生成下一适用意图卡，说明下一输入项，不让用户主动催prepare或填写JSON。没有用户确认不扩范围；不免检、自动PASS、重放未知结果；resume失败不能回退执行。\n{{event_json}}',
-    userMessage: WIZARD_INTENTS[row.intent], event: { expected: expected } })
-  } catch (e) {
-    issued.unavailable = true
-    displayWizard(row, 'unknown', false)
-    drawWizard(msg.callId, '助手续接结果未知；不自动重放，请查看原对话。', true)
-    return
-  }
-  if (!result || !result.ok) { issued.unavailable = true; displayWizard(row, 'unavailable', false) }
-  drawWizard(msg.callId, result && result.ok ? '原助手已受理本意图；正在协调下一步，不代表执行或检查完成。' : '继续未受理或结果未知，请查看原对话；不自动重试。', true)
-}
-if (wizardChannel) wizardChannel.onmessage = async function (event) {
-  var data = event.data
-  if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.sid !== 'string' || data.sid.length > 200) return
-  if (data.type === 'wizard-draft-proposal') {
-    if (!wizardObserved[data.sid] || Object.keys(data).some(function (key) { return ['type', 'sid', 'draft'].indexOf(key) < 0 })) return
-    var draft = wizardDraft(data.draft)
-    if (draft) { wizardDrafts[data.sid] = draft; wizardChannel.postMessage({ type: 'wizard-draft-received', sid: data.sid, untrusted: true }) }
-    return
-  }
-  if (data.type !== 'wizard-display-request') return
-  try {
-    var cache = await wizardCache()
-    var row = cache.rows.find(function (r) { return r.sid === data.sid })
-    if (row) displayWizard(row, 'unknown', true)
-  } catch (e) {
-    if (wizardChannel) wizardChannel.postMessage({ type: 'wizard-confirmation', sid: data.sid, confirmation: 'unavailable' })
-  }
-}
-
 function rulesOf(toolName) {
   var cat = CATEGORY_BY_TOOL[toolName];
   return cat ? cat.rules : [];
@@ -646,11 +410,9 @@ async function staleAction(msg) {
 cindy.onHostMessage(async function (msg) {
   if (msg && msg.type === 'event' && msg.name === 'card-action') {
     try {
-      if (msg.actionId && msg.actionId.indexOf('wizard-continue:') === 0) await wizardAction(msg)
-      else await staleAction(msg)
+      await staleAction(msg)
     } catch (error) {
-      if (msg.actionId && msg.actionId.indexOf('wizard-continue:') === 0) drawWizard(msg.callId, '继续请求未确认，请查看原对话；不会自动重试。', true)
-      else drawStale(msg.callId, '向导状态未知；请查看原任务，不自动重试。', true)
+      drawStale(msg.callId, '向导状态未知；请查看原任务，不自动重试。', true)
     }
     return
   }
@@ -658,18 +420,13 @@ cindy.onHostMessage(async function (msg) {
   try {
     var out;
     if (msg.tool === 'list_tools') out = await listTools(msg);
-    else if (msg.tool === 'start_wizard') out = await startWizard(msg);
     else if (msg.tool === 'call_tool') out = await callToolRequest(msg);
     else {
       out = fail(msg, 'UNKNOWN_META_TOOL',
-        '本插件提供 start_wizard 启动向导，以及 list_tools 与 call_tool 两段式门禁入口。');
+        '本插件提供 list_tools 与 call_tool 两段式门禁入口。');
     }
     cindy.send(out);
   } catch (e) {
-    if (msg.tool === 'start_wizard') {
-      cindy.send(fail(msg, 'WIZARD_UNCERTAIN', '启动请求未确认；请查看原任务，不自动重试或执行。'))
-      return
-    }
     if (msg.args && msg.args.args && Object.prototype.hasOwnProperty.call(msg.args.args, 'expected')) {
       cindy.send(fail(msg, 'WIZARD_UNCERTAIN', '向导请求未确认；请查看原任务，不自动重试或回退执行。'))
       return

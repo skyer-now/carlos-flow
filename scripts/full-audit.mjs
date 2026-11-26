@@ -261,14 +261,14 @@ const ghostTools = declaredPublic.map((t) => t?.name);
 if (!Array.isArray(ghostJson?.tools)) P('工具清单', 'public 工具清单不是数组');
 if (new Set(ghostTools).size !== ghostTools.length) P('工具清单', 'public 工具重复');
 
-// 两元工具可附带唯一已知启动器；不是任意额外工具的白名单。
-const metaPresent = ghostTools.some((name) => ['list_tools', 'call_tool', 'start_wizard'].includes(name));
-const allowedPublic = ['list_tools', 'call_tool', 'start_wizard'];
+// 两元工具清单：严格只声明 list_tools 与 call_tool
+const metaPresent = ghostTools.some((name) => ['list_tools', 'call_tool'].includes(name));
+const allowedPublic = ['list_tools', 'call_tool'];
 const TWO_LEVEL = metaPresent;
 if (TWO_LEVEL && !(
-  (ghostTools.length === 2 || ghostTools.length === 3) && new Set(ghostTools).size === ghostTools.length &&
+  ghostTools.length === 2 && new Set(ghostTools).size === 2 &&
   ghostTools.includes('list_tools') && ghostTools.includes('call_tool') && ghostTools.every((name) => allowedPublic.includes(name))
-)) P('工具清单', '不允许的 public 工具集合；只允许两元工具或附加 start_wizard');
+)) P('工具清单', '不允许的 public 工具集合；只允许 list_tools 与 call_tool 两个元工具');
 
 if (TWO_LEVEL) {
   const mainJs = read('main.js') || '';
@@ -285,7 +285,7 @@ if (TWO_LEVEL) {
     if (!Array.isArray(sandbox.CATEGORIES) || sandbox.CATEGORIES.some((category) => !Array.isArray(category.members) || category.members.some((name) => typeof name !== 'string'))) {
       P('工具清单', 'main.js 类目表结构无效');
     } else members = sandbox.CATEGORIES.flatMap((category) => category.members);
-    const routes = { list_tools: 'listTools', call_tool: 'callToolRequest', start_wizard: 'startWizard' };
+    const routes = { list_tools: 'listTools', call_tool: 'callToolRequest' };
     for (const name of ghostTools.filter((name) => allowedPublic.includes(name))) {
       const target = routes[name];
       if (typeof sandbox[target] !== 'function' || typeof sandbox.__handler !== 'function') {
@@ -308,16 +308,6 @@ if (TWO_LEVEL) {
     const required = schema?.required === undefined ? [] : schema.required;
     let valid = object(schema) && schema.type === 'object' && object(props) && Array.isArray(required) &&
       required.every((key) => typeof key === 'string' && Object.hasOwn(props, key)) && new Set(required).size === required.length;
-    if (valid && tool.name === 'start_wizard') {
-      const choices = (value, wanted) => value?.type === 'string' && Array.isArray(value.enum) && value.enum.length === wanted.length && wanted.every((name) => value.enum.includes(name));
-      const expected = props.expected;
-      valid = required.length === 0 && (Object.keys(props).length === 0 || (
-        Object.keys(props).sort().join(',') === 'action,expected,intent' &&
-        choices(props.action, ['open', 'prepare', 'resume']) && choices(props.intent, ['clarify', 'confirm-scope', 'execute', 'check', 'review', 'finish']) &&
-        expected?.type === 'object' && object(expected.properties) && Object.keys(expected.properties).sort().join(',') === 'callId,generation,intent,nonce' &&
-        Object.values(expected.properties).every((field) => field.type === 'string') && Array.isArray(expected.required) && expected.required.length === 4 && new Set(expected.required).size === 4 && expected.required.every((key) => Object.hasOwn(expected.properties, key)) && expected.additionalProperties === false
-      ));
-    }
     if (valid && tool.name === 'list_tools') valid = Object.keys(props).length === 1 && props.category?.type === 'string' && required.length === 0;
     if (valid && tool.name === 'call_tool') valid = Object.keys(props).length === 2 && props.name?.type === 'string' && props.args?.type === 'object' && required.length === 1 && required[0] === 'name';
     if (!valid) P('工具清单', `public 参数 schema 无效：${tool?.name}`);

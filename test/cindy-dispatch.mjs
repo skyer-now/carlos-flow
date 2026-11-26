@@ -214,184 +214,22 @@ try {
   await issue('keyword-only')
   check('W14 STALE 关键词不能误供卡', uiSent.filter(msg => msg.type === 'card-update').length === cardsBefore)
 
-  // 新入口跑真实 main；Node 目录/无卡状态是真服务端，Host 页签与点击票仅单元桩。
-  let fullKv = {}; let fullHandler; let nodeDenied = false; let openDenied = false; let agentDenied = false
-  let replaceCard = false; let kvFailure = ''; let kvReads = 0
-  const fullSent = []; const fullRequests = []; const opens = []; const continues = []; const broadcasts = []
-  const context = { session_id: 'full-task', workdir: ROOT, workdir_is_local: true, workdir_is_read_only: false }
-  const fullHost = {
-    crypto: webcrypto, setInterval, clearInterval, console,
-    BroadcastChannel: class { constructor() { broadcasts.push(this) } postMessage(data) { this.last = data } },
-    fetch: async (url, opts) => { kvReads++; if (kvFailure === (opts ? 'put' : 'get')) throw new Error('KV故障桩'); if (opts) fullKv = JSON.parse(opts.body); return { ok: true, json: async () => structuredClone(fullKv) } },
-    cindy: {
-      onHostMessage: fn => { fullHandler = fn }, send: msg => fullSent.push(msg),
-      taskView: async req => { opens.push(req); return openDenied ? { ok: false } : { ok: true, sessionId: req.sessionId } },
-      agent: { run: async req => { continues.push(req); return { ok: !agentDenied } } },
-      node: { request: async req => {
-        fullRequests.push(req)
-        if (nodeDenied) return { ok: false }
-        const reply = await server.request(req.method, req.params)
-        if (replaceCard && req.params?.name === 'flow_status') {
-          const value = JSON.parse(reply.result.content[0].text); value.card_ts = 42
-          reply.result.content[0].text = JSON.stringify(value)
-        }
-        return { ok: !reply.error, result: reply.result }
-      } },
-    },
-  }
-  vm.runInNewContext(mainSrc, fullHost)
-  async function launch(id, ctx = context, extra = {}) {
-    await fullHandler({ type: 'tool-call', tool: 'start_wizard', callId: id, args: { ...extra, session_context: ctx } })
-    return fullSent.findLast(msg => msg.type === 'tool-result' && msg.callId === id)
-  }
-  const started = await launch('full-open')
-  check('F1 真 Node 无卡启动只读且任务页落点绑定', started?.ok === true && started.result.wizard.stage === 'start' && opens.at(-1).sessionId === context.session_id && fullRequests[0].params.name === 'flow_status' && fullRequests[0].callId === 'full-open' && fullRequests[0].cancelWithCall === true)
-  check('F2 三个 public 工具且后端目录不新增操作', JSON.parse(fs.readFileSync(path.join(ROOT, 'ghost.json'), 'utf8')).tools.length === 3 && listed.result.tools.length === expectedTotal)
-  const noRead = fullRequests.length
-  check('F3 跨任务启动拒绝', (await launch('cross', context, { sessionId: 'other' })).ok === false)
-  check('F4 非本机启动拒绝', (await launch('remote', { ...context, workdir_is_local: false })).ok === false)
-  check('F5 只读启动拒绝', (await launch('readonly', { ...context, workdir_is_read_only: true })).ok === false && fullRequests.length === noRead)
-  openDenied = true
-  check('F6 Host 权限拒绝不受理', (await launch('denied')).errorCode === 'WIZARD_OPEN_DENIED')
-  openDenied = false; nodeDenied = true
-  check('F7 Node 请求未知不供执行资格', (await launch('node-denied')).ok === false)
-  nodeDenied = false
-  await launch('click-once')
-  const row = fullKv.fullWizard[0]
-  const action = { type: 'event', name: 'card-action', callId: row.callId, sessionId: row.sid, actionId: 'wizard-continue:' + row.nonce, userActionToken: 'Host单元真票桩' }
-  const beforeClick = fullRequests.length
-  await Promise.all([fullHandler(action), fullHandler(action)])
-  check('F8 单次原生确认只Agentcontinue不复用Node', continues.length === 1 && continues[0].mode === 'continue' && fullRequests.length === beforeClick && fullKv.fullWizard[0].requested)
-  await fullHandler({ type: 'tool-call', tool: 'start_wizard', callId: 'new-active', args: { action: 'resume', expected: continues[0].event.expected, session_context: context } })
-  check('F9 续接新activecall只读刷新并单次消费意图', fullRequests.at(-1).callId === 'new-active' && fullSent.at(-1).result.intent === 'clarify')
-  await launch('replaced-intent')
-  const replacedRow = fullKv.fullWizard[0]
-  await fullHandler({ ...action, callId: replacedRow.callId, actionId: 'wizard-continue:' + replacedRow.nonce })
-  replaceCard = true
-  await fullHandler({ type: 'tool-call', tool: 'start_wizard', callId: 'replaced-active', args: { action: 'resume', expected: continues.at(-1).event.expected, session_context: context } })
-  check('F10 明确wizard意图查到换卡则拒绝，不执行业务工具', fullSent.findLast(msg => msg.callId === 'replaced-active').errorCode === 'WIZARD_GENERATION_CHANGED' && fullRequests.at(-1).params.name === 'flow_status')
-  replaceCard = false
-  await launch('cross-click')
-  const crossRow = fullKv.fullWizard[0]
-  await fullHandler({ ...action, callId: crossRow.callId, actionId: 'wizard-continue:' + crossRow.nonce, sessionId: 'other' })
-  check('F11 跨任务点击拒绝', continues.length === 2)
-  await launch('expired-click')
-  const expired = fullKv.fullWizard[0]; expired.expiresAt = 0
-  await fullHandler({ ...action, callId: expired.callId, actionId: 'wizard-continue:' + expired.nonce })
-  check('F12 过期点击拒绝', continues.length === 2)
-  await launch('permission-click'); agentDenied = true
-  const rejected = fullKv.fullWizard[0]
-  await fullHandler({ ...action, callId: rejected.callId, actionId: 'wizard-continue:' + rejected.nonce })
-  await fullHandler({ ...action, callId: rejected.callId, actionId: 'wizard-continue:' + rejected.nonce })
-  check('F13 Agent权限拒绝后仍不重放', continues.length === 3 && fullKv.fullWizard[0].requested && fullSent.at(-1).html.includes('未受理'))
-  check('F14 白名单缓存无命令路径点击票', !JSON.stringify(fullKv).includes(ROOT) && !JSON.stringify(fullKv).includes('Host单元真票桩') && !JSON.stringify(fullKv).includes('content'))
-  const countBeforeCache = fullRequests.length
-  await broadcasts[0].onmessage({ data: { type: 'wizard-display-request', sid: context.session_id, tool: 'flow_dispatch', cwd: ROOT } })
-  check('F15 页面意图只有缓存展示，零NodeAgent', fullRequests.length === countBeforeCache && continues.length === 3 && broadcasts[0].last.cached === true)
-
+  // 设置页加载与保存测试
   const settingsSource = fs.readFileSync(path.join(ROOT, 'settings.js'), 'utf8')
-  async function page(search) {
-    const nodes = new Map(); const fetches = []; const channels = []
+  async function page() {
+    const nodes = new Map(); const fetches = []
     const get = key => { if (!nodes.has(key)) nodes.set(key, { hidden: true, value: '', style: {}, dataset: {}, setAttribute() {} }); return nodes.get(key) }
     vm.runInNewContext(settingsSource, {
-      location: { search }, URLSearchParams, console,
+      location: { search: '' }, URLSearchParams, console,
       document: { querySelector: get, querySelectorAll: () => [] },
-      BroadcastChannel: class { constructor() { channels.push(this) } postMessage(data) { this.last = data } },
       fetch: async (url, options) => { fetches.push({ url, options }); return { ok: true, json: async () => ({}) } },
     })
     await new Promise(resolve => setImmediate(resolve))
-    return { nodes, fetches, channels }
+    return { nodes, fetches }
   }
-  const taskPage = await page('?session=full-task')
-  check('F16 taskView分支零config读写，显示采样请求', taskPage.fetches.every(req => req.url === '/wake') && taskPage.channels[0].last.sid === 'full-task' && taskPage.nodes.get('#wizard-shell').hidden === false && !taskPage.nodes.has('#save'))
-  const invalidPage = await page('?session=')
-  check('F17 非法任务不回退配置页', invalidPage.fetches.length === 0 && !invalidPage.nodes.has('#save'))
-  const settingsPage = await page('')
+  const settingsPage = await page()
   await settingsPage.nodes.get('#save').onclick()
   check('F18 原设置加载保存回归', settingsPage.fetches[0].url === '/config' && settingsPage.fetches.at(-1).options.method === 'PUT' && settingsPage.nodes.get('#settings-shell').hidden === false)
-  const reopened = await page('?session=full-task')
-  reopened.channels[0].onmessage({ data: broadcasts[0].last })
-  check('F19 重开显示缓存非实时，不复活Node', reopened.nodes.get('#wizard-sample').textContent.includes('可能已经过期') && fullRequests.length === countBeforeCache)
-  agentDenied = false
-  await launch('old-observed')
-  const oldObserved = structuredClone(fullKv.fullWizard[0])
-  replaceCard = true
-  await launch('observe-new-card')
-  const oldClicks = continues.length
-  await fullHandler({ ...action, callId: oldObserved.callId, actionId: 'wizard-continue:' + oldObserved.nonce })
-  check('F20 新采样不替旧确认换代，旧卡点击拒绝', continues.length === oldClicks && fullKv.fullWizard[0].generation !== oldObserved.generation)
-  replaceCard = false
-  await launch('wrong-cwd')
-  const bound = fullKv.fullWizard[0]
-  await fullHandler({ ...action, callId: bound.callId, actionId: 'wizard-continue:' + bound.nonce })
-  const beforeMismatch = fullRequests.length
-  await fullHandler({ type: 'tool-call', tool: 'start_wizard', callId: 'wrong-cwd-call', args: { action: 'resume', expected: continues.at(-1).event.expected, session_context: { ...context, workdir: 'other' } } })
-  check('F21 明确wizard意图目录错绑拒绝且零Node', fullSent.findLast(msg => msg.callId === 'wrong-cwd-call').errorCode === 'WIZARD_WORKDIR_MISMATCH' && fullRequests.length === beforeMismatch)
-  async function ordinary(id, name, args) {
-    await fullHandler({ type: 'tool-call', tool: 'call_tool', callId: id, args: { name, args, session_context: context } })
-    return fullSent.findLast(msg => msg.type === 'tool-result' && msg.callId === id)
-  }
-  for (const state of ['empty', 'false', 'oldtrue', 'badrow', 'get', 'put']) {
-    fullKv = state === 'empty' ? {} : { fullWizard: [{ ...bound, requested: state !== 'false', expiresAt: 0, wizard: state === 'badrow' ? { stage: 'bad-secret' } : bound.wizard }] }
-    kvFailure = ['get', 'put'].includes(state) ? state : ''
-    const beforeKv = kvReads
-    const history = await ordinary('history-' + state, 'flow_status', { sessionId: 'history' })
-    check('P4 普通历史SID不受向导KV限制 ' + state, history.ok === true && fullRequests.at(-1).params.arguments.sessionId === 'history' && kvReads === beforeKv)
-    const aggregate = await ordinary('aggregate-' + state, 'flow_audit', {})
-    check('P4 省略audit仍聚合 ' + state, aggregate.ok === true && !Object.hasOwn(fullRequests.at(-1).params.arguments, 'sessionId') && kvReads === beforeKv)
-    await ordinary('cwd-' + state, 'flow_status', { sessionId: context.session_id, cwd: ROOT.replace(/\\/g, '/') + '/' })
-    check('P4 普通cwd原样透传 ' + state, fullRequests.at(-1).params.arguments.cwd === ROOT.replace(/\\/g, '/') + '/' && kvReads === beforeKv)
-  }
-  kvFailure = ''; fullKv = {}
-  await launch('continuous-open')
-  const first = fullKv.fullWizard[0]
-  const stageAgentCount = continues.length
-  const pageNodeCount = fullRequests.length
-  await broadcasts[0].onmessage({ data: { type: 'wizard-draft-proposal', sid: context.session_id, draft: { goal: '<script>不是授权</script>', scope: '仅讨论范围', acceptance: '真实行为' } } })
-  await broadcasts[0].onmessage({ data: { type: 'wizard-draft-proposal', sid: 'unbound', draft: { goal: '错任务' } } })
-  await broadcasts[0].onmessage({ data: { type: 'wizard-draft-proposal', sid: context.session_id, draft: { goal: '伪造', tool: 'flow_dispatch' } } })
-  check('P4 草稿和恶意页面提案零NodeAgent', fullRequests.length === pageNodeCount && continues.length === stageAgentCount)
-  await fullHandler({ ...action, callId: first.callId, actionId: 'wizard-continue:' + first.nonce })
-  const expected = structuredClone(continues.at(-1).event.expected)
-  for (const [label, override, who] of [
-    ['cross-sid', expected, { ...context, session_id: 'other' }],
-    ['readonly', expected, { ...context, workdir_is_read_only: true }],
-    ['nonce', { ...expected, nonce: 'f'.repeat(32) }, context],
-    ['generation', { ...expected, generation: 'f'.repeat(64) }, context],
-    ['wrapper-injection', { ...expected, cwd: ROOT }, context],
-  ]) {
-    const beforeReject = fullRequests.length
-    await fullHandler({ type: 'tool-call', tool: 'start_wizard', callId: 'bad-resume-' + label, args: { action: 'resume', expected: override, session_context: who } })
-    check('P4 明确resume无效绑定拒绝零Node ' + label, fullSent.at(-1).ok === false && fullRequests.length === beforeReject)
-  }
-  const expiration = fullKv.fullWizard[0].expiresAt; fullKv.fullWizard[0].expiresAt = 0
-  await fullHandler({ type: 'tool-call', tool: 'start_wizard', callId: 'expired-resume', args: { action: 'resume', expected, session_context: context } })
-  check('P4 过期resume拒绝', fullSent.at(-1).ok === false)
-  fullKv.fullWizard[0].expiresAt = expiration
-  await fullHandler({ type: 'tool-call', tool: 'start_wizard', callId: 'single-resume', args: { action: 'resume', expected, session_context: context } })
-  const resumed = fullSent.at(-1)
-  check('P4 单意图续接携草稿但不当授权', resumed.ok && resumed.result.proposal_is_untrusted && resumed.result.proposal.goal.includes('<script>') && !fullRequests.at(-1).params.arguments.expected)
-  await fullHandler({ type: 'tool-call', tool: 'start_wizard', callId: 'replay-resume', args: { action: 'resume', expected, session_context: context } })
-  check('P4 重复resume只拒意图', fullSent.at(-1).ok === false)
-  const taskRepo = path.join(HOME, 'phase4-task-project')
-  fs.mkdirSync(taskRepo, { recursive: true }); fs.writeFileSync(path.join(taskRepo, 'target.txt'), 'fixture')
-  await ordinary('real-user-message', 'flow_add_user_msg', { sessionId: context.session_id, text: '请修复测试文件' })
-  const submitted = await ordinary('real-new-card', 'flow_submit_requirement', { sessionId: context.session_id, cwd: taskRepo, goal: '修复测试文件', quote: '请修复测试文件', scope: ['target.txt'], acceptance: ['真实测试'], verify: { cmd: 'node -e "process.exit(0)"' } })
-  const afterSubmit = await ordinary('after-card-status', 'flow_status', { sessionId: context.session_id })
-  const claimed = await ordinary('after-card-claim', 'flow_claim', { sessionId: context.session_id, role: 'executor' })
-  check('P4 真实无卡确认后建卡状态及claim不被旧意图锁', submitted.ok && !submitted.result.mcpResult.isError && afterSubmit.ok && JSON.parse(afterSubmit.result.mcpResult.content[0].text).has_card && claimed.ok && !claimed.result.mcpResult.isError)
-  await fullHandler({ type: 'tool-call', tool: 'start_wizard', callId: 'next-prepare', args: { action: 'prepare', session_context: context } })
-  const next = fullKv.fullWizard[0]
-  check('P4 连续prepare生成新准确意图卡', fullSent.at(-1).ok && next.nonce !== expected.nonce && next.intent === 'execute' && fullSent.findLast(m => m.type === 'card-update').html.includes('下一项执行'))
-  replaceCard = false
-  kvFailure = 'put'
-  const warn = await launch('warn-only')
-  check('P4 向导展示写失败降warning不伪发资格', warn.ok && warn.result.warning && fullSent.findLast(m => m.type === 'card-update').html.indexOf('data-ghost-action') < 0)
-  kvFailure = ''
-  taskPage.nodes.get('#draft-goal').value = '<img onerror=伪指令>'
-  const oldPageFetches = taskPage.fetches.length
-  taskPage.nodes.get('#draft-propose').onclick()
-  check('P4 页面内存草稿只传白名单提案', taskPage.channels[0].last.type === 'wizard-draft-proposal' && taskPage.fetches.length === oldPageFetches && taskPage.nodes.get('#draft-state').textContent.includes('尚未发送'))
 
   // P5 新文件授权（new_files）门禁层用例：
   //    「派发时尚不存在的新文件」必须走**独立字段**精确授权，
@@ -902,84 +740,6 @@ try {
       String(res.payload?.reason || res.text || '').slice(0, 120));
   }
 
-  // Phase6：真实main/settings处理器，Node/Clock/Host边界为确定性单元桩。
-  function resumeHarness() {
-    let receive, store = {}, phase = 'execution', now = 1000000, pause, putBroken = false, getBroken = false, getFault = 'none', reads = 0
-    const outputs = [], events = [], turns = []
-    class FixedDate extends Date { static now() { return now } }
-    const context6 = { session_id: 'phase6', workdir: ROOT, workdir_is_local: true, workdir_is_read_only: false }
-    const brain = {
-      Date: FixedDate, crypto: webcrypto, console, setInterval, clearInterval,
-      BroadcastChannel: class { constructor() { events.push(this) } postMessage(msg) { this.last = msg } },
-      fetch: async (_url, opts) => { if (!opts && (getBroken || getFault === 'network')) throw Error('展示记录GET失败'); if (opts) { if (putBroken) throw Error('确认记录PUT失败'); store = JSON.parse(opts.body) } return { ok: !!opts || getFault !== 'nonok', json: async () => { if (!opts && getFault === 'parse') throw Error('展示记录解析失败'); return structuredClone(store) } } },
-      cindy: { onHostMessage: fn => { receive = fn }, send: msg => outputs.push(msg), taskView: async req => ({ ok: true, sessionId: req.sessionId }),
-        agent: { run: async req => { turns.push(req); return { ok: true } } },
-        node: { request: async req => {
-          reads++
-          if (pause) { const gate = pause; gate.arrived++; if (gate.arrived === gate.count) gate.ready(); await gate.wait }
-          return { ok: true, result: { content: [{ type: 'text', text: JSON.stringify({ sessionId: context6.session_id, card: { goal: '测试' }, card_ts: 1, wizard: { stage: phase, status: 'waiting', scope_count: 1, sampled_at: now } }) }] } }
-        } },
-      },
-    }
-    vm.runInNewContext(mainSrc, brain)
-    const call = async (id, args) => { await receive({ type: 'tool-call', tool: 'start_wizard', callId: id, args: { ...args, session_context: context6 } }); return outputs.findLast(msg => msg.type === 'tool-result' && msg.callId === id) }
-    return { call, events, outputs, get reads() { return reads }, get turnCount() { return turns.length }, get row() { return store.fullWizard?.[0] }, set phase(v) { phase = v }, set now(v) { now = v }, set putBroken(v) { putBroken = v }, set getBroken(v) { getBroken = v }, set getFault(v) { getFault = v },
-      async offer() { await call('offer6', {}) },
-      async click(overrides = {}) { const row = store.fullWizard[0]; await receive({ type: 'event', name: 'card-action', callId: row.callId, sessionId: row.sid, actionId: 'wizard-continue:' + row.nonce, userActionToken: 'Host测试票', ...overrides }) },
-      async confirm() { await call('offer6', {}); const row = store.fullWizard[0]; await receive({ type: 'event', name: 'card-action', callId: row.callId, sessionId: row.sid, actionId: 'wizard-continue:' + row.nonce, userActionToken: 'Host测试票' }); return turns.at(-1).event.expected },
-      gate(count) { let release, ready; const wait = new Promise(r => { release = r }); const entered = new Promise(r => { ready = r }); pause = { wait, ready, arrived: 0, count }; return { entered, release() { pause = null; release() } } },
-      async cached() { await events[0].onmessage({ data: { type: 'wizard-display-request', sid: context6.session_id } }); return events[0].last },
-    }
-  }
-  const concurrent = resumeHarness(); const parallelExpected = await concurrent.confirm()
-  const parallelGate = concurrent.gate(2)
-  const parallelCalls = [concurrent.call('parallel-a', { action: 'resume', expected: parallelExpected }), concurrent.call('parallel-b', { action: 'resume', expected: parallelExpected })]
-  await parallelGate.entered; parallelGate.release()
-  const parallelResults = await Promise.all(parallelCalls)
-  check('P6 双resume屏障只接受一次，另一方拒绝', parallelResults.filter(r => r.ok).length === 1 && parallelResults.filter(r => !r.ok).length === 1)
-  const deadline = resumeHarness(); const deadlineExpected = await deadline.confirm(); const deadlineGate = deadline.gate(1)
-  const crossing = deadline.call('cross-deadline', { action: 'resume', expected: deadlineExpected })
-  await deadlineGate.entered; deadline.now = deadline.row.expiresAt + 1; deadlineGate.release()
-  check('P6 await跨原期限拒绝', (await crossing).ok === false)
-  for (const stage of ['checks', 'complete', 'unknown']) {
-    const advanced = resumeHarness(); const oldIntent = await advanced.confirm(); advanced.phase = stage
-    check('P6 同卡代阶段变化拒旧意图 ' + stage, (await advanced.call('advanced', { action: 'resume', expected: oldIntent })).ok === false)
-  }
-  const persistFailure = resumeHarness(); const persistentExpected = await persistFailure.confirm(); persistFailure.putBroken = true
-  const unknownSave = await persistFailure.call('save-unknown', { action: 'resume', expected: persistentExpected })
-  persistFailure.putBroken = false
-  check('P6 领取后保存未知仍消费不回滚重放', !unknownSave.ok && (await persistFailure.call('save-replay', { action: 'resume', expected: persistentExpected })).ok === false)
-  const broken = resumeHarness(); broken.putBroken = true; await broken.call('no-qualification', {})
-  const brokenPage = await page('?session=phase6')
-  brokenPage.channels[0].onmessage({ data: broken.events[0].last })
-  check('P6 KVPUT失败广播与真实页面联动不伪当前卡', broken.events[0].last.confirmation === 'unavailable' && brokenPage.nodes.get('#wizard-confirm').textContent.includes('不可用') && !brokenPage.nodes.get('#wizard-confirm').textContent.includes('请回原对话单击'))
-  const cacheMessage = await concurrent.cached(); const cachePage = await page('?session=phase6')
-  cachePage.channels[0].onmessage({ data: cacheMessage })
-  check('P6 重开缓存只报上次意图资格未知', cacheMessage.confirmation === 'unknown' && cachePage.nodes.get('#wizard-confirm').textContent.includes('上次意图') && cachePage.nodes.get('#wizard-confirm').textContent.includes('未知'))
-  concurrent.getBroken = true
-  const failedCache = await concurrent.cached()
-  cachePage.channels[0].onmessage({ data: failedCache })
-  check('P6 缓存GET失败也清除页面当前资格提示', failedCache.confirmation === 'unavailable' && cachePage.nodes.get('#wizard-confirm').textContent.includes('不可用'))
-  for (const fault of ['network', 'nonok', 'parse']) {
-    const callbackFault = resumeHarness(); await callbackFault.offer()
-    const callbackPage = await page('?session=phase6')
-    callbackPage.channels[0].onmessage({ data: callbackFault.events[0].last })
-    const pendingShown = callbackPage.nodes.get('#wizard-confirm').textContent.includes('待原生确认')
-    const nodeBefore = callbackFault.reads
-    callbackFault.getFault = fault; await callbackFault.click()
-    callbackPage.channels[0].onmessage({ data: callbackFault.events[0].last })
-    const hiddenCard = !callbackFault.outputs.findLast(m => m.type === 'card-update').html.includes('data-ghost-action')
-    callbackFault.getFault = 'none'; await callbackFault.click()
-    check('P7 原生callback GET故障闭环 ' + fault, pendingShown && callbackPage.nodes.get('#wizard-confirm').textContent.includes('不可用') && callbackFault.events[0].last.confirmation === 'unavailable' && hiddenCard && callbackFault.reads === nodeBefore && callbackFault.turnCount === 0)
-  }
-  for (const mismatch of ['sid', 'callId', 'nonce']) {
-    const guarded = resumeHarness(); await guarded.offer(); const displays = guarded.events[0].last; const outputCount = guarded.outputs.length
-    guarded.getFault = 'network'
-    await guarded.click(mismatch === 'sid' ? { sessionId: 'other-task' } : mismatch === 'callId' ? { callId: 'other-call' } : { actionId: 'wizard-continue:' + 'f'.repeat(32) })
-    const unchanged = guarded.events[0].last === displays && guarded.outputs.length === outputCount
-    guarded.getFault = 'none'; await guarded.click()
-    check('P7 无效绑定不取消真卡且合法callback仍继续 ' + mismatch, unchanged && guarded.turnCount === 1 && guarded.events[0].last.confirmation === 'requested')
-  }
 } finally {
   await server.close();
   try { fs.rmSync(HOME, { recursive: true, force: true }); } catch { /* ignore */ }
