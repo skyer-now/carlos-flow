@@ -1,6 +1,6 @@
 {
   "name": "carlos-flow",
-  "version": "3.3.3",
+  "version": "3.4.0",
   "description": "Carlos 工作流 — AI 编程卫士。留痕/派发/验证/裁定/审计/还原；标准 stdio 配置导出，宿主原生适配以实测为准。",
   "type": "module",
   "main": "src/index.js",

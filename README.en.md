@@ -34,7 +34,14 @@ When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or
 
 ---
 
-## 🌟 Highlights & New Features in v3.3.3
+## 🌟 Highlights & New Features in v3.4.0
+
+### 0. Two-Way Platform Onboarding: Either Install Order Works (new in v3.4.0)
+* **See what you have in one command**: `carlos-flow init --discover` lists 13 mainstream AI coding platforms — config location, whether installed, file format, and whether it can be written safely. Read-only: no directories created, no files touched.
+* **Both install orders supported**: platform first then Carlos — use `--discover` + `--all`; Carlos first then platform — run `--target <platform>` once after installing it.
+* **Append-only, never clobbers your setup**: reuses the safe merge pipeline, adds only the `carlos-flow` entry, keeps all your other MCP servers intact, and stays idempotent on repeat runs.
+* **Non-strict formats are never rewritten**: VS Code / Cursor `settings.json` (JSONC with comments), Codex (TOML) and OpenCode (own schema) only print a paste-ready snippet — the original file is left byte-for-byte untouched.
+* **No path guessing, no directory creation**: an uninstalled platform reports `not_installed` and falls back to the generic export.
 
 ### 1. Sentiment & Doubt Perception Engine (v3.3.0 ~ v3.3.2)
 * **Multi-dimensional Attitude Recognition & Bilingual Alignment**: Captures strong dissatisfaction, negative refutations, consecutive punctuation (???/!!!), and English questioning patterns (`why is it still failing`, `totally wrong`, `did you even test`, etc.).

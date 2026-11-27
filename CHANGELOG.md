@@ -1,3 +1,35 @@
+## [3.4.0] - 2026-11-27 — 平台双向接入：只读识别、严格JSON安全注入与非严格格式降级
+
+### ✨ 新增 | Added
+
+- **平台接入注册表（13 个平台）**：内置 Windows 主流 AI 编程平台的真实配置路径、容器名与格式标记（Cursor / Claude Desktop / Windsurf / WorkBuddy / Trae / Trae CN / Qoder / VS Code / Cline，以及只读识别的 VS Code·Cursor settings.json、Codex、OpenCode）。
+- **`init --discover` 只读识别**：一条命令看清本机装了哪些平台、配置在哪、是什么格式、能否自动写入。全程仅 `lstat`/读取，零写入、零建目录。
+- **`init --target <平台>` 单平台接入**：按注册表定位该平台已有配置，复用既有安全合并管线增量追加 `carlos-flow`，保留你原有的其他 MCP 服务；重复执行幂等。
+- **`init --all` 扫描接入**：扫描本机已装平台并逐个接入，非严格格式标记为 `deferred`、未安装标记为 `not_installed`。
+- **两种安装顺序都支持**：先装编程平台后装 Carlos，用 `--discover` + `--all`；先装 Carlos 后装编程平台，装好后跑一次 `--target <平台>`。
+
+### 🛡️ 安全与边界 | Safety
+
+- **非严格 JSON 一律不改写**：VS Code / Cursor 的 `settings.json`（JSONC，含注释与尾逗号）、Codex（TOML）、OpenCode（自有 `mcp` 结构）只输出可直接粘贴的片段，原文件零改动——避免按 JSON 重写破坏原格式。
+- **不猜路径、不建目录**：平台未安装时返回 `not_installed` 并退回通用导出，绝不创建平台配置目录。
+- **链接与异常文件拒写**：符号链接、junction、非普通文件一律拒绝。
+
+### 🔧 修复 | Fixed
+
+- **适配仅暴露 `spawnEntry` 的已发布宿主**：新增 `bindSpawnEntryLaunch()`，把宿主的 `spawnEntry` 适配成 `bindLaunch` 形状，修复「宿主明明有能力却被误判 `HOST_HASH_UNSUPPORTED`、导致验证与 PASS 裁定全被拦」的问题。哈希仍在独立子进程计算，不退回同进程自证。
+- **审计脚本假红**：`full-audit` 跳过 `.cindy-worktrees`（其他任务的 worktree，非本仓产物），消除 17 项无关误报。
+
+### 📝 文档 | Docs
+
+- README 三份同步补充双向接入、平台注册表、可写入与只写提示的平台清单，并把「支持多平台」的过度宣称校正为「标准导出 + 未实测不宣称支持」。
+- `README.en.md` 正文改为全英文；`check-claims` 按语种取边界标记，不再要求英文文档写中文。
+- 新增 `check-claims` 平台宣称检查与 `check-portability` 初始化回归接线检查。
+
+### ⚠️ 已知边界 | Known Limits
+
+- 配置写入只代表 MCP 条目就位，**不等于平台已加载或可调用**；各平台真实握手与工具调用仍需逐项实测，未实测不宣称完全支持。
+- 晚期父目录替换在 Windows 上受 EPERM 限制，相关用例如实标记 SKIP，不冒充通过。
+
 ## [3.3.3] - 2026-11-26 — 新增专用 MCP 服务端启动入口与多平台规范配置
 
 ### ✨ 新增与优化 | Added & Optimized

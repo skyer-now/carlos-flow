@@ -1,138 +1,115 @@
-# Carlos Flow v3.3.3 发布说明
+# Carlos Flow v3.4.0 发布说明
 
-## 核心新特性与优化
+> 一句话：**现在无论是先装编程平台、还是先装 Carlos，都能一次接上**；接不上的平台只给提示，绝不乱改你的配置。
 
-### 1. 专用 MCP 服务端启动入口 (`carlos-flow-server`)
-- 在 `package.json` 的 `bin` 中增加 `"carlos-flow-server": "src/index.js"` 命令，并在 `src/index.js` 添加 `#!/usr/bin/env node`。
-- 允许通过 `npx -y carlos-flow carlos-flow-server` 一键以标准 Stdio 方式启动 MCP 服务端，完美适配 Smithery、Glama 等第三方生态平台的一键配装与握手探测。
+## 一、这版最想解决的问题
 
-### 2. 第三方生态平台配置集成
-- 根目录内置 `smithery.yaml` 与 `glama.json`；
-- 补充 `docs/MCP_REGISTRIES_GUIDE.md` 注册表申报物料指南。
+以前的痛点很具体：Carlos 装好了，但你电脑里早就在用 Cursor、VS Code、Claude Desktop、WorkBuddy 这些工具，**还得自己找配置文件、手写路径、小心翼翼别覆盖掉原来的 MCP 服务**。
 
----
+这一版把这件事变成一条命令。
 
-# Carlos Flow v3.3.2 发布说明
+## 二、核心新特性
 
-## 核心新特性与加固
+### 1. `init --discover`：先看清，再动手
 
-### 1. 情绪与怀疑感知多场景深度加固 (中英混用/反问/驳斥引用/严格防误触)
-- **中英混合与反问句式深度覆盖**：
-  - 增强对中英夹杂质问（*“You told me it was fixed, 但根本不对！”*）、反问质疑（*“你不是说已经改好了吗？为什么代码一行都没变？？？”*）与多轮短质问（*“Why???”*、*“？？？”*）的敏感性捕获；
-  - 扩展驳斥与重做词汇（`全部报错`, `根本没有跑通`, `给我重做`, `重新搞`, `broken`, `nothing works`），彻底消除否定引用与驳斥场景下的漏触漏洞。
-- **严格否定与只读探讨防误触加固**：
-  - 引入 `STRICT_NEGATION_PATTERNS` 模式拦截（*“先别改代码/不用启动工作流/千万不要瞎改/Don't touch the code yet”*），具备最高静默优先级，确保用户明确要求“不改动”时 100% 绝对静默；
-  - 区分纯只读反问（*“难道 React 状态更新不是异步的吗？”*）与代码改动质问，避免误伤原理探讨。
-- **专项测试全覆盖**：`test/trigger-sentiment.test.mjs` 扩充至 12 项全场景单元测试（100% 绿灯）。
+```bash
+carlos-flow init --discover
+```
 
----
+一条命令列出本机每个平台的：配置在哪、装没装、是什么格式、能不能自动写入。
 
-# Carlos Flow v3.3.1 发布说明
+**全程只读**——不建目录、不改文件、不碰你任何真实配置。
 
-## 核心新特性
+### 2. `init --target <平台>`：单个平台精准接入
 
-### 1. 情绪与怀疑感知引擎补齐英文质问词表 (中英双语对齐)
-- **多语言情绪对齐**：`src/trigger.js` 扩展支持对等英文表达：
-  - **强烈不满与否定**（`totally wrong`, `completely broken`, `very disappointed`, `stop lying`, `dont mess`, `not working at all`, `what are you doing` 等）；
-  - **质问与怀疑句式**（`are you sure`, `did you even test`, `why is it still failing`, `have you checked`, `did you actually fix` 等）；
-  - **英文追问上下文感知**：多轮英文质问自动追加疲劳怀疑权重，实现降阈值敏锐激活与纯技术/闲聊防误触。
+```bash
+carlos-flow init --target claude-desktop
+```
 
----
+按注册表直接定位该平台**已有的**配置文件，增量追加 `carlos-flow` 条目：
 
-# Carlos Flow v3.3.0 发布说明
+- 你原有的其他 MCP 服务**完整保留**
+- 已有同名 `carlos-flow` 条目**不覆盖**
+- 重复执行**幂等**，不会越加越多
 
-## 核心新特性
+### 3. `init --all`：扫描已装平台，一次接完
 
-### 1. 情绪与怀疑度感知引擎 (Sentiment & Doubt Perception)
-- **多维态度识别**：`src/trigger.js` 扩展 `calculateSentimentScore` 情绪与怀疑度感知算法，深度捕捉：
-  - **强烈不满与否定**（“根本不对/完全错了/差评/很失望/不要瞎改/全搞崩了”）；
-  - **质问与怀疑句式**（“你确定/真的跑通/到底改了没有/为什么还在报错”）；
-  - **连续标点情绪强化**（连续“？？？”、“！！！”或标点刷屏）；
-  - **多轮追问疲劳权重**（检测到上一轮仍在质问时自动追加怀疑加分）。
-- **动态阈值自适应**：当检测到用户处于高怀疑状态（`high_doubt`）时，自动下调触发阈值 20%，使 Carlos 更加敏锐地介入安全守护；常规讨论与只读探讨保持 100% 静默无感。
-- **专项测试护航**：新增 `test/trigger-sentiment.test.mjs`，7 项断言覆盖负面情绪识别、质问句式匹配、标点强化、多轮追问上下文、动态阈值自适应与防误触测试（100% 绿灯）。
+```bash
+carlos-flow init --all
+```
 
-### 2. 发布流程与 GitHub Release 自动同步根治
-- **CI 流程前置加固**：`.github/workflows/release.yml` 调整构建流程，确保 Release 创建前置且在测试通过后必定执行。
-- **CDN 传播退避重试**：`scripts/verify-release-install.mjs` 引入 6 次指数退避重试机制，彻底消除 npm 全球节点同步延迟导致的误杀。
-- **本地发布双保险自动同步**：`scripts/release.mjs` 实现调用 Git 原生凭据管理器本地自动同步 GitHub Releases。
+扫描本机所有已安装平台，逐个接入。每个平台都会给出明确状态：`injected`（已接入）、`deferred`（只提示不改写）、`not_installed`（未安装）、`failed`（失败原因）。
 
----
+### 4. 两种安装顺序，双向兼容
 
-# Carlos Flow v3.2.2 发布说明
+| 你的情况 | 怎么做 |
+| --- | --- |
+| 先装了编程平台，后装 Carlos | `init --discover` 看清 → `init --all` 或 `init --target <平台>` |
+| 先装了 Carlos，后装编程平台 | 装好平台后跑一次 `init --target <平台>` |
 
-## 核心修复与加固
+## 三、支持范围（说清楚，不吹）
 
-- **首页 README 徽章版本号对齐**：更新 `README.md` 与 `README.zh.md` 顶部的 Version 徽章至 `3.2.2`，保证主页展示与 npm 发布版本 100% 对应。
-- **发布闸一致性防护**：确保 `ghost.json` releaseNotes 与全套文档版本号零偏差。
+### 可自动写入（严格 JSON + 标准 `{command,args}` 结构）
 
----
+| 平台 | 配置文件 |
+| --- | --- |
+| Cursor（全局） | `~/.cursor/mcp.json` |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Windsurf / Devin | `~/.codeium/windsurf/mcp_config.json` |
+| WorkBuddy | `~/.workbuddy/mcp.json` |
+| Trae / Trae CN | `%APPDATA%\Trae[ CN]\User\mcp.json` |
+| Qoder | `%APPDATA%\Qoder\User\mcp.json` |
+| VS Code | `%APPDATA%\Code\User\mcp.json`（`servers` 容器） |
+| Cline | `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` |
 
-# Carlos Flow v3.2.1 发布说明
+### 只识别、只提示、**绝不改写**
 
-## 核心修复与加固
+| 平台 | 为什么不能直接写 |
+| --- | --- |
+| VS Code / Cursor `settings.json` | JSONC，含注释与尾逗号；按 JSON 重写会**毁掉你的注释和格式** |
+| Codex | `config.toml`，TOML 不是 JSON |
+| OpenCode | 使用自有 `mcp` 结构（`type` + 数组命令），与标准 `mcpServers` 不同 |
 
-### 1. 范围检查安全漏洞修复与 Fail-Closed 加固
-- **暂存区越界扫描 (`--cached`)**：`src/dispatch.js` 中的 `enforceScope` 扩展支持 `git diff --name-only --cached`，彻底堵住 AI 执行 `git add` 后门禁因未扫描暂存区而误判“无改动放行”的漏洞。
-- **Git 执行异常严格 Fail-Closed**：当底层 Git 检查命令异常退出（非 Git 仓库或命令超时）时，显式拦截报错，杜绝将环境异常误判为“无改动通过”。
-- **测试用例先行固化**：在 `test/scope-enforcement.mjs` 中新增用例 14 与 15，覆盖暂存区改动与 Git 异常退化，37 项断言全部通过。
+这三类会输出**可直接粘贴的配置片段**，原文件一个字节都不动。
 
-### 2. 会话身份自动继承 (session_context)
-- **无缝会话追踪**：`src/index.js` 在调用方未显式传入 `sessionId` 时，自动采用宿主注入的 `carlosContext.session_id`，消除卡片与审计记录因落入 `unknown` 账户而互不可见的问题。
-- **显式优先与空串保护**：显式传入参数仍然保持最高优先级，空字符串不伪造。
+## 四、安全边界（这版刻意保守）
 
-### 3. 快照任务生命周期隔离与文案诚实化修偏
-- **快照任务绑定**：快照 manifest 自动绑定 `card_ts` 任务卡标识，`flow_revert_plan` 支持按当前任务卡过滤，防止历史任务文件混入恢复计划。
-- **提示文案修偏**：修正 `ui/narrator.js` 中关于“自动领券”、“一键退出”等误导性说明，确保人话解释 100% 真实。
-- **发布文档自动同步**：`scripts/release.mjs` 落地 `autoSyncDocs` 自动同步多语言文档。
+- **不猜路径**：平台没装就报 `not_installed` 并退回通用导出，绝不凭空创建平台目录。
+- **不破坏格式**：非严格 JSON 一律不改写。
+- **拒绝异常目标**：符号链接、junction、非普通文件一律拒写。
+- **不静默改全机**：不在安装钩子里偷偷改所有客户端配置，必须你显式执行命令。
 
----
+## 五、修复
 
-# Carlos Flow v3.2.0 发布说明
+### 已发布宿主的哈希误判（真实阻塞 bug）
 
-## 核心新特性
+已发布的 Cindy 宿主只暴露 `spawnEntry`，没有 `bindLaunch`。旧代码只认后者，于是把"宿主有能力"误判成 `HOST_HASH_UNSUPPORTED`，**验证和 PASS 裁定全被拦住**。
 
-### 1. 通信优化与传输防护 (全量实测与落地)
-- **P1 输出保护与工件落盘 (Output Protection)**：
-  - **4KB 单流 UTF-8 摘要折叠**：自动拦截超大 stdout/stderr 文本，按 Unicode 字符边界安全计算并累加 UTF-8 字节（`VERIFY_SUMMARY_BYTES = 4096`），注入 `\n…[输出已折叠；完整内容请查阅落盘工件]…\n` 折叠标记，彻底杜绝大文本打爆通道与大模型上下文；
-  - **私有权限与自动清理**：完整输出安全写入本地私有目录（POSIX 设置 `0700/0600`，Windows 显式剥离继承并配置专属 ACL），新增 `pruneArtifacts` 实现 **30 份 / 7 天** 生命周期轮换清理，杜绝磁盘无界膨胀；
-  - **证据与指纹零污染**：`output_hash` 计算与 `last_verify` 状态提交严格在展示层之前完成，摘要折叠 100% 保持原始指纹不变；
-  - **存储故障优雅降级**：当磁盘或目录出现异常时自动 catch 并回退返回原始完整文本与全中文 `output_warning`，不向上层抛出硬崩。
-- **P2 MCP Progress 协议心跳通知 (Heartbeat Notifications)**：
-  - **标准 Progress 通道接通**：自 `params._meta.progressToken` 提取令牌，在耗时命令运行期间周期推送 `notifications/progress`，告知客户端执行进度与已运行秒数；
-  - **无 Token 静默与 Token 0 边界安全**：未携带 Token 时保持 100% 完全静默；采用 `Number.isFinite` 确保数字 `0` 作为 Token 时不被当成 falsy 丢弃；
-  - **确定性生命周期销毁**：命令退出（涵盖 close、error、timeout、abort 全部分支）在 `finish()` 中确定性调用 `clearInterval(heartbeatProgress)`，严防定时器泄漏。
-- **P3 复合事务与快捷编排 (`pipeline_start`)**：
-  - **一站式开卡与派发**：`carlos_task(action: "pipeline_start")` 依次原子串联 `submit → claim → dispatch`，单次调用即可完成留痕、认领与派发；
-  - **严格阶段短路拦截**：前序步骤校验不通过立即中断，不产生后续未授权状态（如 submit 失败不 claim，claim 失败不 dispatch）；
-  - **分步回执快照与恢复指引**：派发阶段受阻时结构化保留前序成功快照，并提示 *“任务卡与认领已生效，请修复派发条件后重试 dispatch，无需重新提交任务卡”*；
-  - **门禁逻辑零削弱**：底层 9 重机械门禁、CAS 锁与敏感路径审查 100% 保持原生严格执行。
+新增 `bindSpawnEntryLaunch()` 做接口适配。**哈希仍然在独立子进程里计算**，没有退回同进程自证，安全底线不破。
 
----
+### 审计脚本假红
 
-# Carlos Flow v3.1.0 发布说明
+`full-audit` 会扫到 `.cindy-worktrees/`（Cindy 为其他任务创建的 worktree），把别的分支旧文件当成本仓问题，报 17 项假红。现已跳过该目录。
 
-## 核心新特性
+## 六、文档与门禁
 
-### 1. 调研与方案轻量互审体系 (Advisory Review)
-- **双轴复核机制**：`flow_advisory_axes` / `submit` / `guard`（支持高阶门面 `carlos_review`）。
-  - **Evidence 调研轴**：复核是否真的执行了查询、引用来源是否真实支撑结论、声明与证据是否一一对应。
-  - **Feasibility 方案轴**：复核方案合理性、技术可行性、影响面评估以及可执行的回滚方案。
-- **纯规则轻量触发决策引擎**：支持中英双语语义识别，常规查询（`none`）静默不打扰，时效/排障问题单轴（`single`），高风险架构/发布方案决策双轴（`dual`）。提供 30 分钟同主题冷却与 24 小时预算上限保护。
-- **真实证据绑定与离线核验**：声明项 `evidence_ref` 支持 `path:line` 离线校验与 URL 外部溯源；两轴证据高度雷同自动拦截防敷衍；支持 canary 已知缺陷注入核验。
-- **持久复核收据与状态清理**：复核通过后落盘摘要哈希收据；互审 prompt 自动生命周期轮换清理，不影响 T2 审计记录。
+- 三份 README 同步补充双向接入、平台注册表、可写入与只写提示的平台清单。
+- 撤回"单一包支持多平台"的过度承诺，改为「标准导出 + 未实测不宣称支持」。
+- `README.en.md` 正文改为全英文。
+- 新增 `check-claims` 平台宣称检查：混淆 Qoder/通义灵码、Cline/Claude Desktop 会直接报错。
+- 新增 `check-portability` 初始化回归接线检查。
 
-### 2. 平台支持收口与 Windows 运行时加固
-- **Windows-Only 官方支持**：CI 与发布工作流矩阵全量收敛至 `windows-latest`，移除实验性平台的非阻塞容错。
-- **Windows 进程树与长路径保护**：实测超时整树 `taskkill /T /F` 回收衍生子进程；深度路径与快照持久化容错。
-- **互审核心逻辑变异测试**：新增针对证据解绑、过期拦截、轴缺失与预算超限的 4 类专项变异测试（100% 捕获）。
+## 七、已知边界（必须知道）
 
-### 3. 关键修复：Windows 8.3 短名路径归一（发布前真实阻断）
-Windows 上 `RUNNER~1`（短名）与 `runneradmin`（长名）指向同一目录，但字符串比较会失效。本次修掉三处：
-- **项目身份**改用规范长名，同一仓库不再分裂成两个记忆分区；
-- **状态目录排除**（指纹计算）改按规范长名比较，修掉「写一次状态就 STALE」；
-- **越界前缀排除**改按规范长名比较，修掉「正常改动被误判越界、合法 PASS 全被拦」。
+1. **配置写入 ≠ 平台可用**：条目就位只代表 MCP 服务被声明；平台是否加载、能否真正调用，仍需逐个实测。未实测的平台不宣称完全支持。
+2. **晚期父目录替换**在 Windows 上受 EPERM 限制，相关测试如实标记 SKIP，不冒充通过。
+3. **仅 Windows**：macOS / Linux 支持与验证暂停。
 
-### 4. 发布链路自检
-- `npm publish` 结果改为以 registry 可查为准（`scripts/verify-npm-publish.mjs`）：命令变绿不再等于包已上线。
-- 发布流水线把 20 组测试拆成具名步骤，失败可直接定位；失败输出转成公开运行注解，无 admin 权限也能看到具体断言。
+## 八、升级方式
+
+```bash
+npm install -g carlos-flow@3.4.0
+carlos-flow init --discover
+```
+
+先看清装了哪些平台，再决定接哪个。不会自动改动任何现有配置。

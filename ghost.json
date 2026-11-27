@@ -5,7 +5,7 @@
   "name": "Carlos 工作流",
   "description": "AI 编程卫士 MCP：留痕/派发/验证/负对照/双轴审查/裁定/审计/快照/免检/还原，并为调研与方案提供轻量互审。v3 对外默认只暴露四个门面（carlos_task / carlos_verify / carlos_review / carlos_manage），底层 25 个操作经门面动作路由；Cindy 内通过 list_tools 翻目录、call_tool 执行。",
   "whenToUse": "需要 AI 编程卫士护航与门禁校验时使用：提交任务卡留痕、派发 executor/auditor 子 Agent、跑真实验证命令、证明测试有判别力（负对照）、记录裁定与双轴审计、查询审计流水、免检通道、一键还原计划。",
-  "version": "3.3.3",
+  "version": "3.4.0",
   "kind": "chip",
   "entry": "main.js",
   "card": {},
@@ -17,7 +17,7 @@
     "en": "README.en.md",
     "zh-CN": "README.zh.md"
   },
-  "releaseNotes": "【v3.3.3 更新说明】\n1. 新增专用 MCP 服务端启动入口：在 package.json bin 中新增 carlos-flow-server 命令并为 src/index.js 注入 node shebang，支持第三方生态（如 Smithery / Glama / npx）直接无交互一键启动 Stdio MCP 实例。\n2. 第三方生态就绪配置：根目录集成规范的 smithery.yaml 与 glama.json 声明，并于 docs/ 补齐 MCP 注册表申报指南。\n3. 情绪与怀疑度感知引擎全量落地 (v3.3.0 ~ v3.3.2)：\n   - 多维态度识别：深度捕捉强烈不满、否定驳斥与连续标点情绪（？？？/！！！）；\n   - 中英双语全覆盖：完整支持英文情绪词汇与追问质问句式；\n   - 严格防误触机制：引入最高优先级静默拦截（如“先别改/不用启动工作流”），区分代码改动质问与纯原理反问；\n   - 动态阈值自适应：高怀疑上下文下自动下调 20% 门禁触发阈值，敏锐介入安全守护。\n4. 规范图标与产品定位升级：已随包内置规范 icon.png 图标，全面升级产品定位为 Windows 环境下的「AI 编程卫士」。",
+  "releaseNotes": "【v3.4.0 更新说明】\n1. 平台双向接入：新增 13 个 Windows 主流编程平台注册表（真实路径 + 容器 + 格式），无论先装编程平台还是先装 Carlos，都能一次接上。\n2. 只读识别：carlos-flow init --discover 一条命令看清本机装了哪些平台、配置在哪、什么格式、能否自动写入，全程零写入零建目录。\n3. 单平台接入：init --target <平台> 按注册表定位已有配置，复用安全合并管线增量追加，保留原有其他 MCP 服务，重复执行幂等。\n4. 扫描接入：init --all 扫描已装平台逐个接入，非严格格式标记 deferred、未安装标记 not_installed。\n5. 非严格 JSON 绝不改写：VS Code/Cursor settings.json（JSONC）、Codex（TOML）、OpenCode（自有结构）只输出可粘贴片段，原文件零改动。\n6. 修复已发布宿主哈希误判：宿主仅暴露 spawnEntry 时不再误判 HOST_HASH_UNSUPPORTED，哈希仍在独立子进程计算。\n7. 修复审计脚本假红：full-audit 跳过 .cindy-worktrees（其他任务 worktree），消除 17 项无关误报。\n8. 文档校正：三份 README 撤回「支持多平台」过度宣称，改为标准导出 + 未实测不宣称支持；README.en.md 正文改为全英文。",
   "node": {
     "entry": "src/index.js",
     "entries": [

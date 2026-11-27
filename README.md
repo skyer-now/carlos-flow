@@ -1,7 +1,7 @@
 # Carlos 工作流 (Carlos-Flow)
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/skyer-now/carlos-flow)
-[![Version](https://img.shields.io/badge/version-3.3.3-blue)](https://www.npmjs.com/package/carlos-flow)
+[![Version](https://img.shields.io/badge/version-3.4.0-blue)](https://www.npmjs.com/package/carlos-flow)
 [![Glama](https://glama.ai/mcp/servers/skyer-now/carlos-flow/badge)](https://glama.ai/mcp/servers/skyer-now/carlos-flow)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -26,7 +26,14 @@
 
 ---
 
-## 🌟 核心特性与亮点 (v3.3.3)
+## 🌟 核心特性与亮点 (v3.4.0)
+
+### 0. 平台双向接入：先装哪个都能接上 (v3.4.0 新增)
+* **一条命令看清家底**：`carlos-flow init --discover` 列出本机 13 个主流编程平台的配置位置、是否已装、什么格式、能否自动写入。全程只读，不建目录、不改文件；
+* **两种安装顺序都兼容**：先装编程平台后装 Carlos，用 `--discover` + `--all` 扫描接入；先装 Carlos 后装编程平台，装好后跑一次 `--target <平台>` 即可；
+* **增量追加，不覆盖你原有配置**：复用安全合并管线，只追加 `carlos-flow` 条目，你原有的其他 MCP 服务完整保留，重复执行幂等；
+* **非严格格式绝不乱写**：VS Code / Cursor 的 `settings.json`（JSONC，带注释）、Codex（TOML）、OpenCode（自有结构）只输出可直接粘贴的片段，**原文件零改动**；
+* **不猜路径、不建目录**：平台未安装就报 `not_installed` 并退回通用导出，绝不凭空创建平台配置目录。
 
 ### 1. 情绪与怀疑度感知引擎 (v3.3.0 ~ v3.3.2)
 * **多维度态度捕获与中英双语对齐**：灵敏识别用户强烈否定、不满质问、反问句式（*“你不是说改好了吗？为什么代码没变？”*）、中英夹杂（*“You told me it was fixed, 但根本不对！”*）以及连续标点（`???`/`!!!`）；

@@ -1,7 +1,7 @@
 {
   "name": "carlos-flow",
   "displayName": "Carlos Flow (AI Coding Guardian)",
-  "version": "3.3.3",
+  "version": "3.4.0",
   "description": "AI coding guardian and mechanical workflow gate for Cursor, VS Code, OpenCode and Cindy. Provides fail-closed scope enforcement, verification testing, 4KB output protection, and progress heartbeats.",
   "author": {
     "name": "skyer-now",
