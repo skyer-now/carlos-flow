@@ -64,7 +64,9 @@ const walk = (dir, depth = 0) => {
   for (const e of entries) {
     // .mutation-report.md 是 mutation-check 跑完写的**生成产物**（已 gitignore），
     // 它的表头本来就会讲「旧包名」这件事 —— 扫进来只会产生假红。
-    if (e === "node_modules" || e === ".git" || e === "docs" || e === ".mutation-report.md") continue;
+    // .cindy-worktrees 是 Cindy 为其他任务创建的 git worktree（已写入 .git/info/exclude）。
+    // 它们是**另一份工作副本**，不是本仓库产物；扫进来会把别人未完成的旧版本当成本仓问题报假红。
+    if (e === "node_modules" || e === ".git" || e === "docs" || e === ".mutation-report.md" || e === ".cindy-worktrees") continue;
     const full = join(dir, e);
     let st;
     try { st = statSync(full); } catch { continue; }

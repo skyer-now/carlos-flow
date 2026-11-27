@@ -1,172 +1,113 @@
-# Carlos Flow 安装指南
+# Carlos Flow 安装与适配分级
 
-本指南说明如何把 Carlos Flow 接入 Cursor、VS Code、Windsurf 等编程平台。
+## 准备条件
 
-> macOS 支持与验收清单见 `docs/PORTABILITY.md`。
+- 需要 **Node.js >=22**，与 `package.json` 的运行时要求保持一致。
+- 当前仅声明 Windows 支持；macOS/Linux 验证暂停。通用路径实现不等于这些系统已经验收，参见 `docs/PORTABILITY.md`。
+- 使用完整安装包，确保 `client/carlos.js` 与 `src/index.js` 存在。不把只复制某个脚本称为完整安装。
 
-## 准备工作
+## 三种状态不要混淆
 
-1. 确认已安装 **Node.js 18+**（`node -v`）。
-2. 准备一个 Token 字符串（自行生成，例如 `openssl rand -hex 16`），客户端与 Bridge 用同一个。
-3. 记下 Carlos Flow 项目的安装路径，下文记为 `<INSTALL_PATH>`（即你 clone 下来的项目根目录）。
+| 状态 | 能说明什么 | 不能说明什么 |
+| --- | --- | --- |
+| 通用导出 | 生成标准 MCP stdio 配置 | 不代表宿主已经加载、连接或执行成功 |
+| 配置合并 | 在明确的严格 JSON 容器中加入条目 | 不代表任意平台原生 schema 都适用 |
+| 真实宿主验收 | 在指定版本宿主中完成加载、握手、工具调用并保留回执 | 不能推导其他客户端、版本或操作系统也已验证 |
 
-> **Bridge 自带路径自探测**：只要 `<INSTALL_PATH>/bridge/mcp-bridge.js` 在正确位置，
-> Bridge 会自动定位同级的 `src/index.js`，**不需要**再手动设置 `CARLOS_FLOW_MCP_ROOT`。
-> 该环境变量仅在项目被拆分到其他目录时才需要保留。
+未完成逐一验收的平台，不宣称完全支持。初始化隔离测试与文档静态检查也不能替代宿主验收。
 
----
+## 通用 stdio 配置
 
-## 1. Cursor
+安装包后，初始化入口如下：
 
-写入 `.cursor/mcp.json`（文件不存在则新建）：
-
-```json
-{
-  "mcpServers": {
-    "carlos-flow": {
-      "command": "node",
-      "args": ["<INSTALL_PATH>/bridge/mcp-bridge.js"],
-      "env": {
-        "CARLOS_BRIDGE_TOKEN": "YOUR_TOKEN_HERE"
-      }
-    }
-  }
-}
+```text
+carlos-flow init --target generic
 ```
 
-## 2. VS Code
+在当前项目输出 `carlos-mcp.json`。配置中的 `command` 是执行初始化所用的 Node 绝对路径，即 `process.execPath`；`args` 直接指向安装包内 `src/index.js` 的绝对路径。不要把 CLI 工具调用参数附加到这个服务入口。
 
-写入 `.vscode/settings.json`：
+**标准 MCP stdio 不经过 Bridge，不需要准备 Bridge Token，也不要求客户端在 MCP 请求中附带 `_token`。** Bridge 是快速客户端的另一条内部连接路线，不是宿主通用 stdio 服务入口。`init` 不启动 Bridge、不生成令牌、不写全局宿主配置。
 
-```json
-{
-  "mcp.servers": {
-    "carlos-flow": {
-      "command": "node",
-      "args": ["<INSTALL_PATH>/bridge/mcp-bridge.js"],
-      "env": {
-        "CARLOS_BRIDGE_TOKEN": "YOUR_TOKEN_HERE"
-      }
-    }
-  }
-}
+将导出的条目按照宿主当前官方文档导入；不要把本文的通用容器当成宿主原生 schema 的保证。尤其不能把 JSON 配置原样写入 TOML、YAML 或 JSONC。
+
+## 显式文件合并与别名
+
+```text
+carlos-flow init --target custom-file --file ./host.json --container mcpServers
+carlos-flow init --target custom-path --path ./host.json --container servers
 ```
 
-## 3. Windsurf
+- `custom-file` / `custom-path` 与 `--file` / `--path` 为等价别名。
+- 必须显式指定已知容器 `mcpServers` 或 `servers`；保留其他配置键，不互相转换容器。
+- 已有 `carlos-flow` 条目不覆盖；幂等调用保留原字节。
+- 仅接受 `.json` 与严格 JSON 对象。坏 JSON、JSONC、注释、尾逗号、非对象根或容器、未知容器都拒绝并报告“初始化拒绝”，原文件字节保持不变。
+- 校验目标及整条父目录链，拒绝符号链接和 Windows junction；原始路径中的“链接/..”也不能绕过校验。
+- 写入采用同目录独占锁、随机临时文件、刷盘、文件与父目录身份重检及原子 rename；本工具的并发写入发生冲突时拒绝。目录身份改变后停止沿新路径清理，可能保留旧目录中的现场临时文件。
+- **安全边界**：Node 的跨平台路径 API 不能提供目录句柄绑定的原子条件 rename；同权限恶意进程在最后检查与 rename 之间抢换目录的窗口不能被声称彻底消除。只在本人控制的目录执行，不用于不可信共享目录。
 
-写入 `~/.windsurf/mcp.json`：
+## 自动识别、双向接入与规则文件
 
-```json
-{
-  "mcpServers": {
-    "carlos-flow": {
-      "command": "node",
-      "args": ["<INSTALL_PATH>/bridge/mcp-bridge.js"],
-      "env": {
-        "CARLOS_BRIDGE_TOKEN": "YOUR_TOKEN_HERE"
-      }
-    }
-  }
-}
+### 两种安装顺序都支持
+
+| 顺序 | 做法 | 说明 |
+| --- | --- | --- |
+| **先装编程平台，后装 Carlos** | `carlos-flow init --discover` 先只读看清本机装了哪些平台；再 `carlos-flow init --all` 或 `carlos-flow init --target <平台>` 接入 | 只接已存在的配置，绝不凭空创建平台目录 |
+| **先装 Carlos，后装编程平台** | 装好平台后跑一次 `carlos-flow init --target <平台>` | 直接定位该平台已有配置文件并增量追加 |
+
+### 只读识别：`--discover`
+
+```text
+carlos-flow init --discover
 ```
 
-## 4. Tencent WorkBuddy
+只做 `lstat`/读取，**不创建任何目录、不改任何文件**。输出每个平台的 `id` / `label` / `path` / `installed` / `format` / `injectable` / `note`。`--discover` 不能与 `--target`、`--all`、`--file`、`--path`、`--container` 混用。
 
-写入 `~/.workbuddy/mcp.json` 或直接运行 `node client/carlos.js init --target workbuddy`：
+### 平台注册表（仅 Windows 实测路径）
 
-```json
-{
-  "mcpServers": {
-    "carlos-flow": {
-      "command": "node",
-      "args": ["<INSTALL_PATH>/src/index.js"],
-      "env": {
-        "CARLOS_FLOW_HOME": "~/.carlos-flow"
-      }
-    }
-  }
-}
-```
+| id | 配置文件 | 容器 | 格式 | 能否自动写入 |
+| --- | --- | --- | --- | --- |
+| `cursor` | `~/.cursor/mcp.json` | `mcpServers` | 严格 JSON | 是 |
+| `claude-desktop` | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` | 严格 JSON | 是 |
+| `windsurf` | `~/.codeium/windsurf/mcp_config.json` | `mcpServers` | 严格 JSON | 是 |
+| `workbuddy` | `~/.workbuddy/mcp.json` | `mcpServers` | 严格 JSON | 是 |
+| `trae` / `trae-cn` | `%APPDATA%\Trae[ CN]\User\mcp.json` | `mcpServers` | 严格 JSON | 是 |
+| `qoder` | `%APPDATA%\Qoder\User\mcp.json` | `mcpServers` | 严格 JSON | 是 |
+| `vscode` | `%APPDATA%\Code\User\mcp.json` | `servers` | 严格 JSON | 是 |
+| `cline` | `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` | `mcpServers` | 严格 JSON | 是 |
+| `vscode-settings` / `cursor-settings` | `%APPDATA%\Code|Cursor\User\settings.json` | — | JSONC | **否，只输出片段** |
+| `codex` | `~/.codex/config.toml` | — | TOML | **否，只输出片段** |
+| `opencode` | `~/.config/opencode/opencode.json` | — | 自有 schema | **否，只输出片段** |
 
-## 5. OpenAI Codex CLI
+### 三条硬规则
 
-写入 `~/.codex/config.toml` 或直接运行 `node client/carlos.js init --target codex`：
+1. **不猜路径、不建目录**：平台未安装（配置文件不存在）时返回 `not_installed` 并退回通用导出，绝不创建平台配置目录。
+2. **非严格 JSON 一律不写**：JSONC（含注释/尾逗号）、TOML、自有 schema 的平台只输出可直接粘贴的片段（`status: deferred`），原文件零改动。
+3. **安全增量合并**：严格 JSON 平台复用与 `custom-file` 相同的合并与发布路径——保留其他服务与设置、同名 `carlos-flow` 不覆盖、重复执行幂等；链接/不安全文件拒绝写入。
 
-```toml
-[mcp_servers.carlos-flow]
-command = "node"
-args = ["<INSTALL_PATH>/src/index.js"]
+`init --all` 会扫描注册表：已存在的严格 JSON 平台逐个接入，非严格格式标记 `deferred`，未安装标记 `not_installed`；同时仍处理当前目录已有的 `.cursor` 标记并导出通用配置。
 
-[mcp_servers.carlos-flow.env]
-CARLOS_FLOW_HOME = "~/.carlos-flow"
-```
+**接入成功不等于可用**：配置写入只代表条目就位，宿主是否加载、能否真正调用仍需按「真实宿主验收」逐项取证；未实测的平台不声称支持。
 
-## 6. ByteDance Trae / 豆包 MarsCode
+`AGENTS.md` 与 `AI-DEV-CONSTRAINTS.md` 只在不存在时生成，不覆盖用户已有文件。它们只是提示，不保证所有宿主自动读取，更不能替代真实门禁。
 
-写入 `.trae/mcp.json` 或直接运行 `node client/carlos.js init --target trae`：
+## 产品与旧目标说明
 
-```json
-{
-  "mcpServers": {
-    "carlos-flow": {
-      "command": "node",
-      "args": ["<INSTALL_PATH>/src/index.js"],
-      "env": {
-        "CARLOS_FLOW_HOME": "~/.carlos-flow"
-      }
-    }
-  }
-}
-```
+- **Qoder 与通义灵码是不同产品**，不能因为同属某厂商就互认配置路径。
+- **Claude Desktop 与 Claude Code 是不同客户端**；`cline` 也不是 Claude Desktop 的别名。
+- `cindy`、`opencode`、`claude` 等旧目标目前降级通用导出，不等同原生安装。不再直写 Cindy 旧 `.cindy/ghosts` 或 OpenCode 旧 `plugin` 目录。
+- VS Code 等宿主必须核对当前版本 schema；本文只说明 `servers` 容器可以显式合并，不据此承诺某个宿主已验收。
 
-## 7. Alibaba Qoder (通义灵码)
+官方参考（规范/产品说明，不是本项目实测凭据）：
 
-写入 `.qoder/mcp.json` 或直接运行 `node client/carlos.js init --target qoder`：
+- [MCP stdio](https://modelcontextprotocol.io/specification/latest/basic/transports)
+- [Claude Desktop](https://modelcontextprotocol.io/quickstart/user)
+- [Claude Code](https://code.claude.com/docs/en/mcp)
+- [OpenCode](https://opencode.ai/docs/mcp-servers/)
+- [Qoder](https://docs.qoder.com/)
+- [通义灵码](https://help.aliyun.com/zh/lingma/)
 
-```json
-{
-  "mcpServers": {
-    "carlos-flow": {
-      "command": "node",
-      "args": ["<INSTALL_PATH>/src/index.js"],
-      "env": {
-        "CARLOS_FLOW_HOME": "~/.carlos-flow"
-      }
-    }
-  }
-}
-```
+## 验证与故障回执
 
----
+交付验收应分别保存初始化隔离测试、静态检查和真实宿主加载/握手/工具调用回执。配置生成或 JSON 解析成功不能代替服务就绪。本文不预置耗时、工具数或“兼容性通过”样例，避免把示例冒充执行结果。
 
-## 配置自检
-
-配置完成后，可在项目目录运行：
-
-```bash
-./check-all.sh
-```
-
-它会做两件事：
-
-1. `node --check` 校验 `bridge/mcp-bridge.js`、`src/index.js`、`smoke-test.js` 语法；
-2. **真 RPC 往返冒烟测试**：真起一个 Bridge，发 `initialize` + `tools/list`，
-   断言能拿回全部工具（默认 4 个门面；`CARLOS_FLOW_TOOL_SURFACE=legacy` 时为 26 个底层操作）。这排除了「进程起来了但转发断了」的假阳性。
-
-预期输出：
-
-```
-✅ initialize 握手成功
->>> RPC 往返总耗时：341.80ms
->>> 发现工具数：22
-🎉 深度兼容性验证通过（真 RPC 往返拿到当前工具面的全部工具）
-```
-
-## 常见问题
-
-| 现象 | 原因 | 处理 |
-| :--- | :--- | :--- |
-| Bridge 启动即退出，日志提示 `CARLOS_BRIDGE_TOKEN 未设置` | 客户端配置里没传 Token | 按上面的 `env` 补上 |
-| 日志提示 `MCP server 子进程启动失败` | 项目目录不完整，或 `src/index.js` 不在 Bridge 同级父目录 | 确认 `<INSTALL_PATH>/src/index.js` 存在；必要时设 `CARLOS_FLOW_MCP_ROOT` |
-| 连上了但工具列表为空 | 客户端没带 `_token` | 检查客户端是否按 MCP 规范在请求里传 Token |
-| Windows 上 Bridge 重启时弹黑框 | 已修复 | 升级到 **v2.11.2 及以上**（`windowsHide: true`） |
+出现“初始化拒绝”时先保留原配置和错误回执；检查是否缺少显式容器、容器类型错误、JSONC 或链接路径。确认修改目标后再操作，不能靠去注释、改扩展名或覆盖旧配置绕过拒绝。测试未执行或链接创建受宿主限制而跳过时，均应标为“未验证”。

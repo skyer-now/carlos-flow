@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // Carlos MCP 快速客户端 — 自包含，自动管理 Bridge 生命周期
 // 用法: node carlos.js <tool_name> [json_args]
-//        node carlos.js init --target cindy|opencode
+//        node carlos.js init --target generic
 // 首次调用自动启动 Bridge，后续直连复用
 
 import { createConnection, createServer } from "node:net";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync, statSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync, statSync, rmSync, lstatSync, openSync, closeSync, fstatSync, fsyncSync, renameSync, constants } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { resolve, join, dirname } from "node:path";
+import { resolve, join, dirname, isAbsolute, parse } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import os from "node:os";
 
@@ -28,6 +28,29 @@ const BRIDGE_SCRIPT = [
 const MCP_SERVER = ROOT_ABS + "/src/index.js";
 // PID 文件按端口区分：多 Bridge 并存（测试用独立端口）时不会互相覆盖
 const PID_FILE = ROOT_ABS + "/bridge-" + BRIDGE_PORT + ".pid";
+
+// ===== 平台接入注册表（仅 Windows 实测路径）=====
+// format 决定能否直接写入：
+//   strict — 严格 JSON，且容器内是标准 {command,args} 结构，可安全增量合并
+//   jsonc  — 允许注释/尾逗号，按 JSON 重写会破坏原格式，只提示不写
+//   toml   — 非 JSON，不能按 JSON 写入
+//   other  — 自有 schema（如 OpenCode 的 type/command 数组），与标准结构不同
+const appDataDir = () => process.env.APPDATA || join(os.homedir(), "AppData", "Roaming");
+const PLATFORM_REGISTRY = [
+  { id: "cursor", label: "Cursor（全局）", path: () => join(os.homedir(), ".cursor", "mcp.json"), container: "mcpServers", format: "strict" },
+  { id: "claude-desktop", label: "Claude Desktop", path: () => join(appDataDir(), "Claude", "claude_desktop_config.json"), container: "mcpServers", format: "strict" },
+  { id: "windsurf", label: "Windsurf / Devin", path: () => join(os.homedir(), ".codeium", "windsurf", "mcp_config.json"), container: "mcpServers", format: "strict" },
+  { id: "workbuddy", label: "WorkBuddy", path: () => join(os.homedir(), ".workbuddy", "mcp.json"), container: "mcpServers", format: "strict" },
+  { id: "trae", label: "Trae", path: () => join(appDataDir(), "Trae", "User", "mcp.json"), container: "mcpServers", format: "strict" },
+  { id: "trae-cn", label: "Trae CN", path: () => join(appDataDir(), "Trae CN", "User", "mcp.json"), container: "mcpServers", format: "strict" },
+  { id: "qoder", label: "Qoder", path: () => join(appDataDir(), "Qoder", "User", "mcp.json"), container: "mcpServers", format: "strict" },
+  { id: "vscode", label: "VS Code（mcp.json）", path: () => join(appDataDir(), "Code", "User", "mcp.json"), container: "servers", format: "strict" },
+  { id: "cline", label: "Cline（VS Code 扩展）", path: () => join(appDataDir(), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"), container: "mcpServers", format: "strict" },
+  { id: "vscode-settings", label: "VS Code settings.json", path: () => join(appDataDir(), "Code", "User", "settings.json"), format: "jsonc", reason: "VS Code settings.json 允许注释与尾逗号（JSONC），按 JSON 重写会破坏原格式" },
+  { id: "cursor-settings", label: "Cursor settings.json", path: () => join(appDataDir(), "Cursor", "User", "settings.json"), format: "jsonc", reason: "Cursor settings.json 同属 JSONC，按 JSON 重写会破坏原格式" },
+  { id: "codex", label: "Codex CLI", path: () => join(os.homedir(), ".codex", "config.toml"), format: "toml", reason: "Codex 使用 TOML 配置，不能按 JSON 写入" },
+  { id: "opencode", label: "OpenCode", path: () => join(os.homedir(), ".config", "opencode", "opencode.json"), format: "other", reason: "OpenCode 使用自有 mcp 结构（type + command 数组），与标准 mcpServers 不同" },
+];
 // 实际使用的 bridge 端口：pickBridgePort 选定后写入，后续 callMCP 一律用它。
 // 早先 callMCP 写死 BRIDGE_PORT，而 bridge 可能起在别的端口 → 连不上。
 let ACTIVE_PORT = BRIDGE_PORT;
@@ -70,14 +93,16 @@ function resolveBridgeToken() {
   return token;
 }
 
-const BRIDGE_TOKEN = resolveBridgeToken();
+const BRIDGE_TOKEN = process.argv[2] === "init" ? undefined : resolveBridgeToken();
 
 // 智能触发引擎（本文件是 ESM，必须用动态 import；require 在 ESM 中不存在）
 // 加载失败时降级为「不触发」，不影响主流程
 let TriggerEngine = null;
 try {
-  const triggerMod = await import(pathToFileURL(join(ROOT_ABS, "src", "trigger.js")).href);
-  TriggerEngine = triggerMod.TriggerEngine || null;
+  if (process.argv[2] !== "init") {
+    const triggerMod = await import(pathToFileURL(join(ROOT_ABS, "src", "trigger.js")).href);
+    TriggerEngine = triggerMod.TriggerEngine || null;
+  }
 } catch (e) {
   TriggerEngine = null;
 }
@@ -176,27 +201,10 @@ function runClean(opts) {
 
 // ===== init 命令：一键生成宿主配置 =====
 if (toolName === "init") {
-  const target = process.argv.includes("--target")
-    ? process.argv[process.argv.indexOf("--target") + 1]
-    : process.env.CARLOS_INIT_TARGET;
-  const VALID_TARGETS = [
-    "cindy",
-    "opencode",
-    "cursor",
-    "cline",
-    "vscode",
-    "claude",
-    "workbuddy",
-    "codex",
-    "trae",
-    "qoder",
-  ];
-  if (!target || !VALID_TARGETS.includes(target)) {
-    console.error("用法: node carlos.js init --target cindy|opencode|cursor|cline|vscode|claude|workbuddy|codex|trae|qoder");
-    console.error("  或设置环境变量 CARLOS_INIT_TARGET=<target>");
+  try { runInit(); } catch (error) {
+    console.error("初始化拒绝：" + error.message + "；请使用 --target generic 导出并手工核对。");
     process.exit(1);
   }
-  await runInit(target);
   process.exit(0);
 }
 
@@ -532,7 +540,231 @@ function callMCP(method, params) {
 }
 
 // ===== init 命令实现 =====
-async function runInit(target) {
+// 初始化入口不访问Bridge。旧模板实现保留为未调用兼容参考，禁止从入口派发。
+function runInit() {
+  const opts = {};
+  const args = process.argv.slice(3);
+  for (let i = 0; i < args.length; i++) {
+    const key = args[i];
+    if (key === '--all') { opts.all = true; continue; }
+    if (key === '--discover') { opts.discover = true; continue; }
+    if (!['--target', '--file', '--path', '--container'].includes(key) || !args[i + 1] || args[i + 1].startsWith('--') || Object.hasOwn(opts, key)) throw new Error('未知、重复或缺值参数：' + key);
+    opts[key] = args[++i];
+  }
+  const sameIdentity = (a, b) => Boolean(a && b && a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs);
+  const inspect = (file, expectedParents) => {
+    let current = resolve(file), leaf = null;
+    const parents = new Map();
+    for (;;) {
+      try {
+        const s = lstatSync(current);
+        if (s.isSymbolicLink()) throw new Error('拒绝链接：' + current);
+        if (current === resolve(file)) { if (!s.isFile()) throw new Error('目标不是普通文件'); leaf = s; }
+        else {
+          if (!s.isDirectory()) throw new Error('父路径不是目录');
+          parents.set(current, s);
+        }
+      } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      const parent = dirname(current); if (parent === current) break; current = parent;
+    }
+    if (expectedParents) for (const [name, old] of expectedParents) {
+      if (!sameIdentity(parents.get(name), old)) throw new Error('父目录链在合并期间变化');
+    }
+    return { leaf, parents };
+  };
+  // 在resolve消除“链接/..”之前检查原始路径经过的每一段。
+  const inspectRaw = (file) => {
+    const absolute = isAbsolute(file) ? file : process.cwd() + '/' + file;
+    let prefix = parse(absolute).root;
+    for (const part of absolute.slice(prefix.length).split(/[\\/]/)) {
+      if (!part) continue;
+      prefix += '/' + part;
+      try { if (lstatSync(prefix).isSymbolicLink()) throw new Error('拒绝链接路径：' + prefix); }
+      catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
+  };
+  const publish = (file, content, old, bytes, expectedParents) => {
+    const before = inspect(file, expectedParents);
+    mkdirSync(dirname(file), { recursive: true });
+    const parents = inspect(file, before.parents).parents;
+    const lock = file + '.carlos-init.lock';
+    const temp = file + '.carlos-' + randomBytes(12).toString('hex') + '.tmp';
+    let fd, lockFd, tempIdentity, lockIdentity, primaryError;
+    const cleanupFailures = [];
+    const attemptCleanup = (stage, action) => {
+      try { action(); } catch (error) { cleanupFailures.push({ stage, error }); }
+    };
+    const noFollow = constants.O_NOFOLLOW || 0;
+    const cleanOwned = (name, identity) => {
+      if (!identity) return;
+      // 目录被替换后宁留现场，不沿攻击者的新路径清理文件。
+      inspect(file, parents);
+      let now;
+      try { now = lstatSync(name); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
+      if (!sameIdentity(now, identity) || now.isSymbolicLink()) throw new Error('临时文件身份变化，停止清理');
+      unlinkSync(name);
+    };
+    try {
+      // 独占锁阻止本工具并发发布；它不是对同权限恶意进程的系统级沙箱。
+      lockFd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600);
+      lockIdentity = fstatSync(lockFd);
+      inspect(file, parents);
+      fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, old ? old.mode & 0o777 : 0o600);
+      tempIdentity = fstatSync(fd);
+      writeFileSync(fd, content); fsyncSync(fd);
+      // 交出一次性关闭责任后再调用API；失败时也不能重试可能已被系统复用的描述符。
+      const closingFd = fd; fd = undefined; closeSync(closingFd);
+      const now = inspect(file, parents).leaf;
+      if (old) {
+        if (!sameIdentity(now, old) || now.mtimeMs !== old.mtimeMs || now.ctimeMs !== old.ctimeMs || now.size !== old.size) throw new Error('合并期间文件变化');
+        const checkFd = openSync(file, constants.O_RDONLY | noFollow);
+        let checkError;
+        try {
+          if (!sameIdentity(fstatSync(checkFd), old) || !readFileSync(checkFd).equals(bytes)) throw new Error('合并期间文件内容变化');
+        } catch (error) { checkError = error; throw error; }
+        finally {
+          try { closeSync(checkFd); } catch (error) {
+            if (!checkError) throw error;
+            cleanupFailures.push({ stage: '关闭复核文件', error });
+          }
+        }
+      } else if (now) throw new Error('目标已被并发创建，拒绝覆盖');
+      inspect(file, parents);
+      if (!sameIdentity(lstatSync(temp), tempIdentity)) throw new Error('临时文件身份变化');
+      renameSync(temp, file);
+      tempIdentity = undefined;
+      inspect(file, parents);
+    } catch (error) { primaryError = error; }
+    finally {
+      const closingFd = fd; fd = undefined;
+      const closingLockFd = lockFd; lockFd = undefined;
+      if (closingFd !== undefined) attemptCleanup('关闭临时文件', () => closeSync(closingFd));
+      if (closingLockFd !== undefined) attemptCleanup('关闭独占锁', () => closeSync(closingLockFd));
+      attemptCleanup('清理临时文件', () => cleanOwned(temp, tempIdentity));
+      attemptCleanup('清理独占锁', () => cleanOwned(lock, lockIdentity));
+    }
+    if (cleanupFailures.length) {
+      console.error('初始化清理附加信息：' + JSON.stringify(cleanupFailures.map(({ stage, error }) => ({ stage, code: error.code, message: error.message }))));
+      if (!primaryError) primaryError = cleanupFailures[0].error;
+    }
+    if (primaryError) throw primaryError;
+  };
+  const merge = (file, container) => {
+    if (!['mcpServers', 'servers'].includes(container)) throw new Error('必须显式指定容器mcpServers或servers');
+    if (!file.endsWith('.json')) throw new Error('仅接受严格JSON，不处理JSONC/TOML/YAML');
+    inspectRaw(file);
+    file = resolve(file);
+    const { leaf: old, parents } = inspect(file);
+    let bytes, value = {};
+    if (old) {
+      const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+      let readError;
+      try {
+        const s = fstatSync(fd);
+        if (!s.isFile() || !sameIdentity(s, old)) throw new Error('读取时文件身份变化');
+        bytes = readFileSync(fd);
+        inspect(file, parents);
+      } catch (error) { readError = error; }
+      finally {
+        try { closeSync(fd); } catch (error) {
+          console.error('初始化清理附加信息：' + JSON.stringify([{ stage: '关闭旧配置', code: error.code, message: error.message }]));
+          if (!readError) readError = error;
+        }
+      }
+      if (readError) throw readError;
+      value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('JSON根必须为对象');
+    if (Object.hasOwn(value, container) && (!value[container] || typeof value[container] !== 'object' || Array.isArray(value[container]))) throw new Error('容器必须为对象');
+    const services = value[container] || {};
+    if (!Object.hasOwn(services, 'carlos-flow')) {
+      value[container] = { ...services, 'carlos-flow': { command: process.execPath, args: [join(ROOT_ABS, 'src', 'index.js')] } };
+      publish(file, JSON.stringify(value, null, 2) + '\n', old, bytes, parents);
+    }
+    return value;
+  };
+  // 只读扫描：仅 lstat/read，不创建任何目录、不改任何文件
+  const scanPlatforms = () => PLATFORM_REGISTRY.map((p) => {
+    const file = p.path();
+    let installed = false, readable = false;
+    try { const s = lstatSync(file); installed = s.isFile() && !s.isSymbolicLink(); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (installed) { try { readFileSync(file); readable = true; } catch { readable = false; } }
+    return { id: p.id, label: p.label, path: file, installed, readable, format: p.format, injectable: installed && p.format === 'strict', note: p.format === 'strict' ? undefined : p.reason };
+  });
+  const platformSnippet = (p) => ({ [p.container || 'mcpServers']: { 'carlos-flow': { command: process.execPath, args: [join(ROOT_ABS, 'src', 'index.js')] } } });
+  // 单平台接入：文件不存在→不猜路径不创建；非严格JSON→只输出片段；严格JSON→复用 merge 增量注入
+  const injectPlatform = (p) => {
+    const file = p.path();
+    let s = null;
+    try { s = lstatSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (!s) return { id: p.id, path: file, status: 'not_installed', note: '未检测到配置文件，不创建平台目录、不猜路径' };
+    if (s.isSymbolicLink() || !s.isFile()) throw new Error(`${p.label} 配置不是可信普通文件，拒绝写入：${file}`);
+    if (p.format !== 'strict') return { id: p.id, path: file, status: 'deferred', note: p.reason, snippet: platformSnippet(p) };
+    return { id: p.id, path: file, status: 'injected', config: merge(file, p.container) };
+  };
+  if (opts.discover) {
+    if (opts['--target'] || opts['--file'] || opts['--path'] || opts['--container'] || opts.all) throw new Error('--discover 不可混合其他参数');
+    console.log(JSON.stringify({ platforms: scanPlatforms() }, null, 2));
+    return;
+  }
+  const target = opts['--target'] || process.env.CARLOS_INIT_TARGET || (opts.all ? 'generic' : '');
+  if (opts.all && (opts['--target'] || opts['--file'] || opts['--path'] || opts['--container'])) throw new Error('--all不可混合自定义参数');
+  if (opts['--file'] && opts['--path'] && opts['--file'] !== opts['--path']) throw new Error('文件别名参数冲突');
+  let exported;
+  if (['custom-file', 'custom-path'].includes(target)) {
+    const file = opts['--file'] || opts['--path'];
+    if (!file) throw new Error('必须显式指定--file或--path');
+    exported = merge(file, opts['--container']);
+  } else {
+    if (opts['--file'] || opts['--path'] || opts['--container']) throw new Error('自定义参数须用于custom-file/custom-path');
+    if (!['generic', 'cursor', 'cindy', 'opencode', 'vscode', 'cline', 'claude', 'claude-code', 'workbuddy', 'codex', 'trae', 'qoder'].includes(target) && !PLATFORM_REGISTRY.some((p) => p.id === target)) throw new Error('用法：init --target generic，或custom-file --file 配置.json --container mcpServers');
+    if (opts.all || target === 'cursor') {
+      const marker = resolve('.cursor');
+      try {
+        const s = lstatSync(marker);
+        if (s.isSymbolicLink() || !s.isDirectory()) throw new Error('Cursor标记不是可信普通目录');
+        merge(join(marker, 'mcp.json'), 'mcpServers');
+      } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
+    exported = merge(resolve('carlos-mcp.json'), 'mcpServers');
+    const rules = '# AI开发约束\n\n仅作提示，不替代门禁，也不保证宿主自动读取。修改前明确范围；真实执行验证；未经用户授权不提交、不发布。\n';
+    for (const name of ['AGENTS.md', 'AI-DEV-CONSTRAINTS.md']) {
+      const file = resolve(name);
+      if (!inspect(file).leaf) publish(file, rules);
+    }
+    const reg = PLATFORM_REGISTRY.find((p) => p.id === target);
+    if (reg) {
+      // 先装平台后装 Carlos：直接按注册表定位该平台已有配置并接入
+      const r = injectPlatform(reg);
+      exported = { exported, platform: r };
+      if (r.status === 'deferred') console.error(`${reg.label} 降级为手工导入：${r.note}。已输出片段，未改动原文件。`);
+      else if (r.status === 'not_installed') console.error(`${reg.label} 未安装（未找到 ${r.path}），已改为通用导出；不会创建平台目录。`);
+    } else if (target !== 'generic') {
+      console.error('该目标未纳入已核验平台注册表，已导出通用stdio配置，请按官方文档手工导入。');
+    }
+    if (opts.all) {
+      // 先装平台后装 Carlos：扫描本机已装平台，仅对严格 JSON 平台增量注入
+      const results = [];
+      for (const p of PLATFORM_REGISTRY) {
+        let hit = null;
+        try { const s = lstatSync(p.path()); hit = s.isFile() && !s.isSymbolicLink() ? p : { unsafe: p }; } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        if (!hit) { results.push({ id: p.id, path: p.path(), status: 'not_installed' }); continue; }
+        if (hit.unsafe) { results.push({ id: p.id, path: p.path(), status: 'refused', note: '不是可信普通文件' }); continue; }
+        try {
+          const r = injectPlatform(p);
+          results.push({ id: p.id, path: p.path(), status: r.status, note: r.note });
+        } catch (error) {
+          results.push({ id: p.id, path: p.path(), status: 'failed', error: error.message });
+        }
+      }
+      console.error('平台扫描结果：' + JSON.stringify(results.filter((r) => r.status !== 'not_installed')));
+      exported = { exported, platforms: results };
+    }
+  }
+  console.log(JSON.stringify(exported, null, 2));
+}
+
+async function legacyInitTemplateReference(target) {
   const home = resolve(os.homedir());
   
   // 通用：先生成触发器配置
@@ -734,7 +966,7 @@ async function runInit(target) {
     writeFileSync(configPath, content, "utf8");
     console.log(`✅ ByteDance Trae 配置已写入: ${configPath}`);
   } else if (target === "qoder") {
-    // 写入阿里通义灵码 Qoder 项目配置：.qoder/mcp.json
+    // 旧模板保留作迁移参考：Qoder与通义灵码不是同一产品。
     const configDir = join(process.cwd(), ".qoder");
     mkdirSync(configDir, { recursive: true });
     const configPath = join(configDir, "mcp.json");
