@@ -481,3 +481,68 @@ test('--all 仅注入已存在的严格JSON平台，非严格格式与未安装�
   assert.deepEqual(readFileSync(settings), sBefore);
   for (const dir of ['Qoder', 'Trae', 'Trae CN']) assert.equal(existsSync(join(appData(f), dir)), false);
 });
+
+// ===== 消息拦截钩子与工作区规则自动唤醒分层装配及安全回滚 =====
+test('--hooks 自动装配各平台原生规则文件与 OpenCode 消息钩子，不覆盖已有内容', () => {
+  const f = fixture();
+  // 模拟已存在用户自定义的 .cursorrules
+  seed(join(f.root, '.cursorrules'), '用户自定义 Cursor 规则');
+  // 模拟 OpenCode 目录已就绪
+  mkdirSync(join(f.home, '.config', 'opencode'), { recursive: true });
+
+  const r = f.run('--hooks');
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.ok(Array.isArray(out.hooks));
+
+  // 1. OpenCode 消息拦截插件应已部署
+  const opencodeHook = join(f.home, '.config', 'opencode', 'plugins', 'carlos-flow-trigger.js');
+  assert.ok(existsSync(opencodeHook));
+  assert.match(readFileSync(opencodeHook, 'utf8'), /flow_trigger_check/);
+
+  // 2. 原生规则文件生成（.traerules, CLAUDE.md, copilot-instructions 等）
+  assert.ok(existsSync(join(f.root, '.traerules')));
+  assert.ok(existsSync(join(f.root, 'CLAUDE.md')));
+  assert.ok(existsSync(join(f.root, '.github', 'copilot-instructions.md')));
+
+  // 3. 用户已有规则必须保留原样（零覆盖）
+  assert.equal(readFileSync(join(f.root, '.cursorrules'), 'utf8'), '用户自定义 Cursor 规则');
+
+  // 4. 重复执行必须幂等
+  const r2 = f.run('--hooks');
+  assert.equal(r2.status, 0, r2.stderr);
+});
+
+test('--unhook 安全回滚：清理自动生成的钩子与规则，保护用户自定义内容', () => {
+  const f = fixture();
+  seed(join(f.root, '.cursorrules'), '用户自定义 Cursor 规则');
+  mkdirSync(join(f.home, '.config', 'opencode'), { recursive: true });
+
+  // 先部署
+  assert.equal(f.run('--hooks').status, 0);
+  const opencodeHook = join(f.home, '.config', 'opencode', 'plugins', 'carlos-flow-trigger.js');
+  assert.ok(existsSync(opencodeHook));
+  assert.ok(existsSync(join(f.root, '.traerules')));
+
+  // 再执行回滚
+  const r = f.run('--unhook');
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.ok(Array.isArray(out.unhook));
+
+  // 1. 自动生成的钩子与规则被安全删除
+  assert.equal(existsSync(opencodeHook), false);
+  assert.equal(existsSync(join(f.root, '.traerules')), false);
+  assert.equal(existsSync(join(f.root, 'CLAUDE.md')), false);
+
+  // 2. 用户自建的规则绝不误删
+  assert.ok(existsSync(join(f.root, '.cursorrules')));
+  assert.equal(readFileSync(join(f.root, '.cursorrules'), 'utf8'), '用户自定义 Cursor 规则');
+});
+
+test('--hooks 与 --unhook 参数互斥校验', () => {
+  const f = fixture();
+  refused(f.run('--hooks', '--unhook'));
+  refused(f.run('--hooks', '--target', 'generic'));
+  refused(f.run('--unhook', '--all'));
+});

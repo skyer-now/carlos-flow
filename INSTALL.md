@@ -62,6 +62,22 @@ carlos-flow init --discover
 
 只做 `lstat`/读取，**不创建任何目录、不改任何文件**。输出每个平台的 `id` / `label` / `path` / `installed` / `format` / `injectable` / `note`。`--discover` 不能与 `--target`、`--all`、`--file`、`--path`、`--container` 混用。
 
+### 消息拦截钩子与规则自动装配：`--hooks` / `--unhook`
+
+为了在日常开发对话中无需手动输入 `$门禁` 即可自动感知意图与情绪唤醒门禁，支持分层自动装配：
+
+```bash
+# 自动部署各平台原生规则文件与 OpenCode 消息钩子
+carlos-flow init --hooks
+
+# 一键安全清理/回滚生成的钩子与规则（保护用户自建内容）
+carlos-flow init --unhook
+```
+
+- **OpenCode 消息拦截**：当检测到 `~/.config/opencode` 存在时，自动将 `carlos-flow-trigger.js` 部署至 `plugins/`，监听 `chat.message` 钩子并在后台无阻塞触发 `flow_trigger_check`；
+- **工作区规则常驻**：为当前项目部署 `.cursorrules`、`.traerules`、`.github/copilot-instructions.md`、`.qoder/rules/carlos-flow.md`、`CLAUDE.md` 等原生规则文件；已有文件绝对不覆盖；
+- **安全回滚**：`--unhook` 自动清理生成的钩子，且仅删除内容与 Carlos 模板完全匹配的规则文件，绝不误删用户自己编写的规则。
+
 ### 平台注册表（仅 Windows 实测路径）
 
 | id | 配置文件 | 容器 | 格式 | 能否自动写入 |

@@ -548,6 +548,8 @@ function runInit() {
     const key = args[i];
     if (key === '--all') { opts.all = true; continue; }
     if (key === '--discover') { opts.discover = true; continue; }
+    if (key === '--hooks') { opts.hooks = true; continue; }
+    if (key === '--unhook') { opts.unhook = true; continue; }
     if (!['--target', '--file', '--path', '--container'].includes(key) || !args[i + 1] || args[i + 1].startsWith('--') || Object.hasOwn(opts, key)) throw new Error('未知、重复或缺值参数：' + key);
     opts[key] = args[++i];
   }
@@ -683,7 +685,126 @@ function runInit() {
     }
     return value;
   };
-  // 只读扫描：仅 lstat/read，不创建任何目录、不改任何文件
+  // 规则文件与钩子部署定义（各平台原生规范）
+  const TRIGGER_PLUGIN_SRC = join(ROOT_ABS, "plugins", "carlos-flow-trigger.js");
+  const OPENCODE_PLUGIN_DIR = () => join(os.homedir(), ".config", "opencode", "plugins");
+  const OPENCODE_HOOK_FILE = () => join(OPENCODE_PLUGIN_DIR(), "carlos-flow-trigger.js");
+
+  const WORKSPACE_RULES = [
+    { name: ".cursorrules", label: "Cursor 规则" },
+    { name: ".traerules", label: "Trae 规则" },
+    { name: join(".github", "copilot-instructions.md"), label: "VS Code / Copilot 规则" },
+    { name: join(".qoder", "rules", "carlos-flow.md"), label: "Qoder 规则" },
+    { name: "CLAUDE.md", label: "Claude Code / Desktop 规则" },
+    { name: "AGENTS.md", label: "通用 Agent 约束规则" },
+    { name: "AI-DEV-CONSTRAINTS.md", label: "通用 AI 约束规则" },
+  ];
+
+  const RULES_CONTENT = `# Carlos Flow AI 编程卫士规则
+
+本工作区受 Carlos Flow 机械门禁保护：
+1. 【自动唤醒与意图留痕】：重大代码改动、重构、修复或发版前，必须先声明目标与范围；
+2. 【真实执行验证】：必须运行实际测试命令验证改动，严禁伪造测试绿灯；
+3. 【写改分离与复核】：修改代码后需执行双轴审查（代码规范 + 验收标准忠实度）；
+4. 【未经授权不提交】：未经用户明确指示，不自动提交 Git、不打 Tag、不公开发布。
+`;
+
+  const deployHooksAndRules = (options = {}) => {
+    const results = [];
+    const root = options.cwd || process.cwd();
+
+    // 1. OpenCode 消息拦截插件部署 (仅当 OpenCode 目录存在或明确指定时)
+    const opencodeDir = join(os.homedir(), ".config", "opencode");
+    let opencodeExists = false;
+    try { opencodeExists = lstatSync(opencodeDir).isDirectory(); } catch {}
+
+    if (opencodeExists || options.forceOpenCode) {
+      const hookFile = OPENCODE_HOOK_FILE();
+      let exists = false;
+      try { exists = lstatSync(hookFile).isFile(); } catch {}
+      if (!exists) {
+        try {
+          mkdirSync(OPENCODE_PLUGIN_DIR(), { recursive: true });
+          const content = readFileSync(TRIGGER_PLUGIN_SRC, "utf8");
+          publish(hookFile, content);
+          results.push({ target: "opencode-hook", path: hookFile, status: "deployed" });
+        } catch (e) {
+          results.push({ target: "opencode-hook", path: hookFile, status: "failed", error: e.message });
+        }
+      } else {
+        results.push({ target: "opencode-hook", path: hookFile, status: "kept_existing" });
+      }
+    }
+
+    // 2. 工作区原生规则文件部署 (仅新建，绝不覆盖已有用户规则)
+    for (const rule of WORKSPACE_RULES) {
+      const targetPath = join(root, rule.name);
+      let exists = false;
+      try { exists = lstatSync(targetPath).isFile(); } catch {}
+      if (!exists) {
+        try {
+          publish(targetPath, RULES_CONTENT);
+          results.push({ target: rule.name, label: rule.label, path: targetPath, status: "created" });
+        } catch (e) {
+          results.push({ target: rule.name, label: rule.label, path: targetPath, status: "failed", error: e.message });
+        }
+      } else {
+        results.push({ target: rule.name, label: rule.label, path: targetPath, status: "kept_existing" });
+      }
+    }
+
+    return results;
+  };
+
+  const rollbackHooksAndRules = (options = {}) => {
+    const results = [];
+    const root = options.cwd || process.cwd();
+
+    // 1. 移除 OpenCode 消息拦截插件
+    const hookFile = OPENCODE_HOOK_FILE();
+    try {
+      if (existsSync(hookFile)) {
+        unlinkSync(hookFile);
+        results.push({ target: "opencode-hook", path: hookFile, status: "removed" });
+      }
+    } catch (e) {
+      results.push({ target: "opencode-hook", path: hookFile, status: "failed", error: e.message });
+    }
+
+    // 2. 清理 Carlos 生成的工作区规则文件（仅当内容完全匹配 Carlos 规则时安全删除，保护用户自建内容）
+    for (const rule of WORKSPACE_RULES) {
+      const targetPath = join(root, rule.name);
+      try {
+        if (existsSync(targetPath)) {
+          const content = readFileSync(targetPath, "utf8");
+          if (content === RULES_CONTENT) {
+            unlinkSync(targetPath);
+            results.push({ target: rule.name, label: rule.label, path: targetPath, status: "removed" });
+          } else {
+            results.push({ target: rule.name, label: rule.label, path: targetPath, status: "skipped_user_content" });
+          }
+        }
+      } catch (e) {
+        results.push({ target: rule.name, label: rule.label, path: targetPath, status: "failed", error: e.message });
+      }
+    }
+
+    return results;
+  };
+
+  if (opts.unhook) {
+    if (opts['--target'] || opts['--file'] || opts['--path'] || opts['--container'] || opts.all || opts.discover || opts.hooks) throw new Error('--unhook 不可混合其他参数');
+    const res = rollbackHooksAndRules();
+    console.log(JSON.stringify({ unhook: res }, null, 2));
+    return;
+  }
+
+  if (opts.hooks) {
+    if (opts['--target'] || opts['--file'] || opts['--path'] || opts['--container'] || opts.all || opts.discover) throw new Error('--hooks 不可混合其他接入参数');
+    const res = deployHooksAndRules();
+    console.log(JSON.stringify({ hooks: res }, null, 2));
+    return;
+  }
   const scanPlatforms = () => PLATFORM_REGISTRY.map((p) => {
     const file = p.path();
     let installed = false, readable = false;
