@@ -117,6 +117,16 @@ console.log("\n▶ 3. 路径归一");
   else fail("state.js 未对路径做 path.normalize（Windows 下会混出 / 与 \\）");
 }
 
+console.log("\n▶ 4. 初始化适配回归必须接入总测试");
+{
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+  const client = fs.readFileSync(path.join(ROOT, "client", "carlos.js"), "utf8");
+  if (pkg.scripts?.["test:platform-init"] === "node --test test/platform-init.test.mjs" && pkg.scripts?.["test:all"]?.includes("npm run test:platform-init")) pass("隔离初始化回归接入总测试；本项只检查接线，不代表测试已运行");
+  else fail("总测试未接入初始化安全回归");
+  if (client.includes("command: process.execPath") && client.includes("args: [join(ROOT_ABS, 'src', 'index.js')]")) pass("stdio配置直接使用Node与服务入口");
+  else fail("通用导出缺少直接stdio入口");
+}
+
 console.log("\n" + "═".repeat(70));
 if (problems) {
   console.log(`❌ 可移植性检查失败：${problems} 项`);

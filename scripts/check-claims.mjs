@@ -97,7 +97,7 @@ const CLAIMS = [
     hint: "派发后需清零 bypass 并记 bypass_auto_reset 审计",
   },
   {
-    claim: "跨平台验证（README：Linux/macOS 也能跑）",
+    claim: "保留平台shell选择（不等于macOS/Linux已实测支持）",
     ok: () => /\/bin\/sh/.test(dispatchSrc) || /COMSPEC/.test(dispatchSrc),
     hint: "runVerifyCommand 需按平台选 shell，不能硬编码 cmd.exe",
   },
@@ -175,6 +175,17 @@ const INVARIANTS = [
 for (const inv of INVARIANTS) {
   if (inv.ok()) pass(inv.name);
   else fail(inv.name);
+}
+
+section("平台宣称不得冒充实测");
+for (const name of ["README.md", "README.zh.md", "README.en.md"]) {
+  const doc = readFileSync(join(ROOT, name), "utf8");
+  if (/Qoder\s*[（(]通义灵码/.test(doc) || /Cline\s*\/\s*Claude Desktop/.test(doc)) fail(`${name} 混淆独立产品`);
+  else pass(`${name} 区分Qoder/灵码与Claude客户端`);
+  // 英文 README 不应该被逼着写中文句子；按语种取各自的“未验证不宣称”标记。
+  const boundaryMarker = name === "README.en.md" ? "not claimed as fully supported" : "不宣称完全支持";
+  if (!doc.includes("stdio") || !doc.includes("custom-file") || !doc.includes(boundaryMarker)) fail(`${name} 缺少通用导出或未验证边界`);
+  else pass(`${name} 标明通用导出与实测边界`);
 }
 
 console.log("\n" + "=".repeat(72));

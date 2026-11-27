@@ -89,18 +89,40 @@ When using AI coding assistants (like OpenCode, Claude Code, Cursor, VS Code, or
 npm install -g carlos-flow
 ```
 
-### 2. Initialize for Your Platform
+### 2. Connect Your Coding Platform (both install orders supported)
 ```bash
-carlos-flow init --target cindy     # Cindy
-carlos-flow init --target opencode  # OpenCode
-carlos-flow init --target cursor    # Cursor / Windsurf
-carlos-flow init --target vscode    # VS Code
-carlos-flow init --target cline     # Cline / Claude Desktop
-carlos-flow init --target workbuddy # Tencent WorkBuddy
-carlos-flow init --target codex     # OpenAI Codex CLI
-carlos-flow init --target trae      # ByteDance Trae
-carlos-flow init --target qoder     # Alibaba Qoder
+# Platform installed first, Carlos second: read-only look at what is installed (zero writes)
+carlos-flow init --discover
+
+# Connect one installed platform: appends to its real config path, keeps your other MCP servers
+carlos-flow init --target claude-desktop
+
+# Scan installed platforms and connect each (only strict-JSON ones are written)
+carlos-flow init --all
+
+# Generic export / custom file
+carlos-flow init --target generic
+carlos-flow init --target custom-file --file ./host.json --container mcpServers
 ```
+
+| Your order | What to run |
+| --- | --- |
+| Platform first, Carlos second | `init --discover` to see, then `init --all` or `init --target <platform>` |
+| Carlos first, platform second | After installing the platform, run `init --target <platform>` once |
+
+Writable platforms (strict JSON with standard `{command,args}`): Cursor (global), Claude Desktop, Windsurf / Devin, WorkBuddy, Trae / Trae CN, Qoder, VS Code (`servers` in `mcp.json`), Cline.
+
+**Detected but never rewritten**: VS Code / Cursor `settings.json` (JSONC — rewriting as JSON would destroy comments and formatting), Codex (TOML), OpenCode (own `mcp` shape). These only print a paste-ready snippet; the original file stays untouched.
+
+**No path guessing, no directory creation**: when a platform is not installed the command reports `not_installed` and falls back to the generic export.
+
+This section corrects earlier platform claims: the standard stdio export is `carlos-mcp.json`, built from the current `process.execPath` plus the packaged `src/index.js`, never through the Bridge. `custom-path` / `--path` are file aliases; you must name the `mcpServers` or `servers` container explicitly. Malformed JSON, JSONC, container conflicts, unknown containers and file/parent-directory links are all rejected, while existing entries and rule files keep their original bytes. Rule files are hints only; no guarantee that every host auto-loads them.
+
+**A written entry is not a working platform**: the config entry only means the MCP server is declared; whether the host loads it and can actually call it still needs per-platform verification.
+
+Qoder and Tongyi Lingma are different products; Claude Desktop and Claude Code are different clients. Legacy targets fall back to the generic export and never write the old Cindy `.cindy/ghosts` or OpenCode `plugin` directories. Generating a config is not a native install: hosts that have not been measured are not claimed as fully supported.
+
+Official references: [MCP stdio](https://modelcontextprotocol.io/specification/latest/basic/transports), [Claude Desktop](https://modelcontextprotocol.io/quickstart/user), [Claude Code](https://code.claude.com/docs/en/mcp), [OpenCode](https://opencode.ai/docs/mcp-servers/), [Qoder](https://docs.qoder.com/), [Tongyi Lingma](https://help.aliyun.com/zh/lingma/). These are specifications and product references, not measured evidence from this project.
 
 ### 3. Verify Server Status
 Run in any terminal:

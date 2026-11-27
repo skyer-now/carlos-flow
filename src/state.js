@@ -2083,14 +2083,55 @@ function* fingerprintSteps(cwd) {
 
 // 内部请求能力不接受JSON参数或自报函数；每条真实收行独立捕获。
 const hashContexts = new WeakSet()
+/**
+ * 把宿主已发布的 `spawnEntry(entry, argv)` 适配成 bindLaunch 形状。
+ *
+ * 已发布的 Cindy 只向插件暴露 spawnEntry（node.entry / node.entries 内的 JS 子入口），
+ * 没有 bindLaunch。旧代码只认 bindLaunch，于是把“宿主有这个能力”误判成
+ * HOST_HASH_UNSUPPORTED，验证与 PASS 裁定全部被拦。这里只做接口适配，
+ * 哈希仍然在独立子进程里算，不退回同进程自证。
+ */
+function bindSpawnEntryLaunch(spawnEntry) {
+  return async (relative, args, options = {}) => {
+    const child = await spawnEntry(relative, args)
+    const deadlineMs = Number.isFinite(options.deadlineMs) ? options.deadlineMs : 5000
+    let settled = false
+    let timer
+    const completion = new Promise((resolve) => {
+      const settle = (receipt) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(Object.freeze(receipt))
+      }
+      timer = setTimeout(() => {
+        try { child.kill() } catch { /* 已退出 */ }
+        settle({ status: 'killed', completionScope: 'direct', code: null, signal: null })
+      }, deadlineMs)
+      timer.unref?.()
+      child.on('exit', (code, signal) => settle({ status: 'exited', completionScope: 'direct', code, signal }))
+      child.on('error', () => settle({ status: 'error', completionScope: 'direct', code: null, signal: null }))
+    })
+    return {
+      stdout: child.stdout,
+      stderr: child.stderr,
+      stdin: child.stdin,
+      kill: () => { try { child.kill() } catch { /* 已退出 */ } },
+      completion,
+    }
+  }
+}
+
 export function captureHashContext() {
   let context
   try {
     const host = globalThis.__CINDY_NODE__
-    context = host === undefined ? { host: false } : {
-      host: true,
-      launch: typeof host.bindLaunch === 'function' ? host.bindLaunch() : undefined,
-    }
+    if (host === undefined) context = { host: false }
+    // 新宿主：绑定式启动（带完成回执）。
+    else if (typeof host.bindLaunch === 'function') context = { host: true, launch: host.bindLaunch() }
+    // 已发布宿主：只暴露 spawnEntry，适配成同一形状。
+    else if (typeof host.spawnEntry === 'function') context = { host: true, launch: bindSpawnEntryLaunch(host.spawnEntry) }
+    else context = { host: true }
     if (context.host && typeof context.launch !== 'function') context.failure = 'HOST_HASH_UNSUPPORTED'
   } catch {
     context = { host: true, failure: 'HOST_HASH_CAPTURE_FAILED' }

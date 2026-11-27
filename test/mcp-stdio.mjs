@@ -223,6 +223,10 @@ try {
     input.write(line(2))
     active = undefined
     input.write(line(3))
+    // 已发布宿主只暴露 spawnEntry：不得报 HOST_HASH_UNSUPPORTED。
+    globalThis.__CINDY_NODE__ = { spawnEntry: () => ({ on() {}, stdout: { on() {} }, stderr: { on() {} },
+      stdin: { write() {}, end() {} }, kill() {} }) }
+    input.write(line(5))
     globalThis.__CINDY_NODE__ = { get bindLaunch() { throw new Error('不泄露原错误') } }
     input.write(line(4))
     input.end()
@@ -234,7 +238,8 @@ try {
   }
   check('B1 分帧同步捕获与并发闭包隔离', replies.find(r => r.id === 1)?.result.captured === '请求一' && replies.find(r => r.id === 2)?.result.captured === '请求二')
   check('B2 丢失scope与getter异常明确失败', replies.find(r => r.id === 3)?.result.failure === 'HOST_HASH_UNSUPPORTED' && replies.find(r => r.id === 4)?.result.failure === 'HOST_HASH_CAPTURE_FAILED')
-  check('B3 JSON上下文不能转交伪能力且EOF等待全部完成', replies.length === 4 && replies.every(r => r.result.forged === undefined))
+  check('B2b 仅spawnEntry的宿主不被误判为不可用', replies.find(r => r.id === 5)?.result.failure === undefined)
+  check('B3 JSON上下文不能转交伪能力且EOF等待全部完成', replies.length === 5 && replies.every(r => r.result.forged === undefined))
 }
 
 // 输入error必须等待已接收handler的finally，不得接收后续消息或泄露原错误。

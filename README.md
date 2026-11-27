@@ -78,35 +78,42 @@
 npm install -g carlos-flow
 ```
 
-### 2. 针对你的开发平台初始化
+### 2. 接入你的编程平台（两种安装顺序都支持）
+
 ```bash
-# Cindy 环境
-carlos-flow init --target cindy
+# 先装编程平台、后装 Carlos：先只读看清本机装了哪些平台（零写入）
+carlos-flow init --discover
 
-# OpenCode 环境
-carlos-flow init --target opencode
+# 接入单个已装平台：按其真实配置路径增量追加，保留你原有的其他 MCP 服务
+carlos-flow init --target claude-desktop
 
-# Cursor / Windsurf 环境
-carlos-flow init --target cursor
+# 扫描本机已装平台并逐个接入（已装的严格 JSON 平台才会写）
+carlos-flow init --all
 
-# VS Code 环境
-carlos-flow init --target vscode
-
-# Cline / Claude Desktop 环境
-carlos-flow init --target cline
-
-# Tencent WorkBuddy 环境
-carlos-flow init --target workbuddy
-
-# OpenAI Codex CLI 环境
-carlos-flow init --target codex
-
-# ByteDance Trae 环境
-carlos-flow init --target trae
-
-# Alibaba Qoder (通义灵码) 环境
-carlos-flow init --target qoder
+# 通用导出 / 自定义文件
+carlos-flow init --target generic
+carlos-flow init --target custom-file --file ./host.json --container mcpServers
+# 等价别名：custom-path / --path；未知容器、JSONC、坏JSON和链接路径拒写
 ```
+
+| 你的顺序 | 做法 |
+| --- | --- |
+| 先装编程平台，后装 Carlos | `init --discover` 先看清，再 `init --all` 或 `init --target <平台>` 接入 |
+| 先装 Carlos，后装编程平台 | 装好平台后跑一次 `init --target <平台>`，自动定位它已有的配置 |
+
+可自动写入的平台（严格 JSON + 标准 `{command,args}` 结构）：Cursor（全局）、Claude Desktop、Windsurf / Devin、WorkBuddy、Trae / Trae CN、Qoder、VS Code（`mcp.json` 的 `servers` 容器）、Cline。
+
+**只提示、不改写的平台**：VS Code / Cursor 的 `settings.json`（JSONC，含注释与尾逗号，按 JSON 重写会破坏原格式）、Codex（TOML）、OpenCode（自有 `mcp` 结构）。这些会输出可直接粘贴的片段，原文件零改动。
+
+**不会猜路径、不会建目录**：平台未安装时返回 `not_installed` 并退回通用导出，绝不创建平台配置目录。
+
+生成的 `carlos-mcp.json` 使用标准 stdio：`command` 为当前 Node 可执行文件，`args` 直接指向包内 `src/index.js`，不是 Bridge 入口。`init` 不启动 Bridge、不生成令牌、不静默改写全部宿主配置；已有 `carlos-flow` 条目与 Markdown 规则文件保留原字节。仅接受严格 JSON 的显式 `mcpServers` / `servers` 容器；不能据此推断任意宿主原生 schema。规则文件只是提示，不保证所有工具自动加载。
+
+**写入条目 ≠ 平台可用**：配置就位只代表 MCP 条目已存在；平台是否加载、能否真正调用仍需逐项实测。未完成真实宿主验收的平台，不宣称完全支持。
+
+Qoder 与通义灵码是不同产品；Claude Desktop 与 Claude Code 也是不同客户端。`claude` 等旧目标目前降级通用导出，不等同原生安装。停止写入 Cindy 旧 `.cindy/ghosts`、OpenCode 旧 `plugin` 目录。未逐一进行真实宿主安装、连接、调用验收的平台，不宣称完全支持。
+
+配置前请核对官方材料：[MCP stdio](https://modelcontextprotocol.io/specification/latest/basic/transports)、[Claude Desktop](https://modelcontextprotocol.io/quickstart/user)、[Claude Code](https://code.claude.com/docs/en/mcp)、[OpenCode](https://opencode.ai/docs/mcp-servers/)、[Qoder](https://docs.qoder.com/)、[通义灵码](https://help.aliyun.com/zh/lingma/)。以上是规范/产品参考，不是本项目实测凭据。
 
 ### 3. 验证服务状态
 在任意终端或工作区执行：

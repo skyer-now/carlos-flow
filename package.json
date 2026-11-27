@@ -1,7 +1,7 @@
 {
   "name": "carlos-flow",
   "version": "3.3.3",
-  "description": "Carlos 工作流 — AI 编程卫士。留痕/派发/验证/裁定/审计/还原，约束写在代码里而非提示词里。单一包支持 Cindy/OpenCode/Cursor/Cline/VS Code/Claude Desktop。",
+  "description": "Carlos 工作流 — AI 编程卫士。留痕/派发/验证/裁定/审计/还原；标准 stdio 配置导出，宿主原生适配以实测为准。",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -17,6 +17,8 @@
     "./trigger-config": "./trigger-config.usable.json"
   },
   "scripts": {
+    "test:platform-init": "node --test test/platform-init.test.mjs",
+    "init:generic": "node client/carlos.js init --target generic",
     "test:comm-pipeline": "node test/comm-pipeline.test.mjs",
     "test:comm-progress": "node test/comm-progress.test.mjs",
     "test:comm-output": "node test/comm-output.test.mjs",
@@ -30,7 +32,7 @@
     "test:ui": "node test/verify-ui.mjs",
     "test:acceptance": "node test/e2e-acceptance.mjs",
     "test:sentiment": "node --test test/trigger-sentiment.test.mjs",
-    "test:all": "npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:sentiment && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean && npm run test:ui && npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch && npm run test:hardening && npm run test:cas && npm run test:roll && npm run test:prune && npm run test:stage2 && npm run test:unit && npm run test:worktree && npm run test:ast && npm run test:facade && npm run test:atomic && npm run test:encoding && npm run test:advisory && npm run test:advisory-int && npm run test:advisory-mut && npm run test:windows && npm run test:comm-output && npm run test:comm-progress && npm run test:comm-pipeline",
+    "test:all": "npm run test:platform-init && npm run test && npm run test:baseline && npm run test:e2e && npm run test:p0 && npm run test:trigger && npm run test:sentiment && npm run test:concurrency && npm run test:acceptance && npm run test:gate && npm run test:stale && npm run test:scope && npm run test:audit && npm run test:bridge && npm run test:clean && npm run test:ui && npm run test:sensitive && npm run test:lock && npm run test:falsify && npm run test:mcp && npm run test:dispatch && npm run test:hardening && npm run test:cas && npm run test:roll && npm run test:prune && npm run test:stage2 && npm run test:unit && npm run test:worktree && npm run test:ast && npm run test:facade && npm run test:atomic && npm run test:encoding && npm run test:advisory && npm run test:advisory-int && npm run test:advisory-mut && npm run test:windows && npm run test:comm-output && npm run test:comm-progress && npm run test:comm-pipeline",
     "test:mutation": "node scripts/mutation-check.mjs",
     "sync:readme": "node scripts/sync-readme.mjs",
     "check:readme": "node scripts/sync-readme.mjs --check",

@@ -90,6 +90,18 @@ if (process.argv.includes('--fixed-hash-child-gate') || process.argv.includes('-
     const fingerprint = await state.workspaceFingerprintAsync(gateRoot, state.captureHashContext())
     assert.equal(fingerprint.ok, true)
     assert.equal(launched, 1)
+    // 已发布宿主只暴露 spawnEntry（无 bindLaunch）：必须适配成功，不得误判为不可用。
+    let spawned = 0
+    globalThis.__CINDY_NODE__ = { spawnEntry: async (relative, args) => {
+      spawned++
+      assert.equal(relative, 'src/state.js')
+      assert.deepEqual(args, ['--hash-child'])
+      return spawn(process.execPath, [entry, ...args], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    } }
+    const viaSpawnEntry = await state.workspaceFingerprintAsync(gateRoot, state.captureHashContext())
+    assert.equal(viaSpawnEntry.ok, true)
+    assert.equal(viaSpawnEntry.diff_sha256, fingerprint.diff_sha256)
+    assert.equal(spawned, 1)
     const forged = await state.workspaceFingerprintAsync(gateRoot, { launch: () => { throw new Error('伪造能力不可执行') } })
     assert.equal(forged.ok, false)
     globalThis.__CINDY_NODE__ = {}
